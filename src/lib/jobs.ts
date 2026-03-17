@@ -16,7 +16,7 @@ function getRunPrWatcherCycle(): () => Promise<PrWatcherCycleResult> {
   return _runPrWatcherCycle!;
 }
 
-const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(process.env.HOME || '/Users/crab', 'coding-control-plane'));
+const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(__dirname, '..', '..'));
 const JOBS_DIR: string = path.join(ROOT, 'jobs');
 const DISCORD_RUNS_CHANNEL: string = process.env.CCP_DISCORD_RUNS_CHANNEL || '';
 const DISCORD_ERRORS_CHANNEL: string = process.env.CCP_DISCORD_ERRORS_CHANNEL || '';

@@ -16,3 +16,5 @@ configs/vercel.json
 configs/1password.json
 configs/quotas.json
 configs/routing.json
+configs/linear-smartadvocateai.json
+dist/

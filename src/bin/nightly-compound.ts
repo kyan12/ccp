@@ -7,7 +7,7 @@ import path = require('path');
 import type { RepoMapping, JobPacket, NightlyConfig } from '../types';
 const { createJob } = require('../lib/jobs');
 
-const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(process.env.HOME || '/Users/crab', 'coding-control-plane'));
+const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(__dirname, '..', '..'));
 const REPOS_FILE: string = path.join(ROOT, 'configs', 'repos.json');
 
 function loadRepos(): { mappings: RepoMapping[] } {

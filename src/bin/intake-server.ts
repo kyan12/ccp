@@ -14,7 +14,7 @@ const autoDispatch: boolean = String(process.env.CCP_INTAKE_AUTO_DISPATCH || 'tr
 const autoStart: boolean = String(process.env.CCP_INTAKE_AUTO_START || 'true').toLowerCase() !== 'false';
 const maxConcurrent: number = Number(process.env.CCP_MAX_CONCURRENT || 1);
 
-const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(process.env.HOME || '/Users/crab', 'coding-control-plane'));
+const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(__dirname, '..', '..'));
 const REPOS_PATH: string = path.join(ROOT, 'configs', 'repos.json');
 const DASHBOARD_PATH: string = path.join(__dirname, '..', 'dashboard', 'index.html');
 
