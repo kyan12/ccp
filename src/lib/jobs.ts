@@ -947,17 +947,28 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
     .filter((job) => job.state === 'queued')
     .sort((a, b) => (a.updated_at > b.updated_at ? 1 : -1));
 
-  queued.forEach((job, index) => {
-    if (index >= capacity) {
-      summary.skipped.push({ job_id: job.job_id, reason: 'capacity' });
-      return;
-    }
-    try {
-      summary.started.push({ job_id: job.job_id, ...startJob(job.job_id) });
-    } catch (error) {
-      summary.errors.push({ job_id: job.job_id, action: 'start', error: (error as Error).message });
-    }
-  });
+  // Check peak-hour scheduling before dispatching new jobs
+  const { canDispatchJobs } = require('./scheduling');
+  const scheduleCheck = canDispatchJobs();
+  (summary as unknown as Record<string, unknown>).scheduling = scheduleCheck;
+
+  if (!scheduleCheck.allowed && queued.length > 0) {
+    queued.forEach((job) => {
+      summary.skipped.push({ job_id: job.job_id, reason: scheduleCheck.reason });
+    });
+  } else {
+    queued.forEach((job, index) => {
+      if (index >= capacity) {
+        summary.skipped.push({ job_id: job.job_id, reason: 'capacity' });
+        return;
+      }
+      try {
+        summary.started.push({ job_id: job.job_id, ...startJob(job.job_id) });
+      } catch (error) {
+        summary.errors.push({ job_id: job.job_id, action: 'start', error: (error as Error).message });
+      }
+    });
+  }
 
   try {
     summary.archived = archiveOldJobs();

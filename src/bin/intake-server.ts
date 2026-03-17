@@ -162,6 +162,18 @@ async function handlePutRepo(key: string, req: http.IncomingMessage, res: http.S
   }
 }
 
+function handleGetScheduling(res: http.ServerResponse): void {
+  try {
+    const { isPeakHour, canDispatchJobs, loadConfig } = require('../lib/scheduling');
+    const config = loadConfig();
+    const status = isPeakHour();
+    const dispatch = canDispatchJobs();
+    json(res, 200, { config, status, dispatch });
+  } catch (err) {
+    json(res, 500, { ok: false, error: (err as Error).message });
+  }
+}
+
 function handleGetHealth(res: http.ServerResponse): void {
   try {
     json(res, 200, healthCheck());
@@ -207,6 +219,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       if (url.pathname === '/api/health') { handleGetHealth(res); return; }
       if (url.pathname === '/api/stats') { handleGetStats(res); return; }
       if (url.pathname === '/api/repos') { handleGetRepos(res); return; }
+      if (url.pathname === '/api/scheduling') { handleGetScheduling(res); return; }
       const jobMatch = url.pathname.match(/^\/api\/jobs\/(.+)$/);
       if (jobMatch) { handleGetJob(decodeURIComponent(jobMatch[1]), res); return; }
     }
