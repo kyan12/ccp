@@ -368,8 +368,8 @@ async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; 
     blocked: 'blocked',
     failed: 'blocked',
     coded: 'review',
-    done: 'review',
-    verified: 'verified',
+    done: 'done',
+    verified: 'done',
   };
 
   const desiredStateName = resolveStateName(lifecycleMap[result?.state || status?.state || 'ready'] || 'ready');

@@ -124,10 +124,28 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
     entry.merged = review.merged || false;
     entry.autoMergeEnabled = review.autoMergeEnabled || false;
 
-    // PR is closed/merged — mark verified if not already
+    // PR is closed/merged — mark done and sync Linear
     if (review.merged || (review.ok && review.disposition === 'approve' && review.autoMergeEnabled)) {
       appendLog(jobId, `[${nowIso()}] pr-watcher: PR merged or auto-merge enabled`);
       entry.action = 'merge-tracked';
+
+      // Promote job state to done
+      if (status.state !== 'done' && status.state !== 'verified') {
+        saveStatus(jobId, { state: 'done' });
+        entry.stateChange = (entry.stateChange ? entry.stateChange + ', ' : '') + `${status.state}→done`;
+        appendLog(jobId, `[${nowIso()}] pr-watcher: job state → done (PR merged)`);
+      }
+
+      // Sync Linear ticket to Done
+      if (packet.ticket_id) {
+        try {
+          const { syncJobToLinear } = require('./linear');
+          const updated = { ...status, state: 'done' };
+          syncJobToLinear({ packet, status: updated, result }).then((r: { ok: boolean }) => {
+            if (r.ok) appendLog(jobId, `[${nowIso()}] pr-watcher: Linear ${packet.ticket_id} → Done`);
+          }).catch(() => {});
+        } catch (_) {}
+      }
     }
 
     // PR is approved and green

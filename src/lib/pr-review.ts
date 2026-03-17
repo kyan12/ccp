@@ -132,7 +132,7 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }: { prUrl:
     const gh = commandExists('gh') || 'gh';
 
     const reviewOut = run(gh, ['pr', 'review', String(ref.number), '--repo', ref.ownerRepo, '--approve', '--body', 'Auto-merge: checks green, mergeable.']);
-    const selfApproval = /Cannot approve your own pull request/i.test((reviewOut.stderr || '') + (reviewOut.stdout || ''));
+    const selfApproval = /Can.?not approve your own pull request/i.test((reviewOut.stderr || '') + (reviewOut.stdout || ''));
     const alreadyReviewed = /already reviewed/i.test((reviewOut.stderr || '') + (reviewOut.stdout || ''));
     if (reviewOut.status !== 0 && !selfApproval && !alreadyReviewed) {
       result.ok = false;
@@ -141,7 +141,7 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }: { prUrl:
       return result;
     }
 
-    const mergeArgs = ['pr', 'merge', String(ref.number), '--repo', ref.ownerRepo, '--auto'];
+    const mergeArgs = ['pr', 'merge', String(ref.number), '--repo', ref.ownerRepo, '--auto', '--delete-branch'];
     if (mergeMethod === 'rebase') mergeArgs.push('--rebase');
     else if (mergeMethod === 'merge') mergeArgs.push('--merge');
     else mergeArgs.push('--squash');
@@ -151,7 +151,7 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }: { prUrl:
       result.autoMergeEnabled = true;
       result.merged = /merged pull request/i.test((mergeOut.stdout || '') + (mergeOut.stderr || ''));
     } else {
-      const directArgs = ['pr', 'merge', String(ref.number), '--repo', ref.ownerRepo];
+      const directArgs = ['pr', 'merge', String(ref.number), '--repo', ref.ownerRepo, '--delete-branch'];
       if (mergeMethod === 'rebase') directArgs.push('--rebase');
       else if (mergeMethod === 'merge') directArgs.push('--merge');
       else directArgs.push('--squash');
