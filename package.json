@@ -1,7 +1,7 @@
 {
   "name": "ccp",
   "version": "0.1.0",
-  "description": "☭ Coding Control Plane — Seize the means of code production",
+  "description": "\u262d Coding Control Plane \u2014 Seize the means of code production",
   "author": "Kevin Yan",
   "license": "MIT",
   "repository": {
@@ -23,7 +23,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc"
+    "build": "tsc && cp -r src/dashboard dist/"
   },
   "bin": {
     "ccp-supervisor": "dist/bin/supervisor.js",
