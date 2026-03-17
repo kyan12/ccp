@@ -66,7 +66,7 @@ Linear Ticket → CodePlane → Coding Agent → PR → CI → Auto-Merge → De
 ### Install
 
 ```bash
-git clone https://github.com/YOUR_ORG/codeplane.git
+git clone https://github.com/kyan12/codeplane.git
 cd codeplane
 npm install
 
@@ -240,4 +240,4 @@ MIT
 
 ## Credits
 
-Built by [Kevin Yan](https://github.com/kyan12) and [Crab](https://github.com/YOUR_ORG/codeplane) 🦀 — an AI coding orchestrator running on [OpenClaw](https://openclaw.ai).
+Built by [Kevin Yan](https://github.com/kyan12) and [Crab](https://github.com/kyan12/codeplane) 🦀 — an AI coding orchestrator running on [OpenClaw](https://openclaw.ai).
