@@ -10,6 +10,8 @@ Linear Ticket → CCP → Coding Agent → PR → CI → Auto-Merge → Deploy
        └──── Sentry Error / Vercel Failure / CI Failure ────────┘
 ```
 
+![CCP Hero](demo/screenshots/hero.png)
+
 ## What It Does
 
 - **Job Pipeline** — Queue, dispatch, and monitor coding jobs with full lifecycle tracking
@@ -161,10 +163,12 @@ Expose your intake server via [Tailscale Funnel](https://tailscale.com/kb/1223/t
 
 Access at `http://localhost:4318/dashboard` when the intake server is running.
 
-- **Jobs** — Real-time job status, filterable by state, expandable details
-- **Repos** — Configure auto-merge, merge method, nightly runs per repo
-- **PR Review** — Track PR dispositions and auto-merge status
-- **Health** — Supervisor heartbeat, stuck jobs, system status
+![Jobs](demo/screenshots/jobs.png)
+
+| | |
+|---|---|
+| ![Repos](demo/screenshots/repos.png) | ![PR Review](demo/screenshots/pr-review.png) |
+| ![Health](demo/screenshots/health.png) | |
 
 ## Job Lifecycle
 
