@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CCP — Coding Control Plane</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0a0a0b; --bg-surface: #111114; --bg-raised: #16161a;
+  --border: #1a1a2e; --border-subtle: #141425;
+  --text: #e4e4e7; --text-secondary: #71717a; --text-muted: #52525b;
+  --blue: #3b82f6; --green: #10b981; --red: #ef4444; --amber: #f59e0b;
+  --blue-dim: rgba(59,130,246,0.12); --green-dim: rgba(16,185,129,0.12);
+  --red-dim: rgba(239,68,68,0.12); --amber-dim: rgba(245,158,11,0.12);
+  --gray-dim: rgba(113,113,122,0.15);
+  --font: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --radius: 8px; --radius-sm: 6px;
+}
+html { font-size: 14px; }
+body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; }
+a { color: var(--blue); text-decoration: none; }
+button { font-family: var(--font); cursor: pointer; }
+
+.sidebar {
+  width: 220px; min-height: 100vh; background: var(--bg-surface);
+  border-right: 1px solid var(--border); padding: 20px 0; flex-shrink: 0;
+  display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 10;
+}
+.sidebar-logo { padding: 0 20px 24px; font-size: 15px; font-weight: 700; letter-spacing: -0.3px; color: var(--text); display: flex; align-items: center; gap: 8px; }
+.sidebar-logo .hammer { color: var(--red); font-size: 18px; }
+.sidebar-logo span { color: var(--blue); }
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 20px;
+  color: var(--text-secondary); font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: all 0.15s;
+}
+.nav-item:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+.nav-item.active { color: var(--text); background: rgba(59,130,246,0.08); border-right: 2px solid var(--blue); }
+.nav-item svg { width: 16px; height: 16px; opacity: 0.6; flex-shrink: 0; }
+.nav-item.active svg { opacity: 1; }
+.sidebar-footer { padding: 16px 20px; border-top: 1px solid var(--border); margin-top: auto; }
+.sidebar-footer p { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+
+.main { flex: 1; margin-left: 220px; min-height: 100vh; }
+.page-header { padding: 28px 32px 0; }
+.page-header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; }
+.page-header p { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
+.page-content { padding: 20px 32px 32px; }
+
+.page { display: none; animation: fadeIn 0.2s ease; }
+.page.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+.summary-card {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 18px;
+}
+.summary-card .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+.summary-card .value { font-size: 28px; font-weight: 700; margin-top: 6px; font-family: var(--mono); letter-spacing: -1px; }
+.summary-card .value.blue { color: var(--blue); }
+.summary-card .value.green { color: var(--green); }
+.summary-card .value.red { color: var(--red); }
+.summary-card .value.amber { color: var(--amber); }
+
+.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.filter-select {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: 7px 12px; font-size: 12px; outline: none;
+}
+
+.table-wrap {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden;
+}
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  text-align: left; padding: 10px 14px; font-size: 11px; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
+  border-bottom: 1px solid var(--border); background: var(--bg-raised);
+}
+tbody td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--border-subtle); }
+tbody tr:last-child td { border-bottom: none; }
+.cell-mono { font-family: var(--mono); font-size: 12px; }
+.cell-secondary { color: var(--text-secondary); }
+.cell-truncate { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 100px; font-size: 11px; font-weight: 600;
+  letter-spacing: 0.2px; text-transform: uppercase;
+}
+.badge-queued { background: var(--gray-dim); color: var(--text-secondary); }
+.badge-running { background: var(--blue-dim); color: var(--blue); }
+.badge-coded { background: var(--green-dim); color: var(--green); }
+.badge-done { background: var(--green-dim); color: var(--green); }
+.badge-verified { background: var(--green-dim); color: var(--green); }
+.badge-blocked { background: var(--red-dim); color: var(--red); }
+.badge-failed { background: var(--red-dim); color: var(--red); }
+.badge-running::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--blue);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* Job detail panel (expanded row) */
+.job-detail {
+  background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius);
+  margin-top: -1px; animation: fadeIn 0.15s ease;
+}
+.job-detail-inner { padding: 16px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; }
+.detail-field .detail-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 3px; }
+.detail-field .detail-value { font-size: 13px; color: var(--text); }
+.detail-field .detail-value.mono { font-family: var(--mono); font-size: 12px; }
+.log-preview {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 12px 14px; font-family: var(--mono); font-size: 11px; line-height: 1.6;
+  color: var(--text-secondary); max-height: 200px; overflow-y: auto; white-space: pre-wrap;
+  grid-column: 1 / -1;
+}
+
+/* Repo cards */
+.repo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.repo-card {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px 20px;
+}
+.repo-name { font-size: 15px; font-weight: 600; letter-spacing: -0.2px; }
+.repo-owner { font-family: var(--mono); font-size: 11px; color: var(--text-secondary); margin-top: 3px; }
+.repo-meta { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.repo-row { display: flex; align-items: center; justify-content: space-between; }
+.repo-row-label { font-size: 12px; color: var(--text-secondary); }
+.repo-row-value { font-size: 12px; font-weight: 500; }
+.toggle {
+  position: relative; width: 36px; height: 20px; background: #333; border-radius: 10px;
+  cursor: default; transition: background 0.2s;
+}
+.toggle.on { background: var(--green); }
+.toggle::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  background: #fff; border-radius: 50%; transition: transform 0.2s;
+}
+.toggle.on::after { transform: translateX(16px); }
+
+/* PR review */
+.pr-card {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 18px; margin-bottom: 10px;
+}
+.pr-title { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+.pr-meta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.pr-meta span { font-size: 12px; color: var(--text-secondary); }
+.disposition-approve { color: var(--green) !important; font-weight: 600; }
+.disposition-block { color: var(--red) !important; font-weight: 600; }
+.disposition-hold { color: var(--amber) !important; font-weight: 600; }
+
+/* Health */
+.health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.health-card {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px 20px;
+}
+.health-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-secondary); }
+.health-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
+.health-row:not(:last-child) { border-bottom: 1px solid var(--border-subtle); }
+.health-label { font-size: 13px; color: var(--text-secondary); }
+.health-value { font-size: 13px; font-family: var(--mono); font-weight: 500; }
+.health-ok { color: var(--green); }
+.health-warn { color: var(--amber); }
+.health-bad { color: var(--red); }
+
+.inline-select {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: 4px 8px; font-size: 11px; font-family: var(--mono); outline: none;
+}
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo"><span class="hammer">☭</span> <span>CCP</span></div>
+  <nav>
+    <div class="nav-item active" data-page="jobs">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 6h6M5 8.5h4M5 11h2"/></svg>
+      Jobs
+    </div>
+    <div class="nav-item" data-page="repos">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l6-2 6 2v8l-6 2-6-2z"/><path d="M8 2v12"/></svg>
+      Repos
+    </div>
+    <div class="nav-item" data-page="prs">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="4" r="2"/><circle cx="11" cy="12" r="2"/><path d="M5 6v4c0 2 6 2 6 2"/></svg>
+      PR Review
+    </div>
+    <div class="nav-item" data-page="health">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8h3l2-4 2 8 2-4h3"/></svg>
+      Health
+    </div>
+  </nav>
+  <div class="sidebar-footer">
+    <p>Updated 11:04:32 AM</p>
+  </div>
+</aside>
+
+<div class="main">
+  <!-- JOBS PAGE -->
+  <div id="page-jobs" class="page active">
+    <div class="page-header">
+      <h1>Jobs</h1>
+      <p>Pipeline overview and job tracking</p>
+    </div>
+    <div class="page-content">
+      <div class="summary-grid">
+        <div class="summary-card"><div class="label">Running</div><div class="value blue">2</div></div>
+        <div class="summary-card"><div class="label">Completed (24h)</div><div class="value green">7</div></div>
+        <div class="summary-card"><div class="label">Failed (24h)</div><div class="value red">1</div></div>
+        <div class="summary-card"><div class="label">Blocked</div><div class="value amber">0</div></div>
+      </div>
+      <div class="toolbar">
+        <select class="filter-select"><option>All States</option></select>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Job ID</th>
+              <th>Ticket</th>
+              <th>Repo</th>
+              <th>State</th>
+              <th>Branch</th>
+              <th>Duration</th>
+              <th>Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="cell-mono">linear_eng_89</td>
+              <td class="cell-mono">ENG-89</td>
+              <td class="cell-truncate">web-app</td>
+              <td><span class="badge badge-running">running</span></td>
+              <td class="cell-mono cell-secondary">fix/auth-timeout-eng89</td>
+              <td class="cell-secondary">4m 22s</td>
+              <td class="cell-secondary">2m ago</td>
+            </tr>
+            <tr>
+              <td class="cell-mono">linear_eng_88</td>
+              <td class="cell-mono">ENG-88</td>
+              <td class="cell-truncate">api-server</td>
+              <td><span class="badge badge-running">running</span></td>
+              <td class="cell-mono cell-secondary">fix/rate-limit-eng88</td>
+              <td class="cell-secondary">7m 15s</td>
+              <td class="cell-secondary">1m ago</td>
+            </tr>
+            <tr>
+              <td class="cell-mono">linear_eng_87</td>
+              <td class="cell-mono">ENG-87</td>
+              <td class="cell-truncate">web-app</td>
+              <td><span class="badge badge-verified">verified</span></td>
+              <td class="cell-mono cell-secondary">fix/dashboard-chart-eng87</td>
+              <td class="cell-secondary">3m 45s</td>
+              <td class="cell-secondary">14m ago</td>
+            </tr>
+            <tr>
+              <td class="cell-mono">incident_sentry_4821</td>
+              <td class="cell-mono">ENG-86</td>
+              <td class="cell-truncate">api-server</td>
+              <td><span class="badge badge-done">done</span></td>
+              <td class="cell-mono cell-secondary">fix/null-user-eng86</td>
+              <td class="cell-secondary">2m 10s</td>
+              <td class="cell-secondary">48m ago</td>
+            </tr>
+            <tr>
+              <td class="cell-mono">linear_eng_85</td>
+              <td class="cell-mono">ENG-85</td>
+              <td class="cell-truncate">mobile-app</td>
+              <td><span class="badge badge-coded">coded</span></td>
+              <td class="cell-mono cell-secondary">feat/push-notifs-eng85</td>
+              <td class="cell-secondary">8m 33s</td>
+              <td class="cell-secondary">1h ago</td>
+            </tr>
+            <tr>
+              <td class="cell-mono">linear_eng_84__reviewfix</td>
+              <td class="cell-mono">ENG-84</td>
+              <td class="cell-truncate">web-app</td>
+              <td><span class="badge badge-verified">verified</span></td>
+              <td class="cell-mono cell-secondary">fix/lint-errors-eng84</td>
+              <td class="cell-secondary">1m 52s</td>
+              <td class="cell-secondary">2h ago</td>
+            </tr>
+            <tr>
+              <td class="cell-mono">linear_eng_84</td>
+              <td class="cell-mono">ENG-84</td>
+              <td class="cell-truncate">web-app</td>
+              <td><span class="badge badge-verified">verified</span></td>
+              <td class="cell-mono cell-secondary">feat/email-templates-eng84</td>
+              <td class="cell-secondary">5m 17s</td>
+              <td class="cell-secondary">2h ago</td>
+            </tr>
+            <tr>
+              <td class="cell-mono">linear_eng_83</td>
+              <td class="cell-mono">ENG-83</td>
+              <td class="cell-truncate">api-server</td>
+              <td><span class="badge badge-verified">verified</span></td>
+              <td class="cell-mono cell-secondary">fix/cache-invalidation-eng83</td>
+              <td class="cell-secondary">4m 08s</td>
+              <td class="cell-secondary">3h ago</td>
+            </tr>
+            <tr>
+              <td class="cell-mono">nightly_web-app_03-17</td>
+              <td class="cell-mono">-</td>
+              <td class="cell-truncate">web-app</td>
+              <td><span class="badge badge-done">done</span></td>
+              <td class="cell-mono cell-secondary">nightly/web-app-2026-03-17</td>
+              <td class="cell-secondary">12m 05s</td>
+              <td class="cell-secondary">6h ago</td>
+            </tr>
+            <tr>
+              <td class="cell-mono">incident_vercel_7832</td>
+              <td class="cell-mono">ENG-82</td>
+              <td class="cell-truncate">web-app</td>
+              <td><span class="badge badge-failed">failed</span></td>
+              <td class="cell-mono cell-secondary">fix/build-error-eng82</td>
+              <td class="cell-secondary">15m 00s</td>
+              <td class="cell-secondary">8h ago</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Expanded job detail for the running job -->
+      <div style="margin-top: 24px;">
+        <div class="job-detail" style="display: block;">
+          <div class="job-detail-inner">
+            <div class="detail-field">
+              <div class="detail-label">Goal</div>
+              <div class="detail-value">Fix SSO login timeout — auth handshake takes >30s when provider is slow, causing users to see a blank screen</div>
+            </div>
+            <div class="detail-field">
+              <div class="detail-label">Source</div>
+              <div class="detail-value">linear</div>
+            </div>
+            <div class="detail-field">
+              <div class="detail-label">Branch</div>
+              <div class="detail-value mono">fix/auth-timeout-eng89</div>
+            </div>
+            <div class="detail-field">
+              <div class="detail-label">Linear</div>
+              <div class="detail-value"><a href="#">ENG-89</a></div>
+            </div>
+          </div>
+          <div style="padding: 0 18px 16px;">
+            <div class="log-preview">[2026-03-17T15:01:12Z] preflight: repo resolved → /home/user/repos/web-app
+[2026-03-17T15:01:13Z] preflight: branch fix/auth-timeout-eng89 created from main (abc1234)
+[2026-03-17T15:01:14Z] preflight: tmux session ccp_linear_eng_89 started
+[2026-03-17T15:01:15Z] running: claude-code agent dispatched
+[2026-03-17T15:03:22Z] agent: Identified timeout in src/lib/auth/sso.ts:142
+[2026-03-17T15:04:35Z] agent: Added loading spinner component + increased timeout to 30s
+[2026-03-17T15:05:12Z] agent: Running npm test...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- REPOS PAGE -->
+  <div id="page-repos" class="page">
+    <div class="page-header">
+      <h1>Repos</h1>
+      <p>Configured repositories and merge settings</p>
+    </div>
+    <div class="page-content">
+      <div class="repo-grid">
+        <div class="repo-card">
+          <div>
+            <div class="repo-name">web-app</div>
+            <div class="repo-owner">acme/web-app</div>
+          </div>
+          <div class="repo-meta">
+            <div class="repo-row"><span class="repo-row-label">Auto-merge</span><div class="toggle on"></div></div>
+            <div class="repo-row"><span class="repo-row-label">Merge method</span><select class="inline-select"><option selected>squash</option></select></div>
+            <div class="repo-row"><span class="repo-row-label">Nightly</span><span class="repo-row-value" style="color:var(--green)">Enabled</span></div>
+            <div class="repo-row"><span class="repo-row-label">Aliases</span><span class="repo-row-value cell-secondary" style="font-size:11px">frontend, web</span></div>
+          </div>
+        </div>
+        <div class="repo-card">
+          <div>
+            <div class="repo-name">api-server</div>
+            <div class="repo-owner">acme/api-server</div>
+          </div>
+          <div class="repo-meta">
+            <div class="repo-row"><span class="repo-row-label">Auto-merge</span><div class="toggle on"></div></div>
+            <div class="repo-row"><span class="repo-row-label">Merge method</span><select class="inline-select"><option selected>squash</option></select></div>
+            <div class="repo-row"><span class="repo-row-label">Nightly</span><span class="repo-row-value" style="color:var(--text-muted)">Off</span></div>
+            <div class="repo-row"><span class="repo-row-label">Aliases</span><span class="repo-row-value cell-secondary" style="font-size:11px">api, backend</span></div>
+          </div>
+        </div>
+        <div class="repo-card">
+          <div>
+            <div class="repo-name">mobile-app</div>
+            <div class="repo-owner">acme/mobile-app</div>
+          </div>
+          <div class="repo-meta">
+            <div class="repo-row"><span class="repo-row-label">Auto-merge</span><div class="toggle"></div></div>
+            <div class="repo-row"><span class="repo-row-label">Merge method</span><select class="inline-select"><option selected>merge</option></select></div>
+            <div class="repo-row"><span class="repo-row-label">Nightly</span><span class="repo-row-value" style="color:var(--text-muted)">Off</span></div>
+          </div>
+        </div>
+        <div class="repo-card">
+          <div>
+            <div class="repo-name">shared-libs</div>
+            <div class="repo-owner">acme/shared-libs</div>
+          </div>
+          <div class="repo-meta">
+            <div class="repo-row"><span class="repo-row-label">Auto-merge</span><div class="toggle on"></div></div>
+            <div class="repo-row"><span class="repo-row-label">Merge method</span><select class="inline-select"><option selected>rebase</option></select></div>
+            <div class="repo-row"><span class="repo-row-label">Nightly</span><span class="repo-row-value" style="color:var(--green)">Enabled</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PR REVIEW PAGE -->
+  <div id="page-prs" class="page">
+    <div class="page-header">
+      <h1>PR Review</h1>
+      <p>Recent pull request review activity</p>
+    </div>
+    <div class="page-content">
+      <div class="pr-card">
+        <div class="pr-title">fix/auth-timeout-eng89</div>
+        <div class="pr-meta">
+          <span>web-app</span>
+          <span class="disposition-approve">approve</span>
+          <a href="#">#142</a>
+          <span>Auto-merge: yes</span>
+          <span>14m ago</span>
+        </div>
+      </div>
+      <div class="pr-card">
+        <div class="pr-title">fix/null-user-eng86</div>
+        <div class="pr-meta">
+          <span>api-server</span>
+          <span class="disposition-approve">approve</span>
+          <a href="#">#89</a>
+          <span>Auto-merge: yes</span>
+          <span>48m ago</span>
+        </div>
+      </div>
+      <div class="pr-card">
+        <div class="pr-title">feat/push-notifs-eng85</div>
+        <div class="pr-meta">
+          <span>mobile-app</span>
+          <span class="disposition-hold">hold</span>
+          <a href="#">#67</a>
+          <span>Auto-merge: no</span>
+          <span>1h ago</span>
+        </div>
+      </div>
+      <div class="pr-card">
+        <div class="pr-title">feat/email-templates-eng84</div>
+        <div class="pr-meta">
+          <span>web-app</span>
+          <span class="disposition-approve">approve</span>
+          <a href="#">#141</a>
+          <span>Auto-merge: yes</span>
+          <span>2h ago — merged ✓</span>
+        </div>
+      </div>
+      <div class="pr-card">
+        <div class="pr-title">fix/cache-invalidation-eng83</div>
+        <div class="pr-meta">
+          <span>api-server</span>
+          <span class="disposition-approve">approve</span>
+          <a href="#">#88</a>
+          <span>Auto-merge: yes</span>
+          <span>3h ago — merged ✓</span>
+        </div>
+      </div>
+      <div class="pr-card">
+        <div class="pr-title">fix/build-error-eng82</div>
+        <div class="pr-meta">
+          <span>web-app</span>
+          <span class="disposition-block">block</span>
+          <a href="#">#140</a>
+          <span>Blocker: tests</span>
+          <span>8h ago</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HEALTH PAGE -->
+  <div id="page-health" class="page">
+    <div class="page-header">
+      <h1>Health</h1>
+      <p>System health and daemon status</p>
+    </div>
+    <div class="page-content">
+      <div class="health-grid">
+        <div class="health-card">
+          <h3>Supervisor</h3>
+          <div class="health-row"><span class="health-label">Heartbeat</span><span class="health-value health-ok">12s ago</span></div>
+          <div class="health-row"><span class="health-label">Stuck jobs</span><span class="health-value health-ok">0</span></div>
+          <div class="health-row"><span class="health-label">Blocked jobs</span><span class="health-value health-ok">0</span></div>
+          <div class="health-row"><span class="health-label">Cycle time</span><span class="health-value">15s</span></div>
+        </div>
+        <div class="health-card">
+          <h3>Daemons</h3>
+          <div class="health-row"><span class="health-label">Supervisor</span><span class="health-value health-ok">Active</span></div>
+          <div class="health-row"><span class="health-label">Intake server</span><span class="health-value health-ok">Active</span></div>
+          <div class="health-row"><span class="health-label">Port 4318</span><span class="health-value health-ok">Listening</span></div>
+        </div>
+        <div class="health-card">
+          <h3>Storage</h3>
+          <div class="health-row"><span class="health-label">Total jobs</span><span class="health-value">89</span></div>
+          <div class="health-row"><span class="health-label">Active branches</span><span class="health-value">3</span></div>
+          <div class="health-row"><span class="health-label">Disk usage</span><span class="health-value">4.2 MB</span></div>
+        </div>
+        <div class="health-card">
+          <h3>Integrations</h3>
+          <div class="health-row"><span class="health-label">Linear</span><span class="health-value health-ok">Connected</span></div>
+          <div class="health-row"><span class="health-label">Sentry</span><span class="health-value health-ok">Connected</span></div>
+          <div class="health-row"><span class="health-label">Vercel</span><span class="health-value health-ok">Connected</span></div>
+          <div class="health-row"><span class="health-label">Discord</span><span class="health-value health-ok">Connected</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const navItems = document.querySelectorAll('.nav-item');
+  const pages = document.querySelectorAll('.page');
+  navItems.forEach(item => {
+    item.addEventListener('click', () => {
+      navItems.forEach(n => n.classList.remove('active'));
+      pages.forEach(p => p.classList.remove('active'));
+      item.classList.add('active');
+      document.getElementById('page-' + item.dataset.page).classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>
