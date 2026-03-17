@@ -1,0 +1,29 @@
+{
+  "name": "codeplane",
+  "version": "0.1.0",
+  "description": "A control plane for autonomous coding agents",
+  "author": "Kevin Yan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_ORG/codeplane"
+  },
+  "keywords": [
+    "coding-agent",
+    "orchestration",
+    "ci-cd",
+    "automation",
+    "claude-code",
+    "codex",
+    "linear",
+    "control-plane"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "codeplane-supervisor": "src/bin/supervisor.js",
+    "codeplane-intake": "src/bin/intake-server.js",
+    "codeplane-jobs": "src/bin/jobs.js"
+  }
+}

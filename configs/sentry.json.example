@@ -1,0 +1,6 @@
+{
+  "authTokenEnv": "SENTRY_AUTH_TOKEN",
+  "organization": "",
+  "projects": [],
+  "issueThreshold": 5
+}

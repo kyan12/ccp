@@ -1,0 +1,23 @@
+{
+  "apiKeyEnv": "LINEAR_API_KEY",
+  "teamId": "",
+  "teamKey": "",
+  "defaultStates": {
+    "inbox": "Inbox",
+    "ready": "Ready",
+    "running": "Running",
+    "blocked": "Blocked",
+    "review": "Review",
+    "verified": "Verified",
+    "closed": "Closed"
+  },
+  "defaultLabels": [
+    "bug",
+    "feature",
+    "deploy",
+    "runtime",
+    "regression",
+    "autocreated",
+    "urgent"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "mappings": [
+    {
+      "key": "my-app",
+      "ownerRepo": "myorg/my-app",
+      "gitUrl": "git@github.com:myorg/my-app.git",
+      "localPath": "/home/user/repos/my-app",
+      "aliases": ["my-app", "app"],
+      "autoMerge": true,
+      "mergeMethod": "squash",
+      "nightly": {
+        "enabled": false,
+        "branch": "main",
+        "timeoutSec": 900
+      }
+    }
+  ]
+}

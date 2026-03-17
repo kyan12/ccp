@@ -1,0 +1,25 @@
+{
+  "job_id": "linear_eng_42",
+  "ticket_id": "ENG-42",
+  "repo": "/home/user/repos/my-app",
+  "repoKey": "my-app",
+  "ownerRepo": "myorg/my-app",
+  "goal": "Fix login page timeout when SSO provider is slow",
+  "source": "linear",
+  "kind": "bug",
+  "label": "bug",
+  "working_branch": "fix/login-timeout-eng42",
+  "base_branch": "main",
+  "acceptance_criteria": [
+    "Login page shows loading spinner during SSO handshake",
+    "Timeout increased from 5s to 30s",
+    "Error message shown if SSO provider is unreachable"
+  ],
+  "constraints": [
+    "Do not break existing email/password login flow"
+  ],
+  "verification_steps": [
+    "npm test passes",
+    "Manual test: SSO login completes within 30s"
+  ]
+}

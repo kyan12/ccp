@@ -1,0 +1,8 @@
+{
+  "discord": {
+    "intake": "YOUR_INTAKE_CHANNEL_ID",
+    "runs": "YOUR_RUNS_CHANNEL_ID",
+    "errors": "YOUR_ERRORS_CHANNEL_ID",
+    "review": "YOUR_REVIEW_CHANNEL_ID"
+  }
+}

@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Control Plane</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0a0a0b; --bg-surface: #111114; --bg-raised: #16161a;
+  --border: #1a1a2e; --border-subtle: #141425;
+  --text: #e4e4e7; --text-secondary: #71717a; --text-muted: #52525b;
+  --blue: #3b82f6; --green: #10b981; --red: #ef4444; --amber: #f59e0b;
+  --blue-dim: rgba(59,130,246,0.12); --green-dim: rgba(16,185,129,0.12);
+  --red-dim: rgba(239,68,68,0.12); --amber-dim: rgba(245,158,11,0.12);
+  --gray-dim: rgba(113,113,122,0.15);
+  --font: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --radius: 8px; --radius-sm: 6px;
+}
+html { font-size: 14px; }
+body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; }
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font-family: var(--font); cursor: pointer; }
+select { font-family: var(--font); }
+
+/* Layout */
+.sidebar {
+  width: 220px; min-height: 100vh; background: var(--bg-surface);
+  border-right: 1px solid var(--border); padding: 20px 0; flex-shrink: 0;
+  display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 10;
+}
+.sidebar-logo { padding: 0 20px 24px; font-size: 15px; font-weight: 700; letter-spacing: -0.3px; color: var(--text); }
+.sidebar-logo span { color: var(--blue); }
+.sidebar nav { flex: 1; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 20px;
+  color: var(--text-secondary); font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: all 0.15s;
+}
+.nav-item:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+.nav-item.active { color: var(--text); background: rgba(59,130,246,0.08); border-right: 2px solid var(--blue); }
+.nav-item svg { width: 16px; height: 16px; opacity: 0.6; flex-shrink: 0; }
+.nav-item.active svg { opacity: 1; }
+.sidebar-footer { padding: 16px 20px; border-top: 1px solid var(--border); }
+.sidebar-footer p { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+
+.main { flex: 1; margin-left: 220px; min-height: 100vh; }
+.page-header { padding: 28px 32px 0; }
+.page-header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; }
+.page-header p { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
+.page-content { padding: 20px 32px 32px; }
+
+.page { display: none; animation: fadeIn 0.2s ease; }
+.page.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* Summary cards */
+.summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+.summary-card {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 18px; transition: border-color 0.15s;
+}
+.summary-card:hover { border-color: #252540; }
+.summary-card .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+.summary-card .value { font-size: 28px; font-weight: 700; margin-top: 6px; font-family: var(--mono); letter-spacing: -1px; }
+.summary-card .value.blue { color: var(--blue); }
+.summary-card .value.green { color: var(--green); }
+.summary-card .value.red { color: var(--red); }
+.summary-card .value.amber { color: var(--amber); }
+
+/* Filters */
+.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.filter-select {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: 7px 12px; font-size: 12px; outline: none; appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2371717a' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px;
+}
+.filter-select:focus { border-color: var(--blue); }
+
+/* Table */
+.table-wrap {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden;
+}
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  text-align: left; padding: 10px 14px; font-size: 11px; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
+  border-bottom: 1px solid var(--border); background: var(--bg-raised);
+}
+tbody td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--border-subtle); }
+tbody tr { transition: background 0.1s; }
+tbody tr:hover { background: rgba(255,255,255,0.02); }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr.clickable { cursor: pointer; }
+.cell-mono { font-family: var(--mono); font-size: 12px; }
+.cell-secondary { color: var(--text-secondary); }
+.cell-truncate { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Badges */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 100px; font-size: 11px; font-weight: 600;
+  letter-spacing: 0.2px; text-transform: uppercase;
+}
+.badge-queued { background: var(--gray-dim); color: var(--text-secondary); }
+.badge-preflight { background: var(--amber-dim); color: var(--amber); }
+.badge-running { background: var(--blue-dim); color: var(--blue); }
+.badge-coded { background: var(--green-dim); color: var(--green); }
+.badge-done, .badge-verified { background: var(--green-dim); color: var(--green); }
+.badge-blocked { background: var(--red-dim); color: var(--red); }
+.badge-failed { background: var(--red-dim); color: var(--red); }
+.badge-other { background: var(--gray-dim); color: var(--text-secondary); }
+.badge-running::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--blue);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* Job detail panel */
+.job-detail {
+  background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius);
+  margin-top: -1px; animation: fadeIn 0.15s ease;
+}
+.job-detail-inner { padding: 16px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; }
+.job-detail-inner.full-width { grid-template-columns: 1fr; }
+.detail-field .detail-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 3px; }
+.detail-field .detail-value { font-size: 13px; color: var(--text); }
+.detail-field .detail-value.mono { font-family: var(--mono); font-size: 12px; }
+.log-preview {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 12px 14px; font-family: var(--mono); font-size: 11px; line-height: 1.6;
+  color: var(--text-secondary); max-height: 200px; overflow-y: auto; white-space: pre-wrap;
+  word-break: break-all; grid-column: 1 / -1;
+}
+
+/* Repo cards */
+.repo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.repo-card {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px 20px; transition: border-color 0.15s;
+}
+.repo-card:hover { border-color: #252540; }
+.repo-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+.repo-name { font-size: 15px; font-weight: 600; letter-spacing: -0.2px; }
+.repo-owner { font-family: var(--mono); font-size: 11px; color: var(--text-secondary); margin-top: 3px; }
+.repo-meta { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.repo-row { display: flex; align-items: center; justify-content: space-between; }
+.repo-row-label { font-size: 12px; color: var(--text-secondary); }
+.repo-row-value { font-size: 12px; font-weight: 500; }
+
+/* Toggle switch */
+.toggle {
+  position: relative; width: 36px; height: 20px; background: #333; border-radius: 10px;
+  cursor: pointer; transition: background 0.2s;
+}
+.toggle.on { background: var(--green); }
+.toggle::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  background: #fff; border-radius: 50%; transition: transform 0.2s;
+}
+.toggle.on::after { transform: translateX(16px); }
+
+/* Inline select */
+.inline-select {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: 4px 8px; font-size: 11px; font-family: var(--mono); outline: none;
+}
+.inline-select:focus { border-color: var(--blue); }
+
+/* PR list */
+.pr-card {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 18px; margin-bottom: 10px; transition: border-color 0.15s;
+}
+.pr-card:hover { border-color: #252540; }
+.pr-title { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+.pr-meta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.pr-meta span { font-size: 12px; color: var(--text-secondary); }
+.pr-meta .disposition { font-weight: 600; }
+.disposition-approve { color: var(--green) !important; }
+.disposition-hold { color: var(--amber) !important; }
+.disposition-block { color: var(--red) !important; }
+
+/* Health */
+.health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.health-card {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px 20px;
+}
+.health-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-secondary); }
+.health-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
+.health-row:not(:last-child) { border-bottom: 1px solid var(--border-subtle); }
+.health-label { font-size: 13px; color: var(--text-secondary); }
+.health-value { font-size: 13px; font-family: var(--mono); font-weight: 500; }
+.health-ok { color: var(--green); }
+.health-warn { color: var(--amber); }
+.health-bad { color: var(--red); }
+
+/* Empty state */
+.empty-state { text-align: center; padding: 48px 20px; color: var(--text-muted); }
+.empty-state svg { width: 40px; height: 40px; opacity: 0.3; margin-bottom: 12px; }
+.empty-state p { font-size: 13px; }
+
+/* Toast */
+.toast {
+  position: fixed; bottom: 24px; right: 24px; background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 10px 16px; font-size: 12px; color: var(--text);
+  animation: toastIn 0.2s ease; z-index: 100; max-width: 300px;
+}
+.toast.success { border-color: var(--green); }
+.toast.error { border-color: var(--red); }
+@keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+  .sidebar { width: 180px; }
+  .main { margin-left: 180px; }
+}
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo"><span>&#9670;</span> Control Plane</div>
+  <nav>
+    <div class="nav-item active" data-page="jobs">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 6h6M5 8.5h4M5 11h2"/></svg>
+      Jobs
+    </div>
+    <div class="nav-item" data-page="repos">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l6-2 6 2v8l-6 2-6-2z"/><path d="M8 2v12"/></svg>
+      Repos
+    </div>
+    <div class="nav-item" data-page="prs">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="4" r="2"/><circle cx="11" cy="12" r="2"/><path d="M5 6v4c0 2 6 2 6 2"/></svg>
+      PR Review
+    </div>
+    <div class="nav-item" data-page="health">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8h3l2-4 2 8 2-4h3"/></svg>
+      Health
+    </div>
+  </nav>
+  <div class="sidebar-footer">
+    <p id="lastUpdated">--</p>
+  </div>
+</aside>
+
+<div class="main">
+  <!-- JOBS PAGE -->
+  <div id="page-jobs" class="page active">
+    <div class="page-header">
+      <h1>Jobs</h1>
+      <p>Pipeline overview and job tracking</p>
+    </div>
+    <div class="page-content">
+      <div class="summary-grid" id="jobSummary">
+        <div class="summary-card"><div class="label">Running</div><div class="value blue" id="stat-running">-</div></div>
+        <div class="summary-card"><div class="label">Completed (24h)</div><div class="value green" id="stat-completed">-</div></div>
+        <div class="summary-card"><div class="label">Failed (24h)</div><div class="value red" id="stat-failed">-</div></div>
+        <div class="summary-card"><div class="label">Blocked</div><div class="value amber" id="stat-blocked">-</div></div>
+      </div>
+      <div class="toolbar">
+        <select class="filter-select" id="jobFilter">
+          <option value="all">All States</option>
+          <option value="running">Running</option>
+          <option value="queued">Queued</option>
+          <option value="coded">Coded</option>
+          <option value="done">Done</option>
+          <option value="verified">Verified</option>
+          <option value="blocked">Blocked</option>
+          <option value="failed">Failed</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Job ID</th>
+              <th>Ticket</th>
+              <th>Repo</th>
+              <th>State</th>
+              <th>Branch</th>
+              <th>Duration</th>
+              <th>Updated</th>
+            </tr>
+          </thead>
+          <tbody id="jobsTable"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- REPOS PAGE -->
+  <div id="page-repos" class="page">
+    <div class="page-header">
+      <h1>Repos</h1>
+      <p>Configured repositories and merge settings</p>
+    </div>
+    <div class="page-content">
+      <div class="repo-grid" id="repoGrid"></div>
+    </div>
+  </div>
+
+  <!-- PR REVIEW PAGE -->
+  <div id="page-prs" class="page">
+    <div class="page-header">
+      <h1>PR Review</h1>
+      <p>Recent pull request review activity</p>
+    </div>
+    <div class="page-content">
+      <div id="prList"></div>
+    </div>
+  </div>
+
+  <!-- HEALTH PAGE -->
+  <div id="page-health" class="page">
+    <div class="page-header">
+      <h1>Health</h1>
+      <p>System health and daemon status</p>
+    </div>
+    <div class="page-content">
+      <div class="health-grid" id="healthGrid"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ── Navigation ──
+  const navItems = document.querySelectorAll('.nav-item');
+  const pages = document.querySelectorAll('.page');
+
+  navItems.forEach(item => {
+    item.addEventListener('click', () => {
+      const target = item.dataset.page;
+      navItems.forEach(n => n.classList.remove('active'));
+      pages.forEach(p => p.classList.remove('active'));
+      item.classList.add('active');
+      document.getElementById('page-' + target).classList.add('active');
+      if (target === 'repos') loadRepos();
+      if (target === 'health') loadHealth();
+      if (target === 'prs') loadPRs();
+    });
+  });
+
+  // ── State ──
+  let expandedJob = null;
+  let allJobs = [];
+
+  // ── Helpers ──
+  function formatDuration(seconds) {
+    if (!seconds && seconds !== 0) return '-';
+    if (seconds < 60) return seconds + 's';
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (m < 60) return m + 'm ' + s + 's';
+    const h = Math.floor(m / 60);
+    return h + 'h ' + (m % 60) + 'm';
+  }
+
+  function timeAgo(iso) {
+    if (!iso) return '-';
+    const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+  }
+
+  function badgeClass(state) {
+    const map = { queued: 'queued', preflight: 'preflight', running: 'running', coded: 'coded', done: 'done', verified: 'verified', blocked: 'blocked', failed: 'failed' };
+    return 'badge badge-' + (map[state] || 'other');
+  }
+
+  function repoShortName(repo) {
+    if (!repo) return '-';
+    const parts = repo.split('/');
+    return parts[parts.length - 1] || repo;
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  function toast(msg, type) {
+    const el = document.createElement('div');
+    el.className = 'toast ' + (type || '');
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 3000);
+  }
+
+  // ── API ──
+  async function api(path, options) {
+    try {
+      const resp = await fetch(path, options);
+      return await resp.json();
+    } catch (e) {
+      console.error('API error:', path, e);
+      return null;
+    }
+  }
+
+  // ── Jobs ──
+  async function loadJobs() {
+    const [stats, jobsData] = await Promise.all([api('/api/stats'), api('/api/jobs')]);
+
+    if (stats) {
+      const c = stats.counts || {};
+      document.getElementById('stat-running').textContent = (c.running || 0) + (c.preflight || 0);
+      const twentyFourHoursAgo = Date.now() - 86400000;
+      const recent = (jobsData || []).filter(j => new Date(j.updated_at).getTime() > twentyFourHoursAgo);
+      document.getElementById('stat-completed').textContent = recent.filter(j => ['coded','done','verified'].includes(j.state)).length;
+      document.getElementById('stat-failed').textContent = recent.filter(j => j.state === 'failed').length;
+      document.getElementById('stat-blocked').textContent = c.blocked || 0;
+    }
+
+    allJobs = jobsData || [];
+    renderJobs();
+    document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  }
+
+  function renderJobs() {
+    const filter = document.getElementById('jobFilter').value;
+    const filtered = filter === 'all' ? allJobs : allJobs.filter(j => j.state === filter);
+    const tbody = document.getElementById('jobsTable');
+
+    if (filtered.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><p>No jobs found</p></div></td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = filtered.map(job => {
+      const isExpanded = expandedJob === job.job_id;
+      let row = '<tr class="clickable" data-job="' + escapeHtml(job.job_id) + '">' +
+        '<td class="cell-mono">' + escapeHtml(job.job_id) + '</td>' +
+        '<td class="cell-mono">' + escapeHtml(job.ticket_id || '-') + '</td>' +
+        '<td class="cell-truncate">' + escapeHtml(repoShortName(job.repo)) + '</td>' +
+        '<td><span class="' + badgeClass(job.state) + '">' + escapeHtml(job.state) + '</span></td>' +
+        '<td class="cell-mono cell-secondary">' + escapeHtml(job.working_branch || '-') + '</td>' +
+        '<td class="cell-secondary">' + formatDuration(job.elapsed_sec) + '</td>' +
+        '<td class="cell-secondary">' + timeAgo(job.updated_at) + '</td>' +
+        '</tr>';
+      if (isExpanded) {
+        row += '<tr><td colspan="7"><div class="job-detail" id="detail-' + escapeHtml(job.job_id) + '"><div class="job-detail-inner"><div class="detail-field"><div class="detail-label">Loading...</div></div></div></div></td></tr>';
+      }
+      return row;
+    }).join('');
+
+    tbody.querySelectorAll('tr.clickable').forEach(tr => {
+      tr.addEventListener('click', () => toggleJobDetail(tr.dataset.job));
+    });
+
+    if (expandedJob) loadJobDetail(expandedJob);
+  }
+
+  function toggleJobDetail(jobId) {
+    expandedJob = expandedJob === jobId ? null : jobId;
+    renderJobs();
+  }
+
+  async function loadJobDetail(jobId) {
+    const data = await api('/api/jobs/' + encodeURIComponent(jobId));
+    const el = document.getElementById('detail-' + jobId);
+    if (!el || !data) return;
+
+    const result = data.result || {};
+    const packet = data.packet || {};
+    const status = data.status || {};
+
+    let html = '<div class="job-detail-inner">';
+    html += field('Goal', packet.goal || '-');
+    html += field('Source', packet.source || '-');
+    html += field('Branch', result.branch || status.working_branch || '-', true);
+    html += field('Commit', result.commit || '-', true);
+    html += field('PR', result.pr_url ? '<a href="' + escapeHtml(result.pr_url) + '" target="_blank">' + escapeHtml(result.pr_url) + '</a>' : '-');
+    html += field('Pushed', result.pushed || '-');
+
+    if (result.blocker) html += field('Blocker', result.blocker);
+    if (result.failed_checks && result.failed_checks.length) {
+      html += field('Failed Checks', result.failed_checks.map(c => c.name + ': ' + c.state).join(', '));
+    }
+
+    const linearInfo = status.integrations && status.integrations.linear;
+    if (linearInfo && linearInfo.url) {
+      html += field('Linear', '<a href="' + escapeHtml(linearInfo.url) + '" target="_blank">' + escapeHtml(linearInfo.identifier || 'View') + '</a>');
+    }
+
+    if (data.logTail) {
+      html += '</div><div class="job-detail-inner full-width"><div class="detail-field"><div class="detail-label">Log (tail)</div><div class="log-preview">' + escapeHtml(data.logTail) + '</div></div>';
+    }
+
+    html += '</div>';
+    el.innerHTML = html;
+  }
+
+  function field(label, value, mono) {
+    return '<div class="detail-field"><div class="detail-label">' + escapeHtml(label) + '</div><div class="detail-value' + (mono ? ' mono' : '') + '">' + value + '</div></div>';
+  }
+
+  document.getElementById('jobFilter').addEventListener('change', renderJobs);
+
+  // ── Repos ──
+  async function loadRepos() {
+    const data = await api('/api/repos');
+    const grid = document.getElementById('repoGrid');
+    if (!data || !data.mappings) { grid.innerHTML = '<div class="empty-state"><p>No repos configured</p></div>'; return; }
+
+    grid.innerHTML = data.mappings.map(repo => {
+      const autoMerge = repo.autoMerge === true;
+      const mergeMethod = repo.mergeMethod || 'squash';
+      const nightlyEnabled = repo.nightly && repo.nightly.enabled;
+
+      return '<div class="repo-card" data-key="' + escapeHtml(repo.key) + '">' +
+        '<div class="repo-card-header"><div>' +
+          '<div class="repo-name">' + escapeHtml(repo.key) + '</div>' +
+          '<div class="repo-owner">' + escapeHtml(repo.ownerRepo || 'local') + '</div>' +
+        '</div></div>' +
+        '<div class="repo-meta">' +
+          '<div class="repo-row"><span class="repo-row-label">Auto-merge</span>' +
+            '<div class="toggle ' + (autoMerge ? 'on' : '') + '" data-key="' + escapeHtml(repo.key) + '" data-field="autoMerge"></div></div>' +
+          '<div class="repo-row"><span class="repo-row-label">Merge method</span>' +
+            '<select class="inline-select" data-key="' + escapeHtml(repo.key) + '" data-field="mergeMethod">' +
+              '<option value="squash"' + (mergeMethod === 'squash' ? ' selected' : '') + '>squash</option>' +
+              '<option value="merge"' + (mergeMethod === 'merge' ? ' selected' : '') + '>merge</option>' +
+              '<option value="rebase"' + (mergeMethod === 'rebase' ? ' selected' : '') + '>rebase</option>' +
+            '</select></div>' +
+          '<div class="repo-row"><span class="repo-row-label">Nightly</span>' +
+            '<span class="repo-row-value" style="color:' + (nightlyEnabled ? 'var(--green)' : 'var(--text-muted)') + '">' + (nightlyEnabled ? 'Enabled' : 'Off') + '</span></div>' +
+          (repo.aliases ? '<div class="repo-row"><span class="repo-row-label">Aliases</span><span class="repo-row-value cell-secondary" style="font-size:11px">' + escapeHtml(repo.aliases.join(', ')) + '</span></div>' : '') +
+        '</div></div>';
+    }).join('');
+
+    // Bind toggle clicks
+    grid.querySelectorAll('.toggle').forEach(toggle => {
+      toggle.addEventListener('click', async () => {
+        const key = toggle.dataset.key;
+        const isOn = toggle.classList.contains('on');
+        toggle.classList.toggle('on');
+        const resp = await api('/api/repos/' + encodeURIComponent(key), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ autoMerge: !isOn })
+        });
+        if (resp && resp.ok) toast('Auto-merge ' + (!isOn ? 'enabled' : 'disabled'), 'success');
+        else { toggle.classList.toggle('on'); toast('Failed to update', 'error'); }
+      });
+    });
+
+    // Bind merge method selects
+    grid.querySelectorAll('.inline-select').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        const key = sel.dataset.key;
+        const resp = await api('/api/repos/' + encodeURIComponent(key), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mergeMethod: sel.value })
+        });
+        if (resp && resp.ok) toast('Merge method updated', 'success');
+        else toast('Failed to update', 'error');
+      });
+    });
+  }
+
+  // ── PRs ──
+  async function loadPRs() {
+    const jobs = allJobs.length ? allJobs : await api('/api/jobs') || [];
+    const prList = document.getElementById('prList');
+
+    const withPR = jobs.filter(j => {
+      const pr = j.integrations && j.integrations.prReview;
+      return pr && !pr.skipped;
+    });
+
+    if (withPR.length === 0) {
+      prList.innerHTML = '<div class="empty-state"><p>No PR reviews found</p></div>';
+      return;
+    }
+
+    // Fetch full details for PR jobs
+    const details = await Promise.all(withPR.slice(0, 30).map(j => api('/api/jobs/' + encodeURIComponent(j.job_id))));
+
+    prList.innerHTML = details.filter(Boolean).map(d => {
+      const result = d.result || {};
+      const review = (d.status && d.status.integrations && d.status.integrations.prReview) || {};
+      const disposition = review.disposition || 'unknown';
+      const dispClass = disposition === 'approve' ? 'disposition-approve' : disposition === 'block' ? 'disposition-block' : 'disposition-hold';
+
+      return '<div class="pr-card">' +
+        '<div class="pr-title">' + escapeHtml(result.branch || d.status.job_id) + '</div>' +
+        '<div class="pr-meta">' +
+          '<span>' + escapeHtml(repoShortName(d.status.repo)) + '</span>' +
+          '<span class="disposition ' + dispClass + '">' + escapeHtml(disposition) + '</span>' +
+          (result.pr_url ? '<a href="' + escapeHtml(result.pr_url) + '" target="_blank">View PR</a>' : '') +
+          '<span>' + timeAgo(d.status.updated_at) + '</span>' +
+          (review.autoMerge !== undefined ? '<span>Auto-merge: ' + (review.autoMerge ? 'yes' : 'no') + '</span>' : '') +
+        '</div></div>';
+    }).join('');
+  }
+
+  // ── Health ──
+  async function loadHealth() {
+    const data = await api('/api/health');
+    const grid = document.getElementById('healthGrid');
+    if (!data) { grid.innerHTML = '<div class="empty-state"><p>Health data unavailable</p></div>'; return; }
+
+    const hbAge = data.heartbeatAgeSec;
+    const hbClass = hbAge === null ? 'health-warn' : hbAge < 120 ? 'health-ok' : hbAge < 600 ? 'health-warn' : 'health-bad';
+    const hbText = hbAge === null ? 'No heartbeat' : formatDuration(hbAge) + ' ago';
+
+    grid.innerHTML =
+      '<div class="health-card"><h3>Supervisor</h3>' +
+        healthRow('Heartbeat', hbText, hbClass) +
+        healthRow('Stuck jobs', data.stuckJobCount, data.stuckJobCount > 0 ? 'health-bad' : 'health-ok') +
+        healthRow('Blocked jobs', data.blockedJobCount, data.blockedJobCount > 0 ? 'health-warn' : 'health-ok') +
+      '</div>' +
+      '<div class="health-card"><h3>Daemons</h3>' +
+        healthRow('Supervisor', data.launchd.supervisor ? 'Active' : 'Inactive', data.launchd.supervisor ? 'health-ok' : 'health-bad') +
+        healthRow('Intake server', data.launchd.prWatcher ? 'Active' : 'Inactive', data.launchd.prWatcher ? 'health-ok' : 'health-bad') +
+      '</div>' +
+      '<div class="health-card"><h3>Storage</h3>' +
+        healthRow('Jobs directory', data.diskUsage || '-', '') +
+        (data.stuckJobs && data.stuckJobs.length ? healthRow('Stuck IDs', data.stuckJobs.join(', '), 'health-bad') : '') +
+      '</div>';
+  }
+
+  function healthRow(label, value, cls) {
+    return '<div class="health-row"><span class="health-label">' + escapeHtml(label) + '</span><span class="health-value ' + (cls || '') + '">' + escapeHtml(String(value)) + '</span></div>';
+  }
+
+  // ── Init ──
+  loadJobs();
+  setInterval(loadJobs, 15000);
+})();
+</script>
+</body>
+</html>
