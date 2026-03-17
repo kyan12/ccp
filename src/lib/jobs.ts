@@ -9,6 +9,7 @@ import type {
 const { syncJobToLinear } = require('./linear');
 const { dispatchLinearIssues } = require('./linear-dispatch');
 const { reviewPr } = require('./pr-review');
+const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = require('./outage');
 // Lazy-require to avoid circular dependency (pr-watcher imports from jobs)
 let _runPrWatcherCycle: (() => Promise<PrWatcherCycleResult>) | undefined;
 function getRunPrWatcherCycle(): () => Promise<PrWatcherCycleResult> {
@@ -782,6 +783,16 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     saveStatus(jobId, { notifications: { final: sentMain.ok, start: true }, discord_thread_id: threadId });
   }
 
+  // Outage circuit breaker: detect API failures and trigger outage mode
+  const wasApiFailure = (exitCode !== 0 || finalState === 'blocked') && isApiOutageLog(logText);
+  const { enteredOutage } = recordJobOutcome(wasApiFailure);
+  if (enteredOutage) {
+    const outagePct = packet.ticket_id || jobId;
+    const alertMsg = `⚠️ OUTAGE DETECTED — Anthropic API is returning errors. Pausing all job dispatch until it recovers. Last job: ${outagePct}`;
+    sendDiscordMessage(DISCORD_ERRORS_CHANNEL, alertMsg);
+    appendLog(jobId, `[${nowIso()}] outage mode activated`);
+  }
+
   return { ok: true, state: finalState, exitCode, result, linear };
 }
 
@@ -991,10 +1002,23 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
     .filter((job) => job.state === 'queued')
     .sort((a, b) => (a.updated_at > b.updated_at ? 1 : -1));
 
-  // Check peak-hour scheduling before dispatching new jobs
+  // Check peak-hour scheduling + outage state before dispatching new jobs
   const { canDispatchJobs } = require('./scheduling');
+  const { runOutageProbe: probeOutage, getOutageStatus } = require('./outage');
   const scheduleCheck = canDispatchJobs();
   (summary as unknown as Record<string, unknown>).scheduling = scheduleCheck;
+
+  // During outage: probe the API each cycle and auto-resume when it recovers
+  if (!scheduleCheck.allowed && scheduleCheck.reason.includes('outage')) {
+    const probe = probeOutage();
+    if (probe.nowRecovered) {
+      const outageDuration = probe.state.outageSince
+        ? Math.round((Date.now() - new Date(probe.state.outageSince).getTime()) / 60000)
+        : null;
+      const msg = `✅ Anthropic API recovered — resuming job dispatch${outageDuration ? ` (outage lasted ~${outageDuration} min)` : ''}.`;
+      sendDiscordMessage(DISCORD_ERRORS_CHANNEL, msg);
+    }
+  }
 
   if (!scheduleCheck.allowed && queued.length > 0) {
     queued.forEach((job) => {

@@ -106,6 +106,20 @@ function isPeakHour(now?: Date): { peak: boolean; label: string | null; nextOffP
  * Should the supervisor dispatch new jobs right now?
  */
 function canDispatchJobs(priority?: string): { allowed: boolean; reason: string } {
+  // Check outage state first (takes priority over peak scheduling)
+  try {
+    const outageStatePath = path.join(ROOT, 'configs', 'outage.json');
+    if (fs.existsSync(outageStatePath)) {
+      const outageState = JSON.parse(fs.readFileSync(outageStatePath, 'utf8'));
+      if (outageState.outage) {
+        const since = outageState.outageSince
+          ? ` since ${new Date(outageState.outageSince).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' })}`
+          : '';
+        return { allowed: false, reason: `Anthropic API outage detected${since} — probing for recovery` };
+      }
+    }
+  } catch { /* ignore, proceed normally */ }
+
   const config = loadConfig();
   if (!config || !config.enabled) {
     return { allowed: true, reason: 'scheduling disabled' };
