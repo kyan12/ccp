@@ -6,7 +6,7 @@ import type {
   PRReviewResult, PrReviewIntegration, RemediationResult, DiscordMessageResult, DiscordThreadResult,
   SupervisorCycleSummary, PreflightResult, LinearSyncResult, PrWatcherCycleResult,
 } from '../types';
-const { syncJobToLinear } = require('./linear');
+const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./linear');
 const { dispatchLinearIssues } = require('./linear-dispatch');
 const { reviewPr } = require('./pr-review');
 const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = require('./outage');
@@ -319,16 +319,23 @@ function buildPrompt(packet: JobPacket): string {
   bits.push(`Ticket: ${packet.ticket_id || 'UNTRACKED'}`);
   bits.push(`Goal: ${packet.goal || 'No goal provided'}`);
   if (packet.constraints?.length) bits.push(`Constraints:\n- ${packet.constraints.join('\n- ')}`);
-  if (packet.acceptance_criteria?.length) bits.push(`Acceptance criteria:\n- ${packet.acceptance_criteria.join('\n- ')}`);
-  if (packet.verification_steps?.length) bits.push(`Verification steps:\n- ${packet.verification_steps.join('\n- ')}`);
+  if (packet.acceptance_criteria?.length) {
+    bits.push(`Acceptance criteria (you MUST satisfy every item):\n${packet.acceptance_criteria.map((ac) => `- [ ] ${ac}`).join('\n')}`);
+  }
+  if (packet.verification_steps?.length) {
+    bits.push(`Verification steps (you MUST complete each step before reporting done):\n${packet.verification_steps.map((vs, i) => `${i + 1}. ${vs}`).join('\n')}`);
+  }
   if (packet.review_feedback?.length) bits.push(`Review feedback to address:\n- ${packet.review_feedback.join('\n- ')}`);
   bits.push('Make only the minimum necessary changes for this task.');
+  bits.push('Before reporting State: coded/done/verified, you MUST describe what you did to verify your changes work. If you cannot verify, report State: blocked with Blocker: unable to verify.');
   bits.push('At the end, output a final compact summary with these exact labels on separate lines:');
   bits.push('State: <coded/deployed/verified/blocked>');
   bits.push('Commit: <hash or none>');
   bits.push('Prod: <yes/no>');
   bits.push('Verified: <exact test or not yet>');
   bits.push('Blocker: <reason or none>');
+  bits.push('Risk: <low/medium/high>');
+  bits.push('Summary: <1-3 sentence description of what you did>');
   bits.push('Do not claim pushed or deployed unless it actually happened. A local commit on main is not the same as pushed.');
   bits.push('If you make code changes, you must finish one delivery path before considering the task complete: either (A) push to origin/main, or (B) push a branch for review. Do not stop at a local-only commit.');
   return bits.join('\n\n');
@@ -525,7 +532,7 @@ function notifyStart(jobId: string): void {
 
 function parseSummary(logText: string): Record<string, string> {
   const fields: Record<string, string> = {};
-  for (const key of ['State', 'Commit', 'Prod', 'Verified', 'Blocker']) {
+  for (const key of ['State', 'Commit', 'Prod', 'Verified', 'Blocker', 'Risk', 'Summary']) {
     const re = new RegExp(`^${key}:\\s*(.+)$`, 'gmi');
     const matches = [...logText.matchAll(re)];
     if (matches.length) fields[key.toLowerCase()] = matches[matches.length - 1][1].trim();
@@ -683,6 +690,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     blocker: inferredBlocker || (summary.blocker && summary.blocker !== 'none' ? summary.blocker : null),
     blocker_type: null,
     failed_checks: [],
+    risk: summary.risk || null,
+    summary: summary.summary || null,
     tmux_session: status.tmux_session,
     worker_exit_code: exitCode,
     proof,
@@ -733,6 +742,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     } else {
       const parts: string[] = [`✅ DONE — ${ticket} | ${repoName}`];
       if (commitShort) parts.push(commitShort);
+      if (result.risk) parts.push(`risk:${result.risk}`);
       if (result.pr_url) parts.push(`→ PR ${result.pr_url.split('/').pop()}`);
       if (result.verified && result.verified !== 'not yet') {
         const v = result.verified.length > 60 ? result.verified.slice(0, 57) + '...' : result.verified;
@@ -769,6 +779,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       if (thread.ok && thread.threadId) {
         threadId = thread.threadId;
         const threadParts: string[] = [`**${ticket}** — ${repoName}`];
+        if (result.summary) threadParts.push(`**Summary:** ${result.summary}`);
+        if (result.risk) threadParts.push(`**Risk:** ${result.risk}`);
         if (result.pr_url) threadParts.push(`PR: ${result.pr_url}`);
         if (result.branch) threadParts.push(`Branch: \`${result.branch}\``);
         if (result.blocker) threadParts.push(`Blocker: ${result.blocker}`);
@@ -781,6 +793,15 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     }
 
     saveStatus(jobId, { notifications: { final: sentMain.ok, start: true }, discord_thread_id: threadId });
+
+    // Post completion comment to Linear ticket
+    const didWork = result.commit !== 'none' || result.state === 'blocked' || result.state === 'coded' || result.state === 'done' || result.state === 'verified';
+    if (didWork && packet.ticket_id) {
+      const link = getJobLinearLink(jobId);
+      if (link?.issueId) {
+        postCompletionComment(link.issueId, result, { discordThreadId: threadId }).catch(() => null);
+      }
+    }
   }
 
   // Outage circuit breaker: detect API failures and trigger outage mode

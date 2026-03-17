@@ -356,6 +356,27 @@ async function createIssueComment(issueId: string, body: string): Promise<{ id: 
   return ((data?.commentCreate as Record<string, unknown>)?.comment as { id: string; body: string }) || null;
 }
 
+async function postCompletionComment(
+  issueId: string,
+  result: JobResult,
+  options?: { discordThreadId?: string | null },
+): Promise<boolean> {
+  const parts: string[] = [`**Job completed: ${result.state}**`];
+  if (result.commit && result.commit !== 'none') parts.push(`Commit: \`${result.commit.slice(0, 10)}\``);
+  if (result.pr_url) parts.push(`PR: ${result.pr_url}`);
+  if (result.summary) parts.push(`**Summary:** ${result.summary}`);
+  if (result.risk) parts.push(`**Risk:** ${result.risk}`);
+  if (result.verified && result.verified !== 'not yet') parts.push(`**Verified:** ${result.verified}`);
+  if (result.blocker) parts.push(`**Blocker:** ${result.blocker}`);
+  if (options?.discordThreadId) parts.push(`[Discord thread](https://discord.com/channels/${options.discordThreadId})`);
+  try {
+    await createIssueComment(issueId, parts.join('\n'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; status: JobStatus; result: JobResult }): Promise<LinearSyncResult> {
   if (!hasLinearCredentials()) {
     return { ok: false, skipped: true, reason: 'LINEAR_API_KEY missing' };
@@ -451,6 +472,7 @@ module.exports = {
   resolveStateName,
   resolveLinearOrg,
   findIssueByIdentifier,
+  postCompletionComment,
 };
 
 export {
@@ -469,4 +491,5 @@ export {
   resolveStateName,
   resolveLinearOrg,
   findIssueByIdentifier,
+  postCompletionComment,
 };

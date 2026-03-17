@@ -1,0 +1,8 @@
+{
+  "outage": false,
+  "consecutiveApiFailures": 0,
+  "lastFailureAt": "2026-03-17T21:03:26.779Z",
+  "outageSince": null,
+  "lastProbeAt": "2026-03-17T20:59:59.733Z",
+  "lastProbeResult": "ok"
+}

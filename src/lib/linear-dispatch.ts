@@ -100,6 +100,60 @@ function chooseKind(issue: LinearDispatchIssue): string {
   return issue.project?.name === 'Reliability / Incidents' ? 'bug' : 'feature';
 }
 
+function parseStructuredDescription(description: string | null | undefined): {
+  goal: string | null;
+  acceptance_criteria: string[];
+  verification_steps: string[];
+  constraints: string[];
+  hasStructuredSections: boolean;
+} {
+  if (!description) return { goal: null, acceptance_criteria: [], verification_steps: [], constraints: [], hasStructuredSections: false };
+
+  const sectionPattern = /^##\s+(.+)$/gm;
+  const sections: Record<string, string> = {};
+  const matches = [...description.matchAll(sectionPattern)];
+
+  if (matches.length === 0) {
+    return { goal: null, acceptance_criteria: [], verification_steps: [], constraints: [], hasStructuredSections: false };
+  }
+
+  for (let i = 0; i < matches.length; i++) {
+    const heading = matches[i][1].trim().toLowerCase();
+    const start = matches[i].index! + matches[i][0].length;
+    const end = i + 1 < matches.length ? matches[i + 1].index! : description.length;
+    sections[heading] = description.slice(start, end).trim();
+  }
+
+  function extractBullets(sectionBody: string): string[] {
+    return sectionBody
+      .split('\n')
+      .map((line) => line.replace(/^\s*[-*]\s+/, '').trim())
+      .filter((line) => line.length > 0);
+  }
+
+  function findSection(...names: string[]): string | undefined {
+    for (const name of names) {
+      for (const key of Object.keys(sections)) {
+        if (key === name.toLowerCase()) return sections[key];
+      }
+    }
+    return undefined;
+  }
+
+  const acBody = findSection('acceptance criteria', 'ac');
+  const verifyBody = findSection('validation', 'verification');
+  const constraintsBody = findSection('constraints', 'risks');
+  const descBody = findSection('description');
+
+  return {
+    goal: descBody ? extractBullets(descBody).join(' ') || null : null,
+    acceptance_criteria: acBody ? extractBullets(acBody) : [],
+    verification_steps: verifyBody ? extractBullets(verifyBody) : [],
+    constraints: constraintsBody ? extractBullets(constraintsBody) : [],
+    hasStructuredSections: !!(acBody || verifyBody || constraintsBody || descBody),
+  };
+}
+
 function issueToPacket(issue: LinearDispatchIssue): JobPacket {
   const mapping: RepoMapping | null = findRepoMapping({
     title: issue.title,
@@ -111,6 +165,26 @@ function issueToPacket(issue: LinearDispatchIssue): JobPacket {
     description: issue.description,
     repo: mapping?.ownerRepo || null,
   });
+  const parsed = parseStructuredDescription(issue.description);
+
+  let acceptance_criteria: string[];
+  let constraints: string[];
+  let verification_steps: string[];
+  let goal: string;
+
+  if (parsed.hasStructuredSections) {
+    acceptance_criteria = parsed.acceptance_criteria;
+    verification_steps = parsed.verification_steps;
+    constraints = parsed.constraints;
+    goal = parsed.goal || issue.title;
+  } else {
+    // Fallback: entire description as single AC item
+    acceptance_criteria = issue.description ? [issue.description] : [];
+    constraints = issue.description ? [`Full description: ${issue.description}`] : [];
+    verification_steps = [];
+    goal = issue.title;
+  }
+
   return {
     job_id: `linear_${issue.identifier.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
     ticket_id: issue.identifier,
@@ -119,13 +193,13 @@ function issueToPacket(issue: LinearDispatchIssue): JobPacket {
     ownerRepo: enriched.ownerRepo || null,
     gitUrl: enriched.gitUrl || null,
     repoResolved: !!enriched.repoResolved,
-    goal: issue.title,
+    goal,
     source: 'linear',
     kind: chooseKind(issue),
     label: chooseKind(issue),
-    acceptance_criteria: issue.description ? [issue.description] : [],
-    constraints: [],
-    verification_steps: [],
+    acceptance_criteria,
+    constraints,
+    verification_steps,
   };
 }
 

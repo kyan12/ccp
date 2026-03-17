@@ -137,6 +137,8 @@ export interface JobResult {
   blocker: string | null;
   blocker_type?: string | null;
   failed_checks?: CheckInfo[];
+  risk?: string | null;
+  summary?: string | null;
   tmux_session?: string | null;
   worker_exit_code?: number;
   proof?: RepoProof;
