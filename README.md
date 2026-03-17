@@ -1,27 +1,25 @@
-# CodePlane ✈️
+# ☭ CCP — Coding Control Plane
 
-**A control plane for autonomous coding agents.**
+**Seize the means of code production.**
 
-CodePlane turns coding agents (Claude Code, Codex, etc.) into a continuous delivery pipeline. It handles the orchestration that nobody else does: ticket intake → job dispatch → coding → PR creation → review → auto-merge → error detection → remediation.
+CCP is an open-source control plane that turns coding agents (Claude Code, Codex, etc.) into a continuous delivery pipeline. It handles the orchestration that nobody else does: ticket intake → job dispatch → coding → PR creation → review → auto-merge → error detection → remediation.
 
 ```
-Linear Ticket → CodePlane → Coding Agent → PR → CI → Auto-Merge → Deploy
-       ↑                                                              |
-       └──── Sentry Error / Vercel Failure / GitHub CI Failure ───────┘
+Linear Ticket → CCP → Coding Agent → PR → CI → Auto-Merge → Deploy
+       ↑                                                        |
+       └──── Sentry Error / Vercel Failure / CI Failure ────────┘
 ```
 
 ## What It Does
 
-| Feature | Description |
-|---------|-------------|
-| **Job Pipeline** | Queue, dispatch, and monitor coding jobs with full lifecycle tracking |
-| **Linear Integration** | Auto-dispatch from Linear tickets, sync state back, create tickets from errors |
-| **PR Review & Auto-Merge** | Per-repo auto-merge config, CI check monitoring, disposition analysis |
-| **Remediation Loop** | CI failures auto-spawn fix jobs; errors → tickets → fixes → deploy |
-| **Webhook Intake** | Sentry errors, Vercel deploy failures, GitHub CI failures all create tickets |
-| **Discord Notifications** | Compact one-liners for runs, threads for non-clean outcomes |
-| **Dashboard** | Dark-themed web UI to monitor jobs, configure repos, track PR reviews |
-| **Nightly Runs** | Scheduled coding runs for maintenance, tech debt, compound tasks |
+- **Job Pipeline** — Queue, dispatch, and monitor coding jobs with full lifecycle tracking
+- **Linear Integration** — Auto-dispatch from Linear tickets, sync state back, create tickets from errors
+- **PR Review & Auto-Merge** — Per-repo auto-merge config, CI check monitoring, disposition analysis
+- **Remediation Loop** — CI failures auto-spawn fix jobs; errors → tickets → fixes → deploy
+- **Webhook Intake** — Sentry errors, Vercel deploy failures, GitHub CI failures all create tickets
+- **Discord Notifications** — Compact one-liners for runs, threads for non-clean outcomes
+- **Dashboard** — Dark-themed web UI to monitor jobs, configure repos, track PR reviews
+- **Nightly Runs** — Scheduled coding runs for maintenance, tech debt, compound tasks
 
 ## Architecture
 
@@ -66,8 +64,8 @@ Linear Ticket → CodePlane → Coding Agent → PR → CI → Auto-Merge → De
 ### Install
 
 ```bash
-git clone https://github.com/kyan12/codeplane.git
-cd codeplane
+git clone https://github.com/kyan12/ccp.git
+cd ccp
 npm install
 
 # Configure
@@ -143,7 +141,7 @@ node src/bin/install-launchd.js
 
 ### Per-Repo Auto-Merge
 
-Set `"autoMerge": true` in your repo config. CodePlane will:
+Set `"autoMerge": true` in your repo config. CCP will:
 1. Wait for all CI checks to pass
 2. Attempt GitHub approval (skips if self-authored)
 3. Squash merge (or rebase/merge per `mergeMethod`)
@@ -184,7 +182,7 @@ queued → preflight → running → coded → verified → done
 
 ## The Error→Fix Loop
 
-CodePlane's killer feature is the closed remediation loop:
+CCP's killer feature is the closed remediation loop:
 
 1. **Runtime error** → Sentry captures → webhook → Linear ticket created
 2. **Ticket dispatched** → coding agent fixes the bug → PR created
@@ -223,7 +221,7 @@ CodePlane's killer feature is the closed remediation loop:
 
 ## How It Compares
 
-| | CodePlane | Devin | Raw Claude Code | GitHub Actions |
+| | CCP | Devin | Raw Claude Code | GitHub Actions |
 |---|---|---|---|---|
 | Ticket → Code → PR | ✅ | ✅ | Manual | ❌ |
 | Auto-merge on green | ✅ | ❌ | ❌ | ✅ (limited) |
@@ -236,8 +234,8 @@ CodePlane's killer feature is the closed remediation loop:
 
 ## License
 
-MIT
+MIT — Seize it. Fork it. Ship it.
 
 ## Credits
 
-Built by [Kevin Yan](https://github.com/kyan12) and [Crab](https://github.com/kyan12/codeplane) 🦀 — an AI coding orchestrator running on [OpenClaw](https://openclaw.ai).
+Built by [Kevin Yan](https://github.com/kyan12) and [Crab 🦀](https://openclaw.ai) — an AI coding orchestrator running on [OpenClaw](https://openclaw.ai).

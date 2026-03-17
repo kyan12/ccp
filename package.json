@@ -1,12 +1,12 @@
 {
-  "name": "codeplane",
+  "name": "ccp",
   "version": "0.1.0",
-  "description": "A control plane for autonomous coding agents",
+  "description": "☭ Coding Control Plane — Seize the means of code production",
   "author": "Kevin Yan",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/kyan12/codeplane"
+    "url": "https://github.com/kyan12/ccp"
   },
   "keywords": [
     "coding-agent",
@@ -16,14 +16,15 @@
     "claude-code",
     "codex",
     "linear",
-    "control-plane"
+    "control-plane",
+    "ccp"
   ],
   "engines": {
     "node": ">=20"
   },
   "bin": {
-    "codeplane-supervisor": "src/bin/supervisor.js",
-    "codeplane-intake": "src/bin/intake-server.js",
-    "codeplane-jobs": "src/bin/jobs.js"
+    "ccp-supervisor": "src/bin/supervisor.js",
+    "ccp-intake": "src/bin/intake-server.js",
+    "ccp-jobs": "src/bin/jobs.js"
   }
 }
