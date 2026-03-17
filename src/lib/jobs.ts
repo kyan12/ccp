@@ -562,8 +562,16 @@ function inspectRepoProof(repo: string | null, claimedCommit: string): RepoProof
   }
   let commitExists = false;
   if (claimedCommit && claimedCommit !== 'none') {
+    // First try local object store
     const revOut = run(git, ['-C', repo, 'rev-parse', '--verify', `${claimedCommit}^{commit}`]);
     commitExists = revOut.status === 0;
+    // If not found locally, fetch and check origin/main (covers reviewfix case where
+    // work was already merged to main and the worker correctly identifies it)
+    if (!commitExists) {
+      run(git, ['-C', repo, 'fetch', '--quiet', 'origin', 'main']);
+      const remoteOut = run(git, ['-C', repo, 'merge-base', '--is-ancestor', claimedCommit, 'FETCH_HEAD']);
+      if (remoteOut.status === 0) commitExists = true;
+    }
   }
   return {
     repoExists: true,
