@@ -578,6 +578,34 @@ function inspectRepoProof(repo: string | null, claimedCommit: string): RepoProof
   };
 }
 
+/**
+ * After a job exits, if the repo is dirty with no commit, reset it back to main.
+ * Prevents cascading failures where subsequent jobs find a dirty working tree.
+ */
+function cleanRepoIfDirty(repoPath: string, proof: RepoProof): string | null {
+  if (!repoPath || !proof.dirty) return null;
+  const git = commandExists('git') || 'git';
+  const log: string[] = [];
+  // Discard uncommitted changes
+  run(git, ['-C', repoPath, 'checkout', '--', '.']);
+  // Remove untracked files
+  run(git, ['-C', repoPath, 'clean', '-fd']);
+  // Switch back to main if on a feature branch
+  const branchOut = run(git, ['-C', repoPath, 'branch', '--show-current']);
+  const branch = branchOut.stdout.trim();
+  if (branch && branch !== 'main') {
+    const checkout = run(git, ['-C', repoPath, 'checkout', 'main']);
+    if (checkout.status === 0) {
+      log.push(`switched ${branch} → main`);
+    }
+  }
+  // Verify clean
+  const statusAfter = run(git, ['-C', repoPath, 'status', '--porcelain']);
+  const stillDirty = (statusAfter.stdout || '').trim().length > 0;
+  log.push(stillDirty ? 'still dirty after cleanup' : 'clean');
+  return log.join('; ');
+}
+
 function inferBlockedReason(logText: string, result: { state: string; commit: string; prod: string; verified: string; pr_url: string | null }, proof: RepoProof): string | null {
   const permissionMatch = logText.match(/I need file write permission to proceed\.[\s\S]*?(?=WORKER_EXIT_CODE:|$)/i);
   if (permissionMatch) {
@@ -626,6 +654,14 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     pr_url: summary.pr_url || null,
   }, proof);
   const finalState = inferredBlocker ? 'blocked' : provisionalState;
+
+  // If the job is blocked due to dirty repo state, clean it up immediately so
+  // subsequent jobs don't inherit dirty working tree (e.g. from API 500 mid-run)
+  if (finalState === 'blocked' && proof.dirty && packet.repo) {
+    const cleanResult = cleanRepoIfDirty(packet.repo, proof);
+    appendLog(jobId, `[${nowIso()}] repo cleanup: ${cleanResult}`);
+  }
+
   const result: JobResult = {
     job_id: jobId,
     state: finalState,
