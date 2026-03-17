@@ -188,6 +188,58 @@ tbody tr.clickable { cursor: pointer; }
 .disposition-hold { color: var(--amber) !important; }
 .disposition-block { color: var(--red) !important; }
 
+/* Scheduling Banner */
+.scheduling-banner {
+  background: linear-gradient(135deg, #f59e0b22, #f59e0b11);
+  border-bottom: 1px solid #f59e0b44;
+  padding: 10px 24px;
+  display: flex;
+  align-items: center;
+}
+.scheduling-banner.hidden { display: none; }
+.scheduling-banner.off-peak {
+  background: linear-gradient(135deg, #10b98122, #10b98111);
+  border-bottom: 1px solid #10b98144;
+}
+.scheduling-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #f59e0b;
+}
+.scheduling-banner.off-peak .scheduling-banner-content { color: #10b981; }
+.scheduling-icon { font-size: 16px; }
+.scheduling-timer {
+  background: #f59e0b22;
+  border: 1px solid #f59e0b33;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-family: 'SF Mono', monospace;
+  font-size: 12px;
+}
+.scheduling-banner.off-peak .scheduling-timer {
+  background: #10b98122;
+  border-color: #10b98133;
+}
+.sidebar-scheduling {
+  padding: 8px 16px;
+  margin: 8px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  text-align: center;
+}
+.sidebar-scheduling.peak {
+  background: #f59e0b15;
+  border: 1px solid #f59e0b33;
+  color: #f59e0b;
+}
+.sidebar-scheduling.off-peak {
+  background: #10b98115;
+  border: 1px solid #10b98133;
+  color: #10b981;
+}
+
 /* Health */
 .health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
 .health-card {
@@ -248,12 +300,22 @@ tbody tr.clickable { cursor: pointer; }
       Health
     </div>
   </nav>
+  <div id="sidebarScheduling" class="sidebar-scheduling hidden"></div>
   <div class="sidebar-footer">
     <p id="lastUpdated">--</p>
   </div>
 </aside>
 
 <div class="main">
+  <!-- SCHEDULING BANNER -->
+  <div id="schedulingBanner" class="scheduling-banner hidden">
+    <div class="scheduling-banner-content">
+      <span class="scheduling-icon">⏸️</span>
+      <span id="schedulingText">Peak hours — dispatch paused</span>
+      <span id="schedulingTimer" class="scheduling-timer"></span>
+    </div>
+  </div>
+
   <!-- JOBS PAGE -->
   <div id="page-jobs" class="page active">
     <div class="page-header">
@@ -610,6 +672,51 @@ tbody tr.clickable { cursor: pointer; }
         '</div></div>';
     }).join('');
   }
+
+  // ── Scheduling ──
+  async function loadScheduling() {
+    try {
+      const data = await api('/api/scheduling');
+      if (!data) return;
+
+      const banner = document.getElementById('schedulingBanner');
+      const bannerText = document.getElementById('schedulingText');
+      const bannerTimer = document.getElementById('schedulingTimer');
+      const sidebar = document.getElementById('sidebarScheduling');
+
+      if (!data.config || !data.config.enabled) {
+        banner.classList.add('hidden');
+        sidebar.classList.add('hidden');
+        return;
+      }
+
+      banner.classList.remove('hidden');
+      sidebar.classList.remove('hidden');
+
+      if (data.status.peak) {
+        banner.classList.remove('off-peak');
+        banner.classList.add('peak');
+        bannerText.textContent = `Peak hours (${data.status.label}) — dispatch paused`;
+        bannerTimer.textContent = `Off-peak in ${data.status.nextOffPeak}`;
+        sidebar.className = 'sidebar-scheduling peak';
+        sidebar.textContent = `⏸️ Peak · ${data.status.nextOffPeak}`;
+      } else {
+        banner.classList.remove('peak');
+        banner.classList.add('off-peak');
+        bannerText.textContent = 'Off-peak — dispatch active';
+        bannerTimer.textContent = '▶️ Running';
+        sidebar.className = 'sidebar-scheduling off-peak';
+        sidebar.textContent = '▶️ Off-peak · Active';
+      }
+    } catch (e) {
+      // Scheduling endpoint not available — hide banner
+      document.getElementById('schedulingBanner').classList.add('hidden');
+    }
+  }
+
+  // Load scheduling on init and refresh every 30s
+  loadScheduling();
+  setInterval(loadScheduling, 30000);
 
   // ── Health ──
   async function loadHealth() {
