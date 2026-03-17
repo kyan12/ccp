@@ -1,37 +1,38 @@
-const https = require('https');
-const fs = require('fs');
-const path = require('path');
+import https = require('https');
+import fs = require('fs');
+import path = require('path');
+import type { LinearConfig, LinearIssue, LinearJobLink, LinearSyncResult, JobPacket, JobStatus, JobResult } from '../types';
 const { loadConfig } = require('./config');
 const { getSecret } = require('./secrets');
 const { chooseLinearProjectKey, buildLinearLabels } = require('./intake');
 const { ROOT } = require('./paths');
 
 const LINEAR_URL = 'https://api.linear.app/graphql';
-const LINEAR_CACHE_DIR = path.join(ROOT, 'supervisor', 'linear');
-const LINEAR_LINKS_FILE = path.join(LINEAR_CACHE_DIR, 'job-links.json');
+const LINEAR_CACHE_DIR: string = path.join(ROOT, 'supervisor', 'linear');
+const LINEAR_LINKS_FILE: string = path.join(LINEAR_CACHE_DIR, 'job-links.json');
 
-function ensureLinearCacheDir() {
+function ensureLinearCacheDir(): void {
   fs.mkdirSync(LINEAR_CACHE_DIR, { recursive: true });
 }
 
-function linearConfig(orgKey) {
+function linearConfig(orgKey?: string | null): LinearConfig {
   if (orgKey && orgKey !== 'default') {
-    return loadConfig(`linear-${orgKey}`, {});
+    return loadConfig(`linear-${orgKey}`, {}) as LinearConfig;
   }
-  return loadConfig('linear', {});
+  return loadConfig('linear', {}) as LinearConfig;
 }
 
-function linearApiKey(orgKey) {
+function linearApiKey(orgKey?: string | null): string {
   const cfg = linearConfig(orgKey);
   const envKey = cfg.apiKeyEnv || 'LINEAR_API_KEY';
   return getSecret(envKey);
 }
 
-function hasLinearCredentials(orgKey) {
+function hasLinearCredentials(orgKey?: string | null): boolean {
   return !!linearApiKey(orgKey);
 }
 
-function resolveLinearOrg(packet) {
+function resolveLinearOrg(packet: JobPacket): string | null {
   const { repoConfig } = require('./repos');
   const cfg = repoConfig();
   for (const mapping of cfg.mappings || []) {
@@ -42,30 +43,30 @@ function resolveLinearOrg(packet) {
   return null;
 }
 
-function readLinks() {
+function readLinks(): Record<string, LinearJobLink> {
   ensureLinearCacheDir();
   if (!fs.existsSync(LINEAR_LINKS_FILE)) return {};
   return JSON.parse(fs.readFileSync(LINEAR_LINKS_FILE, 'utf8'));
 }
 
-function writeLinks(data) {
+function writeLinks(data: Record<string, LinearJobLink>): void {
   ensureLinearCacheDir();
   fs.writeFileSync(LINEAR_LINKS_FILE, JSON.stringify(data, null, 2) + '\n');
 }
 
-function saveJobLinearLink(jobId, data) {
+function saveJobLinearLink(jobId: string, data: Partial<LinearJobLink>): LinearJobLink {
   const links = readLinks();
-  links[jobId] = { ...(links[jobId] || {}), ...data };
+  links[jobId] = { ...(links[jobId] || {} as LinearJobLink), ...data } as LinearJobLink;
   writeLinks(links);
   return links[jobId];
 }
 
-function getJobLinearLink(jobId) {
+function getJobLinearLink(jobId: string): LinearJobLink | null {
   const links = readLinks();
   return links[jobId] || null;
 }
 
-function linearRequest(query, variables = {}, orgKey) {
+function linearRequest(query: string, variables: Record<string, unknown> = {}, orgKey?: string | null): Promise<Record<string, unknown>> {
   const apiKey = linearApiKey(orgKey);
   if (!apiKey) {
     return Promise.reject(new Error(`LINEAR_API_KEY missing${orgKey ? ` (org: ${orgKey})` : ''}`));
@@ -82,12 +83,12 @@ function linearRequest(query, variables = {}, orgKey) {
       },
     }, (res) => {
       let data = '';
-      res.on('data', (chunk) => { data += chunk; });
+      res.on('data', (chunk: string) => { data += chunk; });
       res.on('end', () => {
         try {
           const parsed = JSON.parse(data || '{}');
           if (parsed.errors?.length) {
-            reject(new Error(parsed.errors.map((e) => e.message).join('; ')));
+            reject(new Error(parsed.errors.map((e: { message: string }) => e.message).join('; ')));
             return;
           }
           resolve(parsed.data);
@@ -102,16 +103,16 @@ function linearRequest(query, variables = {}, orgKey) {
   });
 }
 
-function chooseProject(payload, orgKey) {
+function chooseProject(payload: JobPacket, orgKey?: string | null): { key: string; project: { id: string; name: string } | null } {
   const cfg = linearConfig(orgKey);
   const key = chooseLinearProjectKey(payload);
   const project = cfg.projects?.[key] || null;
   return { key, project };
 }
 
-function normalizeJobToLinearIssue(packet, orgKey) {
+function normalizeJobToLinearIssue(packet: JobPacket, orgKey?: string | null): Record<string, unknown> {
   const routing = chooseProject(packet, orgKey);
-  const labels = buildLinearLabels(packet);
+  const labels: string[] = buildLinearLabels(packet);
   return {
     identifier: packet.ticket_id || null,
     title: packet.goal || `Coding job ${packet.job_id}`,
@@ -136,13 +137,13 @@ function normalizeJobToLinearIssue(packet, orgKey) {
   };
 }
 
-function resolveStateName(kind, orgKey) {
+function resolveStateName(kind: string, orgKey?: string | null): string {
   const cfg = linearConfig(orgKey);
   const defaults = cfg.defaultStates || {};
   return defaults[kind] || kind;
 }
 
-function buildCommentBody(job, result) {
+function buildCommentBody(job: Partial<JobStatus>, result: Partial<JobResult>): string {
   return [
     `Job: ${job.job_id}`,
     `State: ${result?.state || job.state || 'unknown'}`,
@@ -159,10 +160,10 @@ function buildCommentBody(job, result) {
 }
 
 // Cache workflow states for 10 minutes to reduce API calls
-const _stateCache = {};
+const _stateCache: Record<string, { states: Array<{ id: string; name: string; type: string }>; at: number }> = {};
 const STATE_CACHE_TTL_MS = 10 * 60 * 1000;
 
-async function fetchWorkflowStates(teamId, orgKey) {
+async function fetchWorkflowStates(teamId: string, orgKey?: string | null): Promise<Array<{ id: string; name: string; type: string }>> {
   const cacheKey = `${orgKey || 'default'}:${teamId}`;
   const cached = _stateCache[cacheKey];
   if (cached && Date.now() - cached.at < STATE_CACHE_TTL_MS) {
@@ -182,13 +183,13 @@ async function fetchWorkflowStates(teamId, orgKey) {
     }`,
     { teamId },
     orgKey,
-  );
-  const states = data?.team?.states?.nodes || [];
+  ) as Record<string, unknown>;
+  const states = ((data?.team as Record<string, unknown>)?.states as Record<string, unknown>)?.nodes as Array<{ id: string; name: string; type: string }> || [];
   _stateCache[cacheKey] = { states, at: Date.now() };
   return states;
 }
 
-async function resolveStateIdByName(name, orgKey) {
+async function resolveStateIdByName(name: string, orgKey?: string | null): Promise<string | null> {
   const cfg = linearConfig(orgKey);
   if (!cfg.teamId) throw new Error(`linear teamId missing in config${orgKey ? ` (org: ${orgKey})` : ''}`);
   const states = await fetchWorkflowStates(cfg.teamId, orgKey);
@@ -196,7 +197,7 @@ async function resolveStateIdByName(name, orgKey) {
   return match ? match.id : null;
 }
 
-async function ensureLabel(name, orgKey) {
+async function ensureLabel(name: string, orgKey?: string | null): Promise<string | null> {
   const cfg = linearConfig(orgKey);
   try {
     const data = await linearRequest(
@@ -212,8 +213,8 @@ async function ensureLabel(name, orgKey) {
       }`,
       { teamId: cfg.teamId },
       orgKey,
-    );
-    const existing = data?.team?.labels?.nodes?.find((label) => label.name.toLowerCase() === String(name).toLowerCase());
+    ) as Record<string, unknown>;
+    const existing = (((data?.team as Record<string, unknown>)?.labels as Record<string, unknown>)?.nodes as Array<{ id: string; name: string }>)?.find((label) => label.name.toLowerCase() === String(name).toLowerCase());
     if (existing) return existing.id;
     const created = await linearRequest(
       `mutation LabelCreate($input: IssueLabelCreateInput!) {
@@ -232,26 +233,26 @@ async function ensureLabel(name, orgKey) {
         },
       },
       orgKey,
-    );
-    return created?.issueLabelCreate?.issueLabel?.id || null;
+    ) as Record<string, unknown>;
+    return ((created?.issueLabelCreate as Record<string, unknown>)?.issueLabel as Record<string, unknown>)?.id as string || null;
   } catch (_error) {
     return null;
   }
 }
 
-async function ensureLabels(names = [], orgKey) {
-  const ids = [];
+async function ensureLabels(names: string[] = [], orgKey?: string | null): Promise<string[]> {
+  const ids: string[] = [];
   for (const name of names) {
     const id = await Promise.race([
       ensureLabel(name, orgKey),
-      new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
+      new Promise<string | null>((resolve) => setTimeout(() => resolve(null), 1500)),
     ]);
     if (id) ids.push(id);
   }
   return ids;
 }
 
-async function findIssueByIdentifier(identifier) {
+async function findIssueByIdentifier(identifier: string): Promise<LinearIssue | null> {
   const cfg = linearConfig();
   if (!identifier || !cfg.teamId) return null;
   const data = await linearRequest(
@@ -270,17 +271,17 @@ async function findIssueByIdentifier(identifier) {
       }
     }`,
     { teamId: cfg.teamId },
-  );
-  const issues = data?.team?.issues?.nodes || [];
+  ) as Record<string, unknown>;
+  const issues = ((data?.team as Record<string, unknown>)?.issues as Record<string, unknown>)?.nodes as LinearIssue[] || [];
   return issues.find((issue) => issue.identifier === identifier) || null;
 }
 
-async function createIssueFromJob(packet) {
+async function createIssueFromJob(packet: JobPacket): Promise<LinearIssue | null> {
   const orgKey = resolveLinearOrg(packet);
   const cfg = linearConfig(orgKey);
   if (!cfg.teamId) throw new Error(`linear teamId missing in config${orgKey ? ` (org: ${orgKey})` : ''}`);
   const normalized = normalizeJobToLinearIssue(packet, orgKey);
-  const labelIds = await ensureLabels(normalized.labels || [], orgKey);
+  const labelIds = await ensureLabels(normalized.labels as string[] || [], orgKey);
   const data = await linearRequest(
     `mutation IssueCreate($input: IssueCreateInput!) {
       issueCreate(input: $input) {
@@ -304,11 +305,11 @@ async function createIssueFromJob(packet) {
       },
     },
     orgKey,
-  );
-  return data?.issueCreate?.issue || null;
+  ) as Record<string, unknown>;
+  return ((data?.issueCreate as Record<string, unknown>)?.issue as LinearIssue) || null;
 }
 
-async function updateIssueState(issueId, stateName, orgKey) {
+async function updateIssueState(issueId: string, stateName: string, orgKey?: string | null): Promise<LinearIssue | null> {
   const stateId = await resolveStateIdByName(stateName, orgKey);
   if (!stateId) throw new Error(`linear state not found: ${stateName}`);
   const data = await linearRequest(
@@ -330,11 +331,11 @@ async function updateIssueState(issueId, stateName, orgKey) {
       input: { stateId },
     },
     orgKey,
-  );
-  return data?.issueUpdate?.issue || null;
+  ) as Record<string, unknown>;
+  return ((data?.issueUpdate as Record<string, unknown>)?.issue as LinearIssue) || null;
 }
 
-async function createIssueComment(issueId, body) {
+async function createIssueComment(issueId: string, body: string): Promise<{ id: string; body: string } | null> {
   const data = await linearRequest(
     `mutation CommentCreate($input: CommentCreateInput!) {
       commentCreate(input: $input) {
@@ -351,16 +352,16 @@ async function createIssueComment(issueId, body) {
         body,
       },
     },
-  );
-  return data?.commentCreate?.comment || null;
+  ) as Record<string, unknown>;
+  return ((data?.commentCreate as Record<string, unknown>)?.comment as { id: string; body: string }) || null;
 }
 
-async function syncJobToLinear({ packet, status, result }) {
+async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; status: JobStatus; result: JobResult }): Promise<LinearSyncResult> {
   if (!hasLinearCredentials()) {
     return { ok: false, skipped: true, reason: 'LINEAR_API_KEY missing' };
   }
 
-  const lifecycleMap = {
+  const lifecycleMap: Record<string, string> = {
     queued: 'ready',
     preflight: 'ready',
     running: 'running',
@@ -371,10 +372,10 @@ async function syncJobToLinear({ packet, status, result }) {
     verified: 'verified',
   };
 
-  const desiredStateName = resolveStateName(lifecycleMap[result?.state || status?.state || 'ready']);
+  const desiredStateName = resolveStateName(lifecycleMap[result?.state || status?.state || 'ready'] || 'ready');
   const canonicalIssue = packet.ticket_id ? await findIssueByIdentifier(packet.ticket_id).catch(() => null) : null;
   let link = getJobLinearLink(packet.job_id);
-  let issue = null;
+  let issue: LinearIssue | null = null;
 
   if (canonicalIssue?.id) {
     link = saveJobLinearLink(packet.job_id, {
@@ -402,10 +403,10 @@ async function syncJobToLinear({ packet, status, result }) {
   }
 
   try {
-    await updateIssueState(link.issueId, desiredStateName);
-    await createIssueComment(link.issueId, buildCommentBody(status || {}, result || {}));
+    await updateIssueState(link!.issueId, desiredStateName);
+    await createIssueComment(link!.issueId, buildCommentBody(status || {}, result || {}));
   } catch (error) {
-    if (!/Entity not found: Issue/i.test(error.message || '')) throw error;
+    if (!/Entity not found: Issue/i.test((error as Error).message || '')) throw error;
     issue = packet.ticket_id ? await findIssueByIdentifier(packet.ticket_id).catch(() => null) : null;
     if (!issue?.id) {
       if (packet.ticket_id) {
@@ -426,15 +427,33 @@ async function syncJobToLinear({ packet, status, result }) {
 
   return {
     ok: true,
-    issueId: link.issueId,
-    identifier: link.identifier,
-    url: link.url,
+    issueId: link!.issueId,
+    identifier: link!.identifier,
+    url: link!.url,
     state: desiredStateName,
-    projectName: link.projectName || null,
+    projectName: link!.projectName || null,
   };
 }
 
 module.exports = {
+  linearConfig,
+  linearApiKey,
+  hasLinearCredentials,
+  linearRequest,
+  normalizeJobToLinearIssue,
+  saveJobLinearLink,
+  getJobLinearLink,
+  syncJobToLinear,
+  chooseProject,
+  ensureLabels,
+  createIssueFromJob,
+  updateIssueState,
+  resolveStateName,
+  resolveLinearOrg,
+  findIssueByIdentifier,
+};
+
+export {
   linearConfig,
   linearApiKey,
   hasLinearCredentials,

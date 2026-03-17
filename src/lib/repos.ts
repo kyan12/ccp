@@ -1,18 +1,19 @@
-const fs = require('fs');
-const path = require('path');
+import fs = require('fs');
+import path = require('path');
+import type { RepoMapping, ReposConfig, IntakePayload } from '../types';
 const { loadConfig } = require('./config');
 
-function repoConfig() {
-  return loadConfig('repos', { mappings: [] });
+function repoConfig(): ReposConfig {
+  return loadConfig('repos', { mappings: [] }) as ReposConfig;
 }
 
-function normalize(text) {
+function normalize(text: unknown): string {
   return String(text || '').toLowerCase();
 }
 
-function findRepoMapping(payload = {}) {
+function findRepoMapping(payload: IntakePayload = {}): RepoMapping | null {
   const cfg = repoConfig();
-  const haystacks = [
+  const haystacks: string[] = [
     payload.repo,
     payload.repoKey,
     payload.repoName,
@@ -20,15 +21,15 @@ function findRepoMapping(payload = {}) {
     payload.title,
     payload.summary,
     payload.description,
-    payload.metadata?.repo,
-    payload.metadata?.title,
-    payload.metadata?.culprit,
-  ].filter(Boolean).map(normalize);
+    (payload.metadata as Record<string, unknown>)?.repo as string,
+    (payload.metadata as Record<string, unknown>)?.title as string,
+    (payload.metadata as Record<string, unknown>)?.culprit as string,
+  ].filter(Boolean).map(normalize) as string[];
 
   for (const mapping of cfg.mappings || []) {
-    const candidates = [mapping.key, mapping.ownerRepo, mapping.gitUrl, mapping.localPath, ...(mapping.aliases || [])]
+    const candidates: string[] = [mapping.key, mapping.ownerRepo, mapping.gitUrl, mapping.localPath, ...(mapping.aliases || [])]
       .filter(Boolean)
-      .map(normalize);
+      .map(normalize) as string[];
     if (candidates.some((candidate) => haystacks.some((hay) => hay.includes(candidate)))) {
       return mapping;
     }
@@ -36,7 +37,7 @@ function findRepoMapping(payload = {}) {
   return null;
 }
 
-function enrichPayloadWithRepo(payload = {}) {
+function enrichPayloadWithRepo(payload: IntakePayload = {}): IntakePayload & { repoResolved: boolean } {
   const mapping = findRepoMapping(payload);
   if (!mapping) return { ...payload, repoResolved: false };
   return {
@@ -49,7 +50,7 @@ function enrichPayloadWithRepo(payload = {}) {
   };
 }
 
-function findRepoByPath(repoPath) {
+function findRepoByPath(repoPath: string): RepoMapping | null {
   if (!repoPath) return null;
   const cfg = repoConfig();
   const normalized = path.resolve(repoPath);
@@ -65,3 +66,5 @@ module.exports = {
   findRepoByPath,
   enrichPayloadWithRepo,
 };
+
+export { repoConfig, findRepoMapping, findRepoByPath, enrichPayloadWithRepo };

@@ -1,15 +1,16 @@
 #!/usr/bin/env node
-const fs = require('fs');
-const path = require('path');
-const { spawnSync } = require('child_process');
+import fs = require('fs');
+import path = require('path');
+import { spawnSync } from 'child_process';
+import type { JobPacket } from '../types';
 const { intakeToLinear, buildIncidentPacket } = require('../lib/intake-runner');
 const { createJob } = require('../lib/jobs');
 
-function usage() {
+function usage(): void {
   console.log('usage: node src/bin/intake-dispatch.js <sentry|vercel|manual> <payload.json> [--enqueue-job]');
 }
 
-async function main() {
+async function main(): Promise<void> {
   const [, , kind, file, ...rest] = process.argv;
   if (!kind || !file) {
     usage();
@@ -24,9 +25,9 @@ async function main() {
   const payload = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8'));
   const linear = await intakeToLinear(kind, payload);
 
-  let job = null;
+  let job: Record<string, unknown> | null = null;
   if (enqueueJob) {
-    const packet = buildIncidentPacket(kind, payload);
+    const packet: JobPacket = buildIncidentPacket(kind, payload);
     packet.ticket_id = linear.identifier;
 
     if (packet.gitUrl && packet.repo && !packet.repoResolved) {
@@ -56,7 +57,7 @@ async function main() {
   console.log(JSON.stringify({ ok: true, linear, job }, null, 2));
 }
 
-main().catch((error) => {
+main().catch((error: Error) => {
   console.error(error.stack || error.message);
   process.exit(1);
 });

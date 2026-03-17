@@ -1,24 +1,24 @@
 #!/usr/bin/env node
-const fs = require('fs');
-const path = require('path');
-const { spawnSync } = require('child_process');
+import fs = require('fs');
+import path = require('path');
+import { spawnSync } from 'child_process';
 const { ROOT } = require('../lib/jobs');
 const { buildSupervisorPlist, buildIntakePlist } = require('../lib/launchd');
 const { loadConfig } = require('../lib/config');
 
-const home = process.env.HOME || '/Users/crab';
-const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents');
-const supervisorPlistPath = path.join(launchAgentsDir, 'ai.openclaw.coding-control-plane.plist');
-const intakePlistPath = path.join(launchAgentsDir, 'ai.openclaw.coding-control-plane.intake.plist');
+const home: string = process.env.HOME || '/Users/crab';
+const launchAgentsDir: string = path.join(home, 'Library', 'LaunchAgents');
+const supervisorPlistPath: string = path.join(launchAgentsDir, 'ai.openclaw.coding-control-plane.plist');
+const intakePlistPath: string = path.join(launchAgentsDir, 'ai.openclaw.coding-control-plane.intake.plist');
 
-function readOpSecret(ref) {
-  const out = spawnSync('op', ['read', ref], { encoding: 'utf8', env: process.env });
+function readOpSecret(ref: string): string {
+  const out = spawnSync('op', ['read', ref], { encoding: 'utf8', env: process.env as Record<string, string> });
   return out.status === 0 ? (out.stdout || '').trim() : '';
 }
 
-function resolveLaunchdSecrets() {
+function resolveLaunchdSecrets(): Record<string, string> {
   const onePassword = loadConfig('1password', { vault: '', items: {} });
-  const extraEnv = {};
+  const extraEnv: Record<string, string> = {};
   const localEnvPath = path.join(ROOT, 'supervisor', 'daemon', 'intake.env.local');
   if (fs.existsSync(localEnvPath)) {
     for (const line of fs.readFileSync(localEnvPath, 'utf8').split(/\r?\n/)) {
@@ -31,7 +31,7 @@ function resolveLaunchdSecrets() {
   }
   for (const envName of ['LINEAR_API_KEY', 'LINEAR_SMA_API_KEY', 'VERCEL_TOKEN', 'SENTRY_AUTH_TOKEN', 'VERCEL_WEBHOOK_SECRET']) {
     if (process.env[envName]) {
-      extraEnv[envName] = process.env[envName];
+      extraEnv[envName] = process.env[envName]!;
       continue;
     }
     const entry = onePassword.items?.[envName];

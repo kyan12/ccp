@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-const fs = require('fs');
-const path = require('path');
+import fs = require('fs');
+import path = require('path');
 const { intakeToLinear } = require('../lib/intake-runner');
 
-function usage() {
+function usage(): void {
   console.log('usage: node src/bin/intake-linear.js <sentry|vercel|manual> <payload.json>');
 }
 
-async function main() {
+async function main(): Promise<void> {
   const [, , kind, file] = process.argv;
   if (!kind || !file) {
     usage();
@@ -22,7 +22,7 @@ async function main() {
   console.log(JSON.stringify(await intakeToLinear(kind, payload), null, 2));
 }
 
-main().catch((error) => {
+main().catch((error: Error) => {
   console.error(error.stack || error.message);
   process.exit(1);
 });

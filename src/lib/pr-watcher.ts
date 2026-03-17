@@ -1,5 +1,6 @@
-const fs = require('fs');
-const path = require('path');
+import fs = require('fs');
+import path = require('path');
+import type { JobStatus, JobResult, JobPacket, PRReviewResult, PrWatcherCycleResult } from '../types';
 const { reviewPr } = require('./pr-review');
 const {
   JOBS_DIR,
@@ -21,11 +22,11 @@ const {
 // States where the job is done executing but the PR may still be evolving.
 const WATCHABLE_STATES = new Set(['coded', 'done', 'blocked']);
 
-function nowIso() {
+function nowIso(): string {
   return new Date().toISOString();
 }
 
-function prReviewPolicy(repoPath) {
+function prReviewPolicy(repoPath?: string): { enabled: boolean; autoMerge: boolean; mergeMethod: string } {
   const globalAutoMerge = String(process.env.CCP_PR_AUTOMERGE || 'false').toLowerCase() === 'true';
   const globalMergeMethod = process.env.CCP_PR_MERGE_METHOD || 'squash';
 
@@ -46,28 +47,27 @@ function prReviewPolicy(repoPath) {
   };
 }
 
-function remediationEnabled() {
+function remediationEnabled(): boolean {
   return String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
 }
 
 /**
  * Collect jobs whose PRs should be watched.
- * Criteria: job is in a watchable terminal state and has a pr_url in result.json.
  */
-function collectWatchableJobs() {
-  const jobs = listJobs();
-  const watchable = [];
+function collectWatchableJobs(): Array<{ status: JobStatus; result: JobResult; packet: JobPacket }> {
+  const jobs: JobStatus[] = listJobs();
+  const watchable: Array<{ status: JobStatus; result: JobResult; packet: JobPacket }> = [];
 
   for (const status of jobs) {
     if (!WATCHABLE_STATES.has(status.state)) continue;
-    const rPath = resultPath(status.job_id);
+    const rPath: string = resultPath(status.job_id);
     if (!fs.existsSync(rPath)) continue;
 
-    let result;
+    let result: JobResult;
     try { result = readJson(rPath); } catch { continue; }
     if (!result.pr_url) continue;
 
-    let packet;
+    let packet: JobPacket;
     try { packet = readJson(packetPath(status.job_id)); } catch { continue; }
 
     watchable.push({ status, result, packet });
@@ -79,7 +79,7 @@ function collectWatchableJobs() {
 /**
  * Check whether a remediation job already exists for a given parent job.
  */
-function remediationExists(jobId) {
+function remediationExists(jobId: string): boolean {
   const deployfixDir = path.join(JOBS_DIR, `${jobId}__deployfix`);
   const reviewfixDir = path.join(JOBS_DIR, `${jobId}__reviewfix`);
   return fs.existsSync(deployfixDir) || fs.existsSync(reviewfixDir);
@@ -87,26 +87,25 @@ function remediationExists(jobId) {
 
 /**
  * Run one watcher cycle across all watchable jobs.
- * Returns a summary array of actions taken.
  */
-async function runPrWatcherCycle() {
+async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
   const globalPolicy = prReviewPolicy();
   if (!globalPolicy.enabled) {
     return { ok: true, skipped: true, reason: 'PR review disabled', actions: [] };
   }
 
   const watchable = collectWatchableJobs();
-  const actions = [];
+  const actions: unknown[] = [];
 
   for (const { status, result, packet } of watchable) {
     const jobId = status.job_id;
-    const entry = { job_id: jobId, ticket_id: packet.ticket_id, pr_url: result.pr_url };
+    const entry: Record<string, unknown> = { job_id: jobId, ticket_id: packet.ticket_id, pr_url: result.pr_url };
 
     // Get per-repo policy for autoMerge/mergeMethod
-    const policy = prReviewPolicy(packet?.repo);
+    const policy = prReviewPolicy(packet?.repo || undefined);
 
     // Review live PR state
-    let review;
+    let review: PRReviewResult;
     try {
       review = reviewPr({
         prUrl: result.pr_url,
@@ -114,9 +113,9 @@ async function runPrWatcherCycle() {
         mergeMethod: policy.mergeMethod,
       });
     } catch (error) {
-      entry.error = error.message;
+      entry.error = (error as Error).message;
       actions.push(entry);
-      appendLog(jobId, `[${nowIso()}] pr-watcher review error: ${error.message}`);
+      appendLog(jobId, `[${nowIso()}] pr-watcher review error: ${(error as Error).message}`);
       continue;
     }
 
@@ -131,11 +130,10 @@ async function runPrWatcherCycle() {
       entry.action = 'merge-tracked';
     }
 
-    // PR is approved and green — if we just enabled auto-merge, note it
+    // PR is approved and green
     if (review.disposition === 'approve') {
       appendLog(jobId, `[${nowIso()}] pr-watcher: PR is green (disposition=approve)`);
 
-      // If job was blocked, promote to coded since PR is now clean
       if (status.state === 'blocked' && !result.blocker) {
         saveStatus(jobId, { state: 'coded' });
         result.state = 'coded';
@@ -168,11 +166,11 @@ async function runPrWatcherCycle() {
     }
 
     // Persist updated PR review integration state
-    const current = loadStatus(jobId);
-    const prevPrReview = current.integrations?.prReview || {};
-    const dispositionChanged = prevPrReview.disposition !== review.disposition
-      || prevPrReview.merged !== (review.merged || false)
-      || prevPrReview.autoMergeEnabled !== (review.autoMergeEnabled || false);
+    const current: JobStatus = loadStatus(jobId);
+    const prevPrReview = current.integrations?.prReview || {} as Record<string, unknown>;
+    const dispositionChanged = (prevPrReview as Record<string, unknown>).disposition !== review.disposition
+      || (prevPrReview as Record<string, unknown>).merged !== (review.merged || false)
+      || (prevPrReview as Record<string, unknown>).autoMergeEnabled !== (review.autoMergeEnabled || false);
 
     saveStatus(jobId, {
       integrations: {
@@ -196,7 +194,7 @@ async function runPrWatcherCycle() {
       try {
         const { sendDiscordMessage } = require('./jobs');
         const emoji = review.disposition === 'approve' ? '✅' : review.disposition === 'block' ? '🔴' : '🟡';
-        const parts = [`${emoji} PR status changed → **${review.disposition}**`];
+        const parts: string[] = [`${emoji} PR status changed → **${review.disposition}**`];
         if (review.merged) parts.push('PR has been merged');
         if (review.autoMergeEnabled) parts.push('Auto-merge enabled');
         if (review.blockers?.length) parts.push(`Blockers: ${review.blockers.join('; ')}`);
@@ -204,17 +202,16 @@ async function runPrWatcherCycle() {
       } catch { /* thread message is best-effort */ }
     }
 
-    // Only sync Linear when the PR disposition actually changed — avoids
-    // hammering the 5000 req/hr rate limit on every 15s supervisor cycle.
+    // Only sync Linear when the PR disposition actually changed
     if (packet.ticket_id && dispositionChanged) {
       try {
         const { syncJobToLinear } = require('./linear');
-        const freshResult = readJson(resultPath(jobId));
-        const freshStatus = loadStatus(jobId);
+        const freshResult: JobResult = readJson(resultPath(jobId));
+        const freshStatus: JobStatus = loadStatus(jobId);
         await syncJobToLinear({ packet, status: freshStatus, result: freshResult });
         entry.linearSynced = true;
       } catch (error) {
-        entry.linearSyncError = error.message;
+        entry.linearSyncError = (error as Error).message;
       }
     } else if (packet.ticket_id) {
       entry.linearSynced = false;
@@ -232,3 +229,5 @@ module.exports = {
   collectWatchableJobs,
   WATCHABLE_STATES,
 };
+
+export { runPrWatcherCycle, collectWatchableJobs, WATCHABLE_STATES };

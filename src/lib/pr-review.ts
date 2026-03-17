@@ -1,21 +1,22 @@
-const { spawnSync } = require('child_process');
+import { spawnSync } from 'child_process';
+import type { RunResult, ChecksSummary, CheckInfo, PRClassification, PRReviewResult } from '../types';
 
-function run(command, args = [], options = {}) {
-  return spawnSync(command, args, { encoding: 'utf8', ...options });
+function run(command: string, args: string[] = [], options: Record<string, unknown> = {}): RunResult {
+  return spawnSync(command, args, { encoding: 'utf8', ...options }) as unknown as RunResult;
 }
 
-function commandExists(cmd) {
+function commandExists(cmd: string): string {
   const out = spawnSync('sh', ['-lc', `command -v ${cmd}`], { encoding: 'utf8' });
   return out.status === 0 ? out.stdout.trim() : '';
 }
 
-function parsePrUrl(prUrl) {
+function parsePrUrl(prUrl: string | null | undefined): { ownerRepo: string; number: number } | null {
   const m = String(prUrl || '').match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/i);
   if (!m) return null;
   return { ownerRepo: m[1], number: Number(m[2]) };
 }
 
-function ghJson(args) {
+function ghJson(args: string[]): Record<string, unknown> {
   const gh = commandExists('gh') || 'gh';
   const out = run(gh, args);
   if (out.status !== 0) {
@@ -24,17 +25,28 @@ function ghJson(args) {
   return JSON.parse(out.stdout || '{}');
 }
 
-function summarizeChecks(statusCheckRollup = []) {
-  const checks = [];
+interface StatusCheckItem {
+  __typename?: string;
+  status?: string;
+  conclusion?: string;
+  state?: string;
+  name?: string;
+  context?: string;
+  detailsUrl?: string;
+  targetUrl?: string;
+}
+
+function summarizeChecks(statusCheckRollup: StatusCheckItem[] = []): ChecksSummary {
+  const checks: CheckInfo[] = [];
   let hasPending = false;
   let hasFailure = false;
   let hasSuccess = false;
   for (const item of statusCheckRollup || []) {
-    let state = null;
+    let state: string | null = null;
     if (item.__typename === 'CheckRun') {
-      state = item.status === 'COMPLETED' ? (item.conclusion || 'UNKNOWN') : item.status;
+      state = item.status === 'COMPLETED' ? (item.conclusion || 'UNKNOWN') : (item.status || null);
     } else if (item.__typename === 'StatusContext') {
-      state = item.state;
+      state = item.state || null;
     }
     const normalized = String(state || '').toUpperCase();
     checks.push({
@@ -49,14 +61,14 @@ function summarizeChecks(statusCheckRollup = []) {
   return { checks, hasPending, hasFailure, hasSuccess };
 }
 
-function classifyPr(pr) {
+function classifyPr(pr: Record<string, unknown>): PRClassification {
   const mergeable = String(pr.mergeable || 'UNKNOWN').toUpperCase();
   const reviewDecision = String(pr.reviewDecision || '').toUpperCase();
-  const checks = summarizeChecks(pr.statusCheckRollup || []);
+  const checks = summarizeChecks(pr.statusCheckRollup as StatusCheckItem[] || []);
   const failedChecks = checks.checks.filter((c) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(c.state));
   const pendingChecks = checks.checks.filter((c) => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED', 'WAITING', 'REQUESTED'].includes(c.state));
 
-  const blockers = [];
+  const blockers: string[] = [];
   if (pr.state !== 'OPEN') blockers.push(`pr is ${String(pr.state).toLowerCase()}`);
   if (pr.isDraft) blockers.push('pr is draft');
   if (mergeable === 'CONFLICTING') blockers.push('merge conflicts');
@@ -87,7 +99,7 @@ function classifyPr(pr) {
   };
 }
 
-function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }) {
+function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }: { prUrl: string; autoMerge?: boolean; mergeMethod?: string }): PRReviewResult {
   const ref = parsePrUrl(prUrl);
   if (!ref) throw new Error('invalid PR URL');
   const pr = ghJson([
@@ -96,14 +108,14 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }) {
     '--json', 'number,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefName,baseRefName,url,title'
   ]);
   const analysis = classifyPr(pr);
-  const result = {
+  const result: PRReviewResult = {
     ok: true,
-    prUrl: pr.url,
+    prUrl: pr.url as string,
     ownerRepo: ref.ownerRepo,
-    number: pr.number,
-    title: pr.title,
-    headRefName: pr.headRefName,
-    baseRefName: pr.baseRefName,
+    number: pr.number as number,
+    title: pr.title as string,
+    headRefName: pr.headRefName as string,
+    baseRefName: pr.baseRefName as string,
     mergeable: analysis.mergeable,
     reviewDecision: analysis.reviewDecision,
     disposition: analysis.disposition,
@@ -119,7 +131,6 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }) {
   if (analysis.disposition === 'approve' && autoMerge) {
     const gh = commandExists('gh') || 'gh';
 
-    // Try to approve (will fail if we authored the PR — that's ok)
     const reviewOut = run(gh, ['pr', 'review', String(ref.number), '--repo', ref.ownerRepo, '--approve', '--body', 'Auto-merge: checks green, mergeable.']);
     const selfApproval = /Cannot approve your own pull request/i.test((reviewOut.stderr || '') + (reviewOut.stdout || ''));
     const alreadyReviewed = /already reviewed/i.test((reviewOut.stderr || '') + (reviewOut.stdout || ''));
@@ -130,7 +141,6 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }) {
       return result;
     }
 
-    // Try --auto first (requires repo setting + branch protection)
     const mergeArgs = ['pr', 'merge', String(ref.number), '--repo', ref.ownerRepo, '--auto'];
     if (mergeMethod === 'rebase') mergeArgs.push('--rebase');
     else if (mergeMethod === 'merge') mergeArgs.push('--merge');
@@ -141,7 +151,6 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }) {
       result.autoMergeEnabled = true;
       result.merged = /merged pull request/i.test((mergeOut.stdout || '') + (mergeOut.stderr || ''));
     } else {
-      // --auto may fail if no branch protection rules exist; try direct merge
       const directArgs = ['pr', 'merge', String(ref.number), '--repo', ref.ownerRepo];
       if (mergeMethod === 'rebase') directArgs.push('--rebase');
       else if (mergeMethod === 'merge') directArgs.push('--merge');
@@ -165,3 +174,5 @@ module.exports = {
   reviewPr,
   classifyPr,
 };
+
+export { parsePrUrl, reviewPr, classifyPr };

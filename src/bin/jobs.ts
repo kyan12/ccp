@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-const fs = require('fs');
-const path = require('path');
+import fs = require('fs');
+import path = require('path');
 const {
   ROOT,
   createJob,
@@ -17,11 +17,11 @@ const {
   interruptJob,
 } = require('../lib/jobs');
 
-function usage() {
+function usage(): void {
   console.log(`jobs <command> [args]\n\nCommands:\n  enqueue <packet.json>\n  start <job_id>\n  list\n  status\n  show <job_id>\n  tail <job_id>\n  result <job_id>\n  interrupt <job_id>\n  retry <job_id>\n  reconcile <job_id|all>\n  doctor [repo]\n  phase0 [repo]`);
 }
 
-function die(msg, code = 1) {
+function die(msg: string, code: number = 1): never {
   console.error(msg);
   process.exit(code);
 }
@@ -32,7 +32,7 @@ if (!command) {
   process.exit(1);
 }
 
-async function main() {
+async function main(): Promise<void> {
   switch (command) {
     case 'enqueue': {
       const file = args[0];
@@ -98,8 +98,8 @@ async function main() {
     case 'reconcile': {
       const target = args[0];
       if (!target) die('usage: jobs reconcile <job_id|all>');
-      const ids = target === 'all' ? listJobs().map((j) => j.job_id) : [target];
-      const out = [];
+      const ids: string[] = target === 'all' ? listJobs().map((j: { job_id: string }) => j.job_id) : [target];
+      const out: unknown[] = [];
       for (const jobId of ids) {
         out.push({ job_id: jobId, ...(await reconcileJob(jobId)) });
       }
@@ -118,7 +118,7 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+main().catch((error: Error) => {
   console.error(error.stack || error.message);
   process.exit(1);
 });

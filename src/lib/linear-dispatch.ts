@@ -1,23 +1,24 @@
-const fs = require('fs');
-const path = require('path');
+import fs = require('fs');
+import path = require('path');
+import type { DispatchState, DispatchResult, JobPacket, RepoMapping } from '../types';
 const { linearConfig, linearRequest } = require('./linear');
 const { ROOT } = require('./paths');
 const { findRepoMapping, enrichPayloadWithRepo } = require('./repos');
 
-const DISPATCH_DIR = path.join(ROOT, 'supervisor', 'linear-dispatch');
-const STATE_FILE = path.join(DISPATCH_DIR, 'state.json');
+const DISPATCH_DIR: string = path.join(ROOT, 'supervisor', 'linear-dispatch');
+const STATE_FILE: string = path.join(DISPATCH_DIR, 'state.json');
 
-function ensureDir() {
+function ensureDir(): void {
   fs.mkdirSync(DISPATCH_DIR, { recursive: true });
 }
 
-function readState() {
+function readState(): DispatchState {
   ensureDir();
   if (!fs.existsSync(STATE_FILE)) return { dispatchedIssueIds: {}, updatedAt: null };
   return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
 }
 
-function writeState(state) {
+function writeState(state: DispatchState): void {
   ensureDir();
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + '\n');
 }
@@ -25,10 +26,10 @@ function writeState(state) {
 const { loadConfig } = require('./config');
 const { hasLinearCredentials } = require('./linear');
 
-function listLinearOrgs() {
-  const orgs = [null]; // default org
+function listLinearOrgs(): Array<string | null> {
+  const orgs: Array<string | null> = [null]; // default org
   const reposCfg = loadConfig('repos', { mappings: [] });
-  const seen = new Set();
+  const seen = new Set<string>();
   for (const m of reposCfg.mappings || []) {
     if (m.linearOrg && !seen.has(m.linearOrg)) {
       seen.add(m.linearOrg);
@@ -38,8 +39,20 @@ function listLinearOrgs() {
   return orgs;
 }
 
-async function listDispatchCandidates() {
-  const allIssues = [];
+interface LinearDispatchIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  description: string;
+  url: string;
+  state: { name: string };
+  project: { id: string; name: string } | null;
+  labels: { nodes: Array<{ id: string; name: string }> };
+  _orgKey?: string | null;
+}
+
+async function listDispatchCandidates(): Promise<LinearDispatchIssue[]> {
+  const allIssues: LinearDispatchIssue[] = [];
   for (const orgKey of listLinearOrgs()) {
     if (!hasLinearCredentials(orgKey)) continue;
     const cfg = linearConfig(orgKey);
@@ -48,7 +61,7 @@ async function listDispatchCandidates() {
       const data = await linearRequest(
         `query DispatchIssues($teamId: String!) {
           team(id: $teamId) {
-            issues(first: 50, filter: { state: { name: { in: [\"Todo\", \"Backlog\"] } } }) {
+            issues(first: 50, filter: { state: { name: { in: ["Todo", "Backlog"] } } }) {
               nodes {
                 id
                 identifier
@@ -64,8 +77,8 @@ async function listDispatchCandidates() {
         }`,
         { teamId: cfg.teamId },
         orgKey,
-      );
-      const issues = data?.team?.issues?.nodes || [];
+      ) as Record<string, unknown>;
+      const issues = ((data?.team as Record<string, unknown>)?.issues as Record<string, unknown>)?.nodes as LinearDispatchIssue[] || [];
       for (const issue of issues) {
         issue._orgKey = orgKey;
       }
@@ -77,7 +90,7 @@ async function listDispatchCandidates() {
   return allIssues;
 }
 
-function chooseKind(issue) {
+function chooseKind(issue: LinearDispatchIssue): string {
   const labels = (issue.labels?.nodes || []).map((l) => String(l.name).toLowerCase());
   if (labels.includes('deploy')) return 'deploy';
   if (labels.includes('runtime')) return 'runtime';
@@ -87,8 +100,8 @@ function chooseKind(issue) {
   return issue.project?.name === 'Reliability / Incidents' ? 'bug' : 'feature';
 }
 
-function issueToPacket(issue) {
-  const mapping = findRepoMapping({
+function issueToPacket(issue: LinearDispatchIssue): JobPacket {
+  const mapping: RepoMapping | null = findRepoMapping({
     title: issue.title,
     description: issue.description,
     repo: issue.description,
@@ -116,7 +129,7 @@ function issueToPacket(issue) {
   };
 }
 
-async function moveIssueToInProgress(issueId, orgKey) {
+async function moveIssueToInProgress(issueId: string, orgKey: string | null | undefined): Promise<unknown> {
   const cfg = linearConfig(orgKey);
   const states = await linearRequest(
     `query WorkflowStates($teamId: String!) {
@@ -128,8 +141,9 @@ async function moveIssueToInProgress(issueId, orgKey) {
     }`,
     { teamId: cfg.teamId },
     orgKey,
-  );
-  const match = states?.team?.states?.nodes?.find((s) => s.name === (cfg.defaultStates?.running || 'In Progress'));
+  ) as Record<string, unknown>;
+  const nodes = ((states?.team as Record<string, unknown>)?.states as Record<string, unknown>)?.nodes as Array<{ id: string; name: string }> || [];
+  const match = nodes.find((s) => s.name === (cfg.defaultStates?.running || 'In Progress'));
   if (!match) return null;
   return linearRequest(
     `mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
@@ -140,11 +154,11 @@ async function moveIssueToInProgress(issueId, orgKey) {
   );
 }
 
-async function dispatchLinearIssues() {
+async function dispatchLinearIssues(): Promise<DispatchResult[]> {
   const { createJob } = require('./jobs');
   const state = readState();
   const issues = await listDispatchCandidates();
-  const out = [];
+  const out: DispatchResult[] = [];
 
   for (const issue of issues) {
     if (state.dispatchedIssueIds[issue.id]) continue;
@@ -174,3 +188,5 @@ module.exports = {
   issueToPacket,
   readState,
 };
+
+export { dispatchLinearIssues, listDispatchCandidates, issueToPacket, readState };

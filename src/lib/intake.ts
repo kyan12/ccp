@@ -1,37 +1,38 @@
-function normalizeVercelFailure(payload = {}) {
+import type { NormalizedIncident, IntakePayload } from '../types';
+
+function normalizeVercelFailure(payload: IntakePayload = {}): NormalizedIncident {
   return {
     source: 'vercel',
     kind: 'deploy',
     label: 'deploy',
     title: payload.title || payload.name || 'Vercel deploy failure',
     summary: payload.summary || payload.error || payload.message || 'Unknown Vercel failure',
-    metadata: payload,
+    metadata: payload as Record<string, unknown>,
   };
 }
 
-function normalizeSentryIssue(payload = {}) {
-  // Sentry internal integration sends { action, data: { issue }, installation }
-  // or a flat issue object depending on how it's called
-  const issue = payload.data?.issue || payload.issue || payload;
-  const action = payload.action || 'created'; // created, resolved, assigned, etc.
+function normalizeSentryIssue(payload: IntakePayload = {}): NormalizedIncident {
+  const issue = (payload.data as Record<string, unknown>)?.issue as Record<string, unknown>
+    || payload.issue as Record<string, unknown>
+    || payload as Record<string, unknown>;
+  const action = payload.action || 'created';
 
-  const title = issue.title || issue.metadata?.title || payload.title || payload.issueTitle || 'Sentry runtime issue';
-  const culprit = issue.culprit || payload.culprit || '';
-  const shortId = issue.shortId || '';
-  const level = issue.level || 'error';
-  const project = issue.project?.slug || issue.project?.name || payload.project || '';
-  const issueUrl = issue.permalink || '';
-  const count = issue.count || 0;
-  const firstSeen = issue.firstSeen || '';
-  const lastSeen = issue.lastSeen || '';
+  const title = (issue.title as string) || ((issue.metadata as Record<string, unknown>)?.title as string) || payload.title || payload.issueTitle || 'Sentry runtime issue';
+  const culprit = (issue.culprit as string) || payload.culprit || '';
+  const shortId = (issue.shortId as string) || '';
+  const level = (issue.level as string) || 'error';
+  const project = (issue.project as Record<string, unknown>)?.slug as string || (issue.project as Record<string, unknown>)?.name as string || payload.project || '';
+  const issueUrl = (issue.permalink as string) || '';
+  const count = (issue.count as number) || 0;
+  const firstSeen = (issue.firstSeen as string) || '';
+  const lastSeen = (issue.lastSeen as string) || '';
 
-  const summaryParts = [];
+  const summaryParts: string[] = [];
   if (culprit) summaryParts.push(culprit);
   if (count > 1) summaryParts.push(`${count} occurrences`);
   if (issueUrl) summaryParts.push(issueUrl);
   const summary = summaryParts.join(' | ') || payload.summary || payload.message || 'Unknown Sentry issue';
 
-  // Try to map Sentry project to a repo
   const repoHint = project || culprit;
 
   return {
@@ -43,7 +44,7 @@ function normalizeSentryIssue(payload = {}) {
     repo: repoHint || payload.repo,
     metadata: {
       sentryAction: action,
-      sentryIssueId: issue.id || null,
+      sentryIssueId: (issue.id as string) || null,
       sentryShortId: shortId,
       sentryUrl: issueUrl,
       sentryProject: project,
@@ -56,7 +57,7 @@ function normalizeSentryIssue(payload = {}) {
   };
 }
 
-function normalizeManualIssue(payload = {}) {
+function normalizeManualIssue(payload: IntakePayload = {}): NormalizedIncident {
   const kind = payload.kind || 'bug';
   return {
     source: 'manual',
@@ -64,18 +65,18 @@ function normalizeManualIssue(payload = {}) {
     label: payload.label || kind,
     title: payload.title || 'Manual issue',
     summary: payload.summary || payload.description || 'No summary provided',
-    metadata: payload,
+    metadata: payload as Record<string, unknown>,
   };
 }
 
-function slugifyRepo(repo) {
+function slugifyRepo(repo: string | undefined | null): string | null {
   if (!repo) return null;
   const parts = String(repo).split('/').filter(Boolean);
   const tail = parts.slice(-2).join('-') || parts.slice(-1)[0] || 'unknown';
   return tail.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-function chooseLinearProjectKey(payload = {}) {
+function chooseLinearProjectKey(payload: IntakePayload = {}): string {
   const source = String(payload.source || '').toLowerCase();
   const kind = String(payload.kind || '').toLowerCase();
   const repo = String(payload.repo || '').toLowerCase();
@@ -93,8 +94,8 @@ function chooseLinearProjectKey(payload = {}) {
   return 'product';
 }
 
-function buildLinearLabels(payload = {}) {
-  const labels = new Set();
+function buildLinearLabels(payload: IntakePayload = {}): string[] {
+  const labels = new Set<string>();
   if (payload.label) labels.add(String(payload.label).toLowerCase());
   if (payload.kind) labels.add(String(payload.kind).toLowerCase());
   if (payload.source) labels.add(`source:${String(payload.source).toLowerCase()}`);
@@ -111,3 +112,5 @@ module.exports = {
   buildLinearLabels,
   slugifyRepo,
 };
+
+export { normalizeVercelFailure, normalizeSentryIssue, normalizeManualIssue, chooseLinearProjectKey, buildLinearLabels, slugifyRepo };

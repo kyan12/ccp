@@ -1,12 +1,17 @@
+import type { JobPacket, IntakePayload, IntakeToLinearResult } from '../types';
 const { normalizeVercelFailure, normalizeSentryIssue, normalizeManualIssue } = require('./intake');
 const { createIssueFromJob, updateIssueState, resolveStateName, resolveLinearOrg } = require('./linear');
 const { enrichPayloadWithRepo } = require('./repos');
 const { dispatchLinearIssues } = require('./linear-dispatch');
 
-function buildIncidentPacket(kind, payload) {
+function buildIncidentPacket(kind: string, payload: IntakePayload): JobPacket {
   // For Sentry webhooks, extract project slug as a repo hint before enrichment
-  if (kind === 'sentry' && payload.data?.issue?.project?.slug) {
-    payload = { ...payload, repo: payload.repo || payload.data.issue.project.slug };
+  if (kind === 'sentry' && (payload.data as Record<string, unknown>)?.issue) {
+    const issue = (payload.data as Record<string, unknown>).issue as Record<string, unknown>;
+    const project = issue.project as Record<string, unknown> | undefined;
+    if (project?.slug) {
+      payload = { ...payload, repo: payload.repo || project.slug as string };
+    }
   }
   const enriched = enrichPayloadWithRepo(payload);
   let normalized;
@@ -34,20 +39,20 @@ function buildIncidentPacket(kind, payload) {
   };
 }
 
-async function intakeToLinear(kind, payload, options = {}) {
+async function intakeToLinear(kind: string, payload: IntakePayload, options: { autoDispatch?: boolean; autoStart?: boolean; maxConcurrent?: number } = {}): Promise<IntakeToLinearResult> {
   const packet = buildIncidentPacket(kind, payload);
   const orgKey = resolveLinearOrg(packet);
   const issue = await createIssueFromJob(packet);
   const desired = resolveStateName('inbox', orgKey);
   await updateIssueState(issue.id, desired, orgKey);
 
-  let dispatch = null;
-  let supervisor = null;
+  let dispatch: unknown = null;
+  let supervisor: unknown = null;
   if (options.autoDispatch) {
-    dispatch = await dispatchLinearIssues().catch((error) => ({ ok: false, error: error.message }));
+    dispatch = await dispatchLinearIssues().catch((error: Error) => ({ ok: false, error: error.message }));
     if (options.autoStart) {
       const { runSupervisorCycle } = require('./jobs');
-      supervisor = await runSupervisorCycle({ maxConcurrent: options.maxConcurrent || 1 }).catch((error) => ({ ok: false, error: error.message }));
+      supervisor = await runSupervisorCycle({ maxConcurrent: options.maxConcurrent || 1 }).catch((error: Error) => ({ ok: false, error: error.message }));
     }
   }
 
@@ -68,3 +73,5 @@ module.exports = {
   buildIncidentPacket,
   intakeToLinear,
 };
+
+export { buildIncidentPacket, intakeToLinear };

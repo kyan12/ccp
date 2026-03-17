@@ -1,100 +1,105 @@
-const fs = require('fs');
-const path = require('path');
-const { spawnSync } = require('child_process');
+import fs = require('fs');
+import path = require('path');
+import { spawnSync } from 'child_process';
+import type {
+  RunResult, JobPacket, JobStatus, JobResult, RepoProof,
+  PRReviewResult, PrReviewIntegration, RemediationResult, DiscordMessageResult, DiscordThreadResult,
+  SupervisorCycleSummary, PreflightResult, LinearSyncResult, PrWatcherCycleResult,
+} from '../types';
 const { syncJobToLinear } = require('./linear');
 const { dispatchLinearIssues } = require('./linear-dispatch');
 const { reviewPr } = require('./pr-review');
 // Lazy-require to avoid circular dependency (pr-watcher imports from jobs)
-let _runPrWatcherCycle;
-function getRunPrWatcherCycle() {
+let _runPrWatcherCycle: (() => Promise<PrWatcherCycleResult>) | undefined;
+function getRunPrWatcherCycle(): () => Promise<PrWatcherCycleResult> {
   if (!_runPrWatcherCycle) _runPrWatcherCycle = require('./pr-watcher').runPrWatcherCycle;
-  return _runPrWatcherCycle;
+  return _runPrWatcherCycle!;
 }
 
-const ROOT = path.resolve(process.env.CCP_ROOT || path.join(process.env.HOME || '/Users/crab', 'coding-control-plane'));
-const JOBS_DIR = path.join(ROOT, 'jobs');
-const DISCORD_RUNS_CHANNEL = process.env.CCP_DISCORD_RUNS_CHANNEL || '';
-const DISCORD_ERRORS_CHANNEL = process.env.CCP_DISCORD_ERRORS_CHANNEL || '';
-const DISCORD_REVIEW_CHANNEL = process.env.CCP_DISCORD_REVIEW_CHANNEL || '';
+const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(process.env.HOME || '/Users/crab', 'coding-control-plane'));
+const JOBS_DIR: string = path.join(ROOT, 'jobs');
+const DISCORD_RUNS_CHANNEL: string = process.env.CCP_DISCORD_RUNS_CHANNEL || '';
+const DISCORD_ERRORS_CHANNEL: string = process.env.CCP_DISCORD_ERRORS_CHANNEL || '';
+const DISCORD_REVIEW_CHANNEL: string = process.env.CCP_DISCORD_REVIEW_CHANNEL || '';
 
-function ensureDir(dir) {
+function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-function nowIso() {
+function nowIso(): string {
   return new Date().toISOString();
 }
 
-function readJson(file) {
+function readJson(file: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-function writeJson(file, data) {
+function writeJson(file: string, data: unknown): void {
   fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
 }
 
-function appendLog(jobId, text) {
+function appendLog(jobId: string, text: string): void {
   const file = path.join(jobDir(jobId), 'worker.log');
   fs.appendFileSync(file, text.endsWith('\n') ? text : text + '\n');
 }
 
-function shellQuote(value) {
+function shellQuote(value: string): string {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-function run(command, args = [], options = {}) {
-  return spawnSync(command, args, { encoding: 'utf8', ...options });
+function run(command: string, args: string[] = [], options: Record<string, unknown> = {}): RunResult {
+  return spawnSync(command, args, { encoding: 'utf8', ...options }) as unknown as RunResult;
 }
 
-const _commandExistsCache = new Map();
-function commandExists(cmd) {
-  if (_commandExistsCache.has(cmd)) return _commandExistsCache.get(cmd);
+const _commandExistsCache = new Map<string, string>();
+function commandExists(cmd: string): string {
+  if (_commandExistsCache.has(cmd)) return _commandExistsCache.get(cmd)!;
   const out = spawnSync('sh', ['-lc', `command -v ${cmd}`], { encoding: 'utf8' });
   const result = out.status === 0 ? out.stdout.trim() : '';
   _commandExistsCache.set(cmd, result);
   return result;
 }
 
-function gitIdentity() {
+function gitIdentity(): { name: string; email: string } {
   const name = process.env.CCP_GIT_USER_NAME || process.env.GIT_AUTHOR_NAME || (run('git', ['config', '--global', '--get', 'user.name']).stdout || '').trim() || 'CodePlane';
   const email = process.env.CCP_GIT_USER_EMAIL || process.env.GIT_AUTHOR_EMAIL || (run('git', ['config', '--global', '--get', 'user.email']).stdout || '').trim() || 'codeplane@localhost';
   return { name, email };
 }
 
-function safeExcerpt(text, max = 500) {
+function safeExcerpt(text: string, max: number = 500): string {
   if (!text) return '';
   return text.length <= max ? text : text.slice(-max);
 }
 
-function makeJobId() {
+function makeJobId(): string {
   const d = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
+  const pad = (n: number): string => String(n).padStart(2, '0');
   const stamp = `${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}_${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
   const rand = Math.random().toString(36).slice(2, 8);
   return `job_${stamp}_${rand}`;
 }
 
-function jobDir(jobId) {
+function jobDir(jobId: string): string {
   return path.join(JOBS_DIR, jobId);
 }
 
-function statusPath(jobId) {
+function statusPath(jobId: string): string {
   return path.join(jobDir(jobId), 'status.json');
 }
 
-function packetPath(jobId) {
+function packetPath(jobId: string): string {
   return path.join(jobDir(jobId), 'packet.json');
 }
 
-function resultPath(jobId) {
+function resultPath(jobId: string): string {
   return path.join(jobDir(jobId), 'result.json');
 }
 
-function loadStatus(jobId) {
-  return readJson(statusPath(jobId));
+function loadStatus(jobId: string): JobStatus {
+  return readJson(statusPath(jobId)) as unknown as JobStatus;
 }
 
-function saveStatus(jobId, patch) {
+function saveStatus(jobId: string, patch: Partial<JobStatus>): JobStatus {
   const file = statusPath(jobId);
   const lockFile = file + '.lock';
   const maxWait = 3000;
@@ -117,12 +122,12 @@ function saveStatus(jobId, patch) {
     const mergedNotifications = patch.notifications
       ? { ...(current.notifications || {}), ...patch.notifications }
       : current.notifications;
-    const next = {
+    const next: JobStatus = {
       ...current,
       ...patch,
       notifications: mergedNotifications,
       updated_at: nowIso(),
-    };
+    } as JobStatus;
     writeJson(file, next);
     return next;
   } finally {
@@ -130,14 +135,14 @@ function saveStatus(jobId, patch) {
   }
 }
 
-function createJob(packet) {
+function createJob(packet: JobPacket): { jobId: string; packet: JobPacket; status: JobStatus } {
   ensureDir(JOBS_DIR);
   const jobId = packet.job_id || makeJobId();
   const dir = jobDir(jobId);
   ensureDir(dir);
   const createdAt = nowIso();
-  const normalized = { ...packet, job_id: jobId, created_at: packet.created_at || createdAt };
-  const status = {
+  const normalized: JobPacket = { ...packet, job_id: jobId, created_at: packet.created_at || createdAt };
+  const status: JobStatus = {
     job_id: jobId,
     ticket_id: normalized.ticket_id || null,
     repo: normalized.repo || null,
@@ -175,22 +180,22 @@ function createJob(packet) {
   return { jobId, packet: normalized, status };
 }
 
-function listJobs() {
+function listJobs(): JobStatus[] {
   ensureDir(JOBS_DIR);
-  const results = [];
+  const results: JobStatus[] = [];
   for (const name of fs.readdirSync(JOBS_DIR)) {
     if (!fs.existsSync(statusPath(name))) continue;
     try {
       results.push(loadStatus(name));
     } catch (err) {
-      console.warn(`[ccp] skipping job ${name}: malformed status.json: ${err.message}`);
+      console.warn(`[ccp] skipping job ${name}: malformed status.json: ${(err as Error).message}`);
     }
   }
   return results.sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
 }
 
-function jobsByState() {
-  const buckets = {
+function jobsByState(): Record<string, JobStatus[]> {
+  const buckets: Record<string, JobStatus[]> = {
     queued: [],
     preflight: [],
     running: [],
@@ -208,7 +213,7 @@ function jobsByState() {
   return buckets;
 }
 
-function inspectEnvironment(repo) {
+function inspectEnvironment(repo: string | null): Record<string, unknown> {
   const tmux = commandExists('tmux');
   const claudeOpus = commandExists('claude-opus');
   const claude = commandExists('claude');
@@ -219,9 +224,9 @@ function inspectEnvironment(repo) {
   const home = process.env.HOME || '';
 
   const repoExists = !!repo && fs.existsSync(repo);
-  let gitStatus = null;
+  let gitStatus: Record<string, unknown> | null = null;
   if (repoExists && git) {
-    const out = run('git', ['-C', repo, 'status', '--short']);
+    const out = run('git', ['-C', repo!, 'status', '--short']);
     gitStatus = {
       ok: out.status === 0,
       clean: out.status === 0 ? out.stdout.trim().length === 0 : null,
@@ -231,7 +236,7 @@ function inspectEnvironment(repo) {
   }
 
   const claudeCommand = claudeOpus || claude || '';
-  let claudeVersion = null;
+  let claudeVersion: Record<string, unknown> | null = null;
   if (claudeCommand) {
     const out = run(claudeCommand, ['--version']);
     claudeVersion = {
@@ -267,28 +272,29 @@ function inspectEnvironment(repo) {
   };
 }
 
-function preflight(jobId) {
-  const packet = readJson(packetPath(jobId));
+function preflight(jobId: string): PreflightResult {
+  const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   const env = inspectEnvironment(packet.repo);
-  const failures = [];
+  const failures: string[] = [];
   if (!packet.ticket_id) failures.push('ticket_id missing');
-  if (!packet.repo || !env.repo_exists) failures.push(`repo missing: ${packet.repo || '(unset)'}`);
-  if (!env.commands.tmux) failures.push('tmux not found on PATH');
-  if (!(env.commands.claude_opus || env.commands.claude)) failures.push('claude-opus/claude not found on PATH');
-  if (!env.commands.git) failures.push('git not found on PATH');
-  if (!env.commands.node) failures.push('node not found on PATH');
-  if (!env.commands.openclaw) failures.push('openclaw not found on PATH');
+  if (!packet.repo || !(env.repo_exists as boolean)) failures.push(`repo missing: ${packet.repo || '(unset)'}`);
+  const cmds = env.commands as Record<string, string>;
+  if (!cmds.tmux) failures.push('tmux not found on PATH');
+  if (!(cmds.claude_opus || cmds.claude)) failures.push('claude-opus/claude not found on PATH');
+  if (!cmds.git) failures.push('git not found on PATH');
+  if (!cmds.node) failures.push('node not found on PATH');
+  if (!cmds.openclaw) failures.push('openclaw not found on PATH');
 
   return {
     ok: failures.length === 0,
-    tmux: env.commands.tmux,
-    claude: env.commands.claude_opus || env.commands.claude,
+    tmux: cmds.tmux,
+    claude: cmds.claude_opus || cmds.claude,
     failures,
     environment: env,
   };
 }
 
-function markBlocked(jobId, reason) {
+function markBlocked(jobId: string, reason: string): void {
   appendLog(jobId, `[${nowIso()}] BLOCKED: ${reason}`);
   saveStatus(jobId, {
     state: 'blocked',
@@ -307,8 +313,8 @@ function markBlocked(jobId, reason) {
   });
 }
 
-function buildPrompt(packet) {
-  const bits = [];
+function buildPrompt(packet: JobPacket): string {
+  const bits: string[] = [];
   bits.push(`Ticket: ${packet.ticket_id || 'UNTRACKED'}`);
   bits.push(`Goal: ${packet.goal || 'No goal provided'}`);
   if (packet.constraints?.length) bits.push(`Constraints:\n- ${packet.constraints.join('\n- ')}`);
@@ -327,10 +333,9 @@ function buildPrompt(packet) {
   return bits.join('\n\n');
 }
 
-function sendDiscordMessage(channelId, message) {
+function sendDiscordMessage(channelId: string, message: string): DiscordMessageResult {
   const out = run('openclaw', ['message', 'send', '--channel', 'discord', '--target', `channel:${channelId}`, '--message', message]);
-  // Try to extract message ID from output (openclaw prints it)
-  let messageId = null;
+  let messageId: string | null = null;
   try {
     const parsed = JSON.parse(out.stdout || '{}');
     messageId = parsed.messageId || parsed.id || null;
@@ -341,7 +346,7 @@ function sendDiscordMessage(channelId, message) {
   return { ok: out.status === 0, stdout: out.stdout, stderr: out.stderr, messageId };
 }
 
-function createDiscordThread(channelId, messageId, threadName) {
+function createDiscordThread(channelId: string, messageId: string, threadName: string): DiscordThreadResult {
   const out = run('openclaw', [
     'message', 'thread-create',
     '--channel', 'discord',
@@ -349,7 +354,7 @@ function createDiscordThread(channelId, messageId, threadName) {
     '--message-id', messageId,
     '--thread-name', threadName.slice(0, 100),
   ]);
-  let threadId = null;
+  let threadId: string | null = null;
   try {
     const parsed = JSON.parse(out.stdout || '{}');
     threadId = parsed.threadId || parsed.id || null;
@@ -360,15 +365,14 @@ function createDiscordThread(channelId, messageId, threadName) {
   return { ok: out.status === 0, threadId, stdout: out.stdout, stderr: out.stderr };
 }
 
-function sendToThread(threadId, message) {
+function sendToThread(threadId: string, message: string): DiscordMessageResult {
   return sendDiscordMessage(threadId, message);
 }
 
-function prReviewPolicy(repoPath) {
+function prReviewPolicy(repoPath?: string): { enabled: boolean; autoMerge: boolean; mergeMethod: string } {
   const globalAutoMerge = String(process.env.CCP_PR_AUTOMERGE || 'false').toLowerCase() === 'true';
   const globalMergeMethod = process.env.CCP_PR_MERGE_METHOD || 'squash';
 
-  // Check per-repo config
   let repoAutoMerge = globalAutoMerge;
   let repoMergeMethod = globalMergeMethod;
   try {
@@ -385,7 +389,7 @@ function prReviewPolicy(repoPath) {
   };
 }
 
-function formatPrReview(review) {
+function formatPrReview(review: PRReviewResult | null): string | null {
   if (!review) return null;
   return [
     `PR review: ${review.disposition}`,
@@ -397,23 +401,23 @@ function formatPrReview(review) {
   ].join('\n');
 }
 
-function maybeReviewPr(jobId, result) {
-  const packet = readJson(packetPath(jobId));
-  const policy = prReviewPolicy(packet?.repo);
+function maybeReviewPr(jobId: string, result: JobResult): PRReviewResult & { skipped?: boolean; reason?: string } {
+  const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
+  const policy = prReviewPolicy(packet?.repo || undefined);
   if (!policy.enabled || !result?.pr_url) {
-    return { ok: false, skipped: true, reason: !result?.pr_url ? 'no PR URL' : 'PR review disabled' };
+    return { ok: false, skipped: true, reason: !result?.pr_url ? 'no PR URL' : 'PR review disabled' } as PRReviewResult & { skipped?: boolean; reason?: string };
   }
   try {
-    const review = reviewPr({ prUrl: result.pr_url, autoMerge: policy.autoMerge, mergeMethod: policy.mergeMethod });
+    const review: PRReviewResult = reviewPr({ prUrl: result.pr_url, autoMerge: policy.autoMerge, mergeMethod: policy.mergeMethod });
     appendLog(jobId, `[${nowIso()}] pr review: ${review.disposition}${review.autoMergeEnabled ? ' (auto-merge enabled)' : ''}`);
-    return { ok: true, skipped: false, ...review };
+    return { ...review, ok: true, skipped: false };
   } catch (error) {
-    appendLog(jobId, `[${nowIso()}] pr review error: ${error.message}`);
-    return { ok: false, skipped: false, reason: error.message };
+    appendLog(jobId, `[${nowIso()}] pr review error: ${(error as Error).message}`);
+    return { ok: false, skipped: false, reason: (error as Error).message } as PRReviewResult & { skipped?: boolean; reason?: string };
   }
 }
 
-function maybeEnqueueReviewRemediation(jobId, packet, result, prReview) {
+function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result: JobResult, prReview: PRReviewResult & { skipped?: boolean }): RemediationResult {
   const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
   if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
   if (/__deployfix|__reviewfix/.test(jobId)) return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
@@ -424,7 +428,7 @@ function maybeEnqueueReviewRemediation(jobId, packet, result, prReview) {
     return { ok: true, skipped: true, reason: 'remediation job already exists', job_id: remediationJobId };
   }
   const relevantChecks = (prReview.failedChecks?.length ? prReview.failedChecks : (prReview.checks || []).filter((c) => c.state !== 'SUCCESS' && c.state !== 'NEUTRAL' && c.state !== 'SKIPPED'));
-  const feedback = [
+  const feedback: string[] = [
     `PR review blocked for ${packet.ticket_id || jobId}`,
     `PR: ${prReview.prUrl}`,
     `Disposition: ${prReview.disposition}`,
@@ -435,7 +439,7 @@ function maybeEnqueueReviewRemediation(jobId, packet, result, prReview) {
       ? 'Investigate the deployment/platform failure, fix anything code-side that can resolve it, and push updates to the same branch. If the issue is definitely external/platform-only, leave a precise blocker note with the exact failing service and URL.'
       : 'Fix the blocking PR issues on the existing branch, push updates to the same branch, and do not create a new PR.',
   ];
-  const remediationPacket = {
+  const remediationPacket: JobPacket = {
     ...packet,
     job_id: remediationJobId,
     goal: `${prReview.blockerType === 'deploy' ? 'Remediate deploy blocker' : 'Remediate PR blockers'} for ${packet.ticket_id || jobId}`,
@@ -463,12 +467,12 @@ function maybeEnqueueReviewRemediation(jobId, packet, result, prReview) {
   return { ok: true, skipped: false, job_id: created.jobId, branch: remediationPacket.working_branch, blockerType: prReview.blockerType || 'unknown' };
 }
 
-async function maybeSyncLinear(jobId) {
-  const packet = readJson(packetPath(jobId));
+async function maybeSyncLinear(jobId: string): Promise<LinearSyncResult> {
+  const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   const status = loadStatus(jobId);
-  const result = readJson(resultPath(jobId));
+  const result = readJson(resultPath(jobId)) as unknown as JobResult;
   try {
-    const sync = await syncJobToLinear({ packet, status, result });
+    const sync: LinearSyncResult = await syncJobToLinear({ packet, status, result });
     const current = loadStatus(jobId);
     saveStatus(jobId, {
       integrations: {
@@ -496,30 +500,30 @@ async function maybeSyncLinear(jobId) {
           attempted_at: nowIso(),
           ok: false,
           skipped: false,
-          reason: error.message,
+          reason: (error as Error).message,
         },
       },
     });
-    appendLog(jobId, `[${nowIso()}] linear sync error: ${error.message}`);
-    return { ok: false, skipped: false, reason: error.message };
+    appendLog(jobId, `[${nowIso()}] linear sync error: ${(error as Error).message}`);
+    return { ok: false, skipped: false, reason: (error as Error).message };
   }
 }
 
-function notifyStart(jobId) {
+function notifyStart(jobId: string): void {
   const status = loadStatus(jobId);
   if (status.notifications?.start) return;
-  const packet = readJson(packetPath(jobId));
+  const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   const repoName = packet.repo ? path.basename(packet.repo) : 'unknown';
   const ticket = packet.ticket_id || jobId;
   const goal = packet.goal ? (packet.goal.length > 80 ? packet.goal.slice(0, 77) + '...' : packet.goal) : '';
   const msg = `🟡 START — ${ticket} | ${repoName} | ${goal}`;
   const sent = sendDiscordMessage(DISCORD_RUNS_CHANNEL, msg);
   appendLog(jobId, `[${nowIso()}] START notify: ${sent.ok ? 'ok' : (sent.stderr || 'failed')}`);
-  saveStatus(jobId, { notifications: { start: sent.ok } });
+  saveStatus(jobId, { notifications: { start: sent.ok, final: false } });
 }
 
-function parseSummary(logText) {
-  const fields = {};
+function parseSummary(logText: string): Record<string, string> {
+  const fields: Record<string, string> = {};
   for (const key of ['State', 'Commit', 'Prod', 'Verified', 'Blocker']) {
     const re = new RegExp(`^${key}:\\s*(.+)$`, 'gmi');
     const matches = [...logText.matchAll(re)];
@@ -530,7 +534,7 @@ function parseSummary(logText) {
   return fields;
 }
 
-function inspectRepoProof(repo, claimedCommit) {
+function inspectRepoProof(repo: string | null, claimedCommit: string): RepoProof {
   if (!repo || !fs.existsSync(repo)) {
     return { repoExists: false, git: false, dirty: false, commitExists: false, branch: null, pushed: null, upstream: null, ahead: null, behind: null };
   }
@@ -546,8 +550,8 @@ function inspectRepoProof(repo, claimedCommit) {
   const branch = branchOut.status === 0 ? branchOut.stdout.trim() : null;
   const upstreamOut = run(git, ['-C', repo, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const upstream = upstreamOut.status === 0 ? upstreamOut.stdout.trim() : null;
-  let ahead = null;
-  let behind = null;
+  let ahead: number | null = null;
+  let behind: number | null = null;
   if (upstream) {
     const countsOut = run(git, ['-C', repo, 'rev-list', '--left-right', '--count', `${upstream}...HEAD`]);
     if (countsOut.status === 0) {
@@ -574,7 +578,7 @@ function inspectRepoProof(repo, claimedCommit) {
   };
 }
 
-function inferBlockedReason(logText, result, proof) {
+function inferBlockedReason(logText: string, result: { state: string; commit: string; prod: string; verified: string; pr_url: string | null }, proof: RepoProof): string | null {
   const permissionMatch = logText.match(/I need file write permission to proceed\.[\s\S]*?(?=WORKER_EXIT_CODE:|$)/i);
   if (permissionMatch) {
     return permissionMatch[0].trim();
@@ -598,16 +602,16 @@ function inferBlockedReason(logText, result, proof) {
   return null;
 }
 
-function tmuxSessionAlive(session) {
+function tmuxSessionAlive(session: string | null): boolean {
   if (!session) return false;
   const tmux = commandExists('tmux') || 'tmux';
   const out = run(tmux, ['has-session', '-t', session]);
   return out.status === 0;
 }
 
-async function finalizeJob(jobId) {
+async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string; exitCode: number; result: JobResult; linear: LinearSyncResult }> {
   const status = loadStatus(jobId);
-  const packet = readJson(packetPath(jobId));
+  const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   const logText = fs.readFileSync(path.join(jobDir(jobId), 'worker.log'), 'utf8');
   const summary = parseSummary(logText);
   const exitCodeMatch = logText.match(/WORKER_EXIT_CODE:\s*(\d+)/);
@@ -622,7 +626,7 @@ async function finalizeJob(jobId) {
     pr_url: summary.pr_url || null,
   }, proof);
   const finalState = inferredBlocker ? 'blocked' : provisionalState;
-  const result = {
+  const result: JobResult = {
     job_id: jobId,
     state: finalState,
     commit: proof.commitExists ? (summary.commit || 'none') : 'none',
@@ -663,7 +667,7 @@ async function finalizeJob(jobId) {
   saveStatus(jobId, {
     integrations: {
       ...(currentAfterIntegrations.integrations || {}),
-      prReview: prReview.ok || prReview.skipped ? prReview : {
+      prReview: prReview.ok || prReview.skipped ? { ...prReview, skipped: !!prReview.skipped } as PrReviewIntegration : {
         ok: false,
         skipped: false,
         reason: prReview.reason || 'unknown PR review error',
@@ -677,13 +681,12 @@ async function finalizeJob(jobId) {
     const repoName = packet.repo ? path.basename(packet.repo) : 'unknown';
     const commitShort = result.commit && result.commit !== 'none' ? result.commit.slice(0, 7) : null;
 
-    // Compact runs message
-    let runsMsg;
+    let runsMsg: string;
     if (exitCode !== 0 || result.state === 'blocked' || result.state === 'failed') {
       const blocker = result.blocker ? (result.blocker.length > 100 ? result.blocker.slice(0, 97) + '...' : result.blocker) : 'unknown';
       runsMsg = `🔴 ${result.state === 'blocked' ? 'BLOCKED' : 'FAIL'} — ${ticket} | ${repoName} | ${blocker}`;
     } else {
-      const parts = [`✅ DONE — ${ticket} | ${repoName}`];
+      const parts: string[] = [`✅ DONE — ${ticket} | ${repoName}`];
       if (commitShort) parts.push(commitShort);
       if (result.pr_url) parts.push(`→ PR ${result.pr_url.split('/').pop()}`);
       if (result.verified && result.verified !== 'not yet') {
@@ -696,9 +699,8 @@ async function finalizeJob(jobId) {
     const target = exitCode === 0 && result.state !== 'blocked' && result.state !== 'failed' ? DISCORD_RUNS_CHANNEL : DISCORD_ERRORS_CHANNEL;
     const sentMain = sendDiscordMessage(target, runsMsg);
 
-    // Review channel: only when there's an actual PR to review
     if (result.pr_url && prReview.ok) {
-      const reviewParts = [
+      const reviewParts: string[] = [
         `📋 PR REVIEW — ${ticket}`,
         `PR: ${result.pr_url}`,
         `Disposition: ${prReview.disposition || 'pending'}`,
@@ -712,18 +714,16 @@ async function finalizeJob(jobId) {
 
     appendLog(jobId, `[${nowIso()}] FINAL notify: ${sentMain.ok ? 'ok' : (sentMain.stderr || 'failed')}`);
 
-    // Create a thread for non-clean outcomes (blocked, failed, PR needs review, auto-merge not enabled)
     const isCleanMerge = exitCode === 0
       && result.state !== 'blocked' && result.state !== 'failed'
       && (!result.pr_url || (prReview.ok && prReview.autoMergeEnabled));
-    let threadId = null;
+    let threadId: string | null = null;
     if (!isCleanMerge && sentMain.ok && sentMain.messageId) {
-      const threadName = `${ticket} — ${packet.goal || packet.title || repoName}`;
+      const threadName = `${ticket} — ${packet.goal || packet.ticket_id || repoName}`;
       const thread = createDiscordThread(target, sentMain.messageId, threadName);
       if (thread.ok && thread.threadId) {
         threadId = thread.threadId;
-        // Post initial thread context
-        const threadParts = [`**${ticket}** — ${repoName}`];
+        const threadParts: string[] = [`**${ticket}** — ${repoName}`];
         if (result.pr_url) threadParts.push(`PR: ${result.pr_url}`);
         if (result.branch) threadParts.push(`Branch: \`${result.branch}\``);
         if (result.blocker) threadParts.push(`Blocker: ${result.blocker}`);
@@ -735,13 +735,13 @@ async function finalizeJob(jobId) {
       }
     }
 
-    saveStatus(jobId, { notifications: { final: sentMain.ok }, discord_thread_id: threadId });
+    saveStatus(jobId, { notifications: { final: sentMain.ok, start: true }, discord_thread_id: threadId });
   }
 
   return { ok: true, state: finalState, exitCode, result, linear };
 }
 
-async function reconcileJob(jobId) {
+async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string; live?: boolean; exitCode?: number; result?: JobResult; linear?: LinearSyncResult }> {
   const status = loadStatus(jobId);
   if (status.state === 'running' && !tmuxSessionAlive(status.tmux_session)) {
     return await finalizeJob(jobId);
@@ -749,7 +749,7 @@ async function reconcileJob(jobId) {
   if (status.state === 'running') {
     notifyStart(jobId);
     const tmux = commandExists('tmux') || 'tmux';
-    const capture = run(tmux, ['capture-pane', '-pt', status.tmux_session]);
+    const capture = run(tmux, ['capture-pane', '-pt', status.tmux_session!]);
     if (capture.status === 0) {
       saveStatus(jobId, {
         last_heartbeat_at: nowIso(),
@@ -761,7 +761,7 @@ async function reconcileJob(jobId) {
   return { ok: true, state: status.state, live: false };
 }
 
-function startTmuxWorker(jobId, packet, pf) {
+function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult): string {
   const session = `ccp_${jobId}`.replace(/[^a-zA-Z0-9_]/g, '_');
   run(pf.tmux, ['kill-session', '-t', session]);
 
@@ -777,7 +777,7 @@ function startTmuxWorker(jobId, packet, pf) {
     `export GIT_AUTHOR_EMAIL=${shellQuote(gitUser.email)}`,
     `export GIT_COMMITTER_NAME=${shellQuote(gitUser.name)}`,
     `export GIT_COMMITTER_EMAIL=${shellQuote(gitUser.email)}`,
-    `cd ${shellQuote(packet.repo)}`,
+    `cd ${shellQuote(packet.repo!)}`,
     packet.working_branch ? `git checkout ${shellQuote(packet.working_branch)}` : null,
     packet.working_branch ? `git pull --ff-only origin ${shellQuote(packet.working_branch)} || true` : null,
     `echo "[${nowIso()}] worker start" >> ${shellQuote(logFile)}`,
@@ -794,7 +794,7 @@ function startTmuxWorker(jobId, packet, pf) {
   return session;
 }
 
-function interruptJob(jobId) {
+function interruptJob(jobId: string): { ok: boolean; job_id: string; state: string; interrupted: boolean } {
   const status = loadStatus(jobId);
   appendLog(jobId, `[${nowIso()}] interrupt requested`);
   if (status.tmux_session && tmuxSessionAlive(status.tmux_session)) {
@@ -822,7 +822,7 @@ function interruptJob(jobId) {
   return { ok: true, job_id: jobId, state: 'blocked', interrupted: true };
 }
 
-function summarizeJobs() {
+function summarizeJobs(): Record<string, unknown> {
   const buckets = jobsByState();
   const counts = Object.fromEntries(Object.entries(buckets).map(([key, value]) => [key, value.length]));
   return {
@@ -857,8 +857,8 @@ function summarizeJobs() {
   };
 }
 
-function startJob(jobId) {
-  const packet = readJson(packetPath(jobId));
+function startJob(jobId: string): Record<string, unknown> {
+  const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   saveStatus(jobId, {
     state: 'preflight',
     started_at: nowIso(),
@@ -891,7 +891,7 @@ function startJob(jobId) {
       verified: 'not yet',
       blocker: null,
       proof: {
-        branch: pf.environment?.git_status?.ok ? (run(commandExists('git') || 'git', ['-C', packet.repo, 'rev-parse', '--abbrev-ref', 'HEAD']).stdout || '').trim() || null : null,
+        branch: (pf.environment?.git_status as Record<string, unknown>)?.ok ? (run(commandExists('git') || 'git', ['-C', packet.repo!, 'rev-parse', '--abbrev-ref', 'HEAD']).stdout || '').trim() || null : null,
         pushed: null,
       },
       tmux_session: session,
@@ -900,15 +900,15 @@ function startJob(jobId) {
     notifyStart(jobId);
     return { ok: true, session, packet, environment: pf.environment };
   } catch (error) {
-    const reason = `worker start failed: ${error.message}`;
+    const reason = `worker start failed: ${(error as Error).message}`;
     markBlocked(jobId, reason);
     return { ok: false, blocked: true, reason, packet, environment: pf.environment };
   }
 }
 
-async function runSupervisorCycle(options = {}) {
+async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Promise<SupervisorCycleSummary> {
   const maxConcurrent = Number.isFinite(Number(options.maxConcurrent)) ? Number(options.maxConcurrent) : 1;
-  const summary = {
+  const summary: SupervisorCycleSummary = {
     started_at: nowIso(),
     max_concurrent: maxConcurrent,
     linearDispatched: [],
@@ -921,7 +921,7 @@ async function runSupervisorCycle(options = {}) {
   try {
     summary.linearDispatched = await dispatchLinearIssues();
   } catch (error) {
-    summary.errors.push({ action: 'linear-dispatch', error: error.message });
+    summary.errors.push({ action: 'linear-dispatch', error: (error as Error).message });
   }
 
   const jobs = listJobs();
@@ -930,14 +930,14 @@ async function runSupervisorCycle(options = {}) {
     try {
       summary.reconciled.push({ job_id: job.job_id, ...(await reconcileJob(job.job_id)) });
     } catch (error) {
-      summary.errors.push({ job_id: job.job_id, action: 'reconcile', error: error.message });
+      summary.errors.push({ job_id: job.job_id, action: 'reconcile', error: (error as Error).message });
     }
   }
 
   try {
     summary.prWatcher = await getRunPrWatcherCycle()();
   } catch (error) {
-    summary.errors.push({ action: 'pr-watcher', error: error.message });
+    summary.errors.push({ action: 'pr-watcher', error: (error as Error).message });
   }
 
   const refreshed = listJobs();
@@ -955,14 +955,14 @@ async function runSupervisorCycle(options = {}) {
     try {
       summary.started.push({ job_id: job.job_id, ...startJob(job.job_id) });
     } catch (error) {
-      summary.errors.push({ job_id: job.job_id, action: 'start', error: error.message });
+      summary.errors.push({ job_id: job.job_id, action: 'start', error: (error as Error).message });
     }
   });
 
   try {
     summary.archived = archiveOldJobs();
   } catch (error) {
-    summary.errors.push({ action: 'archive', error: error.message });
+    summary.errors.push({ action: 'archive', error: (error as Error).message });
   }
 
   summary.finished_at = nowIso();
@@ -973,17 +973,17 @@ async function runSupervisorCycle(options = {}) {
 const TERMINAL_STATES = new Set(['done', 'verified', 'blocked', 'failed', 'coded']);
 const ARCHIVE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-function archiveOldJobs() {
+function archiveOldJobs(): string[] {
   ensureDir(JOBS_DIR);
   const archiveDir = path.join(JOBS_DIR, 'archived');
   const now = Date.now();
-  const moved = [];
+  const moved: string[] = [];
   for (const name of fs.readdirSync(JOBS_DIR)) {
     if (name === 'archived') continue;
     const sPath = statusPath(name);
     if (!fs.existsSync(sPath)) continue;
-    let status;
-    try { status = readJson(sPath); } catch { continue; }
+    let status: JobStatus;
+    try { status = readJson(sPath) as unknown as JobStatus; } catch { continue; }
     if (!TERMINAL_STATES.has(status.state)) continue;
     const updatedAt = status.updated_at ? new Date(status.updated_at).getTime() : 0;
     if (now - updatedAt < ARCHIVE_AGE_MS) continue;
@@ -996,13 +996,13 @@ function archiveOldJobs() {
   return moved;
 }
 
-function healthCheck() {
+function healthCheck(): Record<string, unknown> {
   const heartbeatFile = path.join(ROOT, 'supervisor', 'daemon', 'heartbeat.json');
-  let heartbeatAge = null;
+  let heartbeatAge: number | null = null;
   if (fs.existsSync(heartbeatFile)) {
     try {
       const hb = readJson(heartbeatFile);
-      const ts = hb.finished_at || hb.at;
+      const ts = (hb.finished_at || hb.at) as string;
       if (ts) heartbeatAge = Math.round((Date.now() - new Date(ts).getTime()) / 1000);
     } catch { /* ignore */ }
   }
@@ -1023,7 +1023,7 @@ function healthCheck() {
     }
   } catch { /* ignore */ }
 
-  let diskUsage = null;
+  let diskUsage: string | null = null;
   try {
     const out = run('du', ['-sh', JOBS_DIR]);
     if (out.status === 0) diskUsage = out.stdout.trim().split(/\s+/)[0];
@@ -1040,6 +1040,37 @@ function healthCheck() {
 }
 
 module.exports = {
+  ROOT,
+  JOBS_DIR,
+  createJob,
+  listJobs,
+  jobsByState,
+  summarizeJobs,
+  runSupervisorCycle,
+  loadStatus,
+  readJson,
+  saveStatus,
+  packetPath,
+  resultPath,
+  jobDir,
+  startJob,
+  appendLog,
+  reconcileJob,
+  finalizeJob,
+  inspectEnvironment,
+  interruptJob,
+  maybeEnqueueReviewRemediation,
+  maybeReviewPr,
+  prReviewPolicy,
+  statusPath,
+  archiveOldJobs,
+  healthCheck,
+  sendDiscordMessage,
+  createDiscordThread,
+  sendToThread,
+};
+
+export {
   ROOT,
   JOBS_DIR,
   createJob,

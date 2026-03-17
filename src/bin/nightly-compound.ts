@@ -1,28 +1,20 @@
 #!/usr/bin/env node
 /**
  * Nightly Compound Dispatch
- *
- * Creates CCP jobs for all repos with nightly.enabled=true in repos.json.
- * The supervisor handles execution (max-concurrent=1, tmux workers, notifications).
- *
- * Usage:
- *   node src/bin/nightly-compound.js              # dispatch all enabled repos
- *   node src/bin/nightly-compound.js --dry-run     # show what would be dispatched
- *   node src/bin/nightly-compound.js --repo papyrx  # dispatch a single repo
- *   node src/bin/nightly-compound.js --list        # list nightly-eligible repos
  */
-const fs = require('fs');
-const path = require('path');
+import fs = require('fs');
+import path = require('path');
+import type { RepoMapping, JobPacket, NightlyConfig } from '../types';
 const { createJob } = require('../lib/jobs');
 
-const ROOT = path.resolve(process.env.CCP_ROOT || path.join(process.env.HOME || '/Users/crab', 'coding-control-plane'));
-const REPOS_FILE = path.join(ROOT, 'configs', 'repos.json');
+const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(process.env.HOME || '/Users/crab', 'coding-control-plane'));
+const REPOS_FILE: string = path.join(ROOT, 'configs', 'repos.json');
 
-function loadRepos() {
+function loadRepos(): { mappings: RepoMapping[] } {
   return JSON.parse(fs.readFileSync(REPOS_FILE, 'utf8'));
 }
 
-function buildCompoundPrompt(repo) {
+function buildCompoundPrompt(repo: RepoMapping): string {
   const branch = repo.nightly?.branch || 'main';
   return [
     `You are running a nightly compound review for the ${repo.key} project.`,
@@ -73,7 +65,7 @@ function buildCompoundPrompt(repo) {
   ].join('\n');
 }
 
-function buildPacket(repo) {
+function buildPacket(repo: RepoMapping): JobPacket {
   const now = new Date().toISOString();
   const dateStr = now.slice(0, 10);
   const jobId = `nightly_${repo.key}_${dateStr}`.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -104,7 +96,7 @@ function buildPacket(repo) {
   };
 }
 
-function main() {
+function main(): void {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
   const listOnly = args.includes('--list');
@@ -134,10 +126,9 @@ function main() {
     process.exit(0);
   }
 
-  // Check for existing nightly jobs today (avoid duplicates)
   const today = new Date().toISOString().slice(0, 10);
   const JOBS_DIR = path.join(ROOT, 'jobs');
-  const existingToday = new Set();
+  const existingToday = new Set<string>();
   if (fs.existsSync(JOBS_DIR)) {
     for (const d of fs.readdirSync(JOBS_DIR)) {
       if (d.startsWith('nightly_') && d.includes(today)) {
@@ -146,7 +137,7 @@ function main() {
     }
   }
 
-  const results = [];
+  const results: Array<Record<string, unknown>> = [];
 
   for (const repo of nightlyRepos) {
     const packet = buildPacket(repo);
@@ -166,8 +157,8 @@ function main() {
     if (dryRun) {
       console.log(`[dry-run] Would create job: ${packet.job_id}`);
       console.log(`  Repo: ${repo.localPath}`);
-      console.log(`  Branch: ${packet.nightly.branch}`);
-      console.log(`  Timeout: ${packet.nightly.timeoutSec}s`);
+      console.log(`  Branch: ${packet.nightly!.branch}`);
+      console.log(`  Timeout: ${packet.nightly!.timeoutSec}s`);
       results.push({ repo: repo.key, dryRun: true, job_id: packet.job_id });
       continue;
     }

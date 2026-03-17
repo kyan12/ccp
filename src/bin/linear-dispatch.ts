@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-const fs = require('fs');
-const path = require('path');
+import fs = require('fs');
+import path = require('path');
 const { dispatchLinearIssues } = require('../lib/linear-dispatch');
 
-function loadLocalEnv() {
+function loadLocalEnv(): void {
   const file = path.resolve(process.cwd(), 'supervisor', 'daemon', 'intake.env.local');
   if (!fs.existsSync(file)) return;
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
@@ -15,13 +15,13 @@ function loadLocalEnv() {
   }
 }
 
-async function main() {
+async function main(): Promise<void> {
   loadLocalEnv();
   const out = await dispatchLinearIssues();
   console.log(JSON.stringify({ ok: true, dispatched: out }, null, 2));
 }
 
-main().catch((error) => {
+main().catch((error: Error) => {
   console.error(error.stack || error.message);
   process.exit(1);
 });

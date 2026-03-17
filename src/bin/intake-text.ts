@@ -1,39 +1,29 @@
 #!/usr/bin/env node
 /**
- * intake-text.js — Create a job from free-text input (Discord intake, CLI, etc.)
- *
- * Usage:
- *   node src/bin/intake-text.js --title "Fix broken login" --repo my-repo \
- *     --kind bug --description "Login page 500s on submit" \
- *     [--constraints "Don't break SSO"] [--acceptance "Login works"] \
- *     [--verification "Submit login form"] [--ticket PRO-42] \
- *     [--enqueue] [--dispatch]
- *
- * With --enqueue: creates a local job immediately (skips Linear).
- * With --dispatch: creates Linear ticket + dispatches to job queue.
- * Default (neither flag): creates Linear ticket only.
+ * intake-text.ts — Create a job from free-text input (Discord intake, CLI, etc.)
  */
 
+import type { IntakePayload } from '../types';
 const { intakeToLinear, buildIncidentPacket } = require('../lib/intake-runner');
 const { createJob } = require('../lib/jobs');
 const { enrichPayloadWithRepo } = require('../lib/repos');
 
-function parseArgs(argv) {
-  const args = {};
+function parseArgs(argv: string[]): Record<string, string | boolean> {
+  const args: Record<string, string | boolean> = {};
   const rest = argv.slice(2);
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     if (arg === '--enqueue') { args.enqueue = true; continue; }
     if (arg === '--dispatch') { args.dispatch = true; continue; }
     if (arg.startsWith('--') && i + 1 < rest.length) {
-      const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      const key = arg.slice(2).replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase());
       args[key] = rest[++i];
     }
   }
   return args;
 }
 
-async function main() {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv);
 
   if (!args.title) {
@@ -41,23 +31,22 @@ async function main() {
     process.exit(1);
   }
 
-  const payload = {
-    title: args.title,
-    description: args.description || args.title,
-    summary: args.description || args.title,
-    repo: args.repo || null,
-    kind: args.kind || 'feature',
-    label: args.label || args.kind || 'feature',
-    ticket_id: args.ticket || null,
-    constraints: args.constraints ? args.constraints.split(';;') : [],
-    acceptance_criteria: args.acceptance ? args.acceptance.split(';;') : [],
-    verification_steps: args.verification ? args.verification.split(';;') : [],
+  const payload: IntakePayload = {
+    title: args.title as string,
+    description: (args.description as string) || (args.title as string),
+    summary: (args.description as string) || (args.title as string),
+    repo: (args.repo as string) || undefined,
+    kind: (args.kind as string) || 'feature',
+    label: (args.label as string) || (args.kind as string) || 'feature',
+    ticket_id: (args.ticket as string) || undefined,
+    constraints: args.constraints ? (args.constraints as string).split(';;') : [],
+    acceptance_criteria: args.acceptance ? (args.acceptance as string).split(';;') : [],
+    verification_steps: args.verification ? (args.verification as string).split(';;') : [],
   };
 
   const enriched = enrichPayloadWithRepo(payload);
 
   if (args.enqueue) {
-    // Direct job creation, skip Linear
     const packet = buildIncidentPacket('manual', enriched);
     if (args.ticket) packet.ticket_id = args.ticket;
     if (!packet.repoResolved) {
@@ -77,7 +66,6 @@ async function main() {
     return;
   }
 
-  // Linear ticket creation (default path)
   const result = await intakeToLinear('manual', enriched, {
     autoDispatch: !!args.dispatch,
     autoStart: !!args.dispatch,
@@ -96,7 +84,7 @@ async function main() {
   }, null, 2));
 }
 
-main().catch((error) => {
+main().catch((error: Error) => {
   console.error(error.stack || error.message);
   process.exit(1);
 });

@@ -1,7 +1,20 @@
-const path = require('path');
+import path = require('path');
 const { ROOT } = require('./jobs');
 
-function baseEnv(options = {}) {
+interface LaunchdOptions {
+  label?: string;
+  intervalMs?: number | string;
+  maxConcurrent?: number | string;
+  nodePath?: string;
+  pathEnv?: string;
+  homeEnv?: string;
+  shellEnv?: string;
+  opServiceAccountToken?: string;
+  extraEnv?: Record<string, string | undefined | null>;
+  port?: number | string;
+}
+
+function baseEnv(options: LaunchdOptions = {}): { pathEnv: string; homeEnv: string; shellEnv: string; opServiceAccountToken: string } {
   return {
     pathEnv: options.pathEnv || '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
     homeEnv: options.homeEnv || process.env.HOME || '/Users/crab',
@@ -10,10 +23,10 @@ function baseEnv(options = {}) {
   };
 }
 
-function buildEnvBlock(options = {}) {
+function buildEnvBlock(options: LaunchdOptions = {}): string {
   const { pathEnv, homeEnv, shellEnv, opServiceAccountToken } = baseEnv(options);
   const extra = options.extraEnv || {};
-  const lines = [
+  const lines: string[] = [
     '    <key>EnvironmentVariables</key>',
     '    <dict>',
     '      <key>PATH</key>',
@@ -36,7 +49,7 @@ function buildEnvBlock(options = {}) {
   return lines.join('\n');
 }
 
-function buildSupervisorPlist(options = {}) {
+function buildSupervisorPlist(options: LaunchdOptions = {}): string {
   const label = options.label || 'ai.openclaw.coding-control-plane';
   const intervalMs = Number(options.intervalMs || process.env.CCP_SUPERVISOR_INTERVAL_MS || 15000);
   const maxConcurrent = Number(options.maxConcurrent || process.env.CCP_MAX_CONCURRENT || 1);
@@ -75,7 +88,7 @@ ${buildEnvBlock(options)}
 `;
 }
 
-function buildIntakePlist(options = {}) {
+function buildIntakePlist(options: LaunchdOptions = {}): string {
   const label = options.label || 'ai.openclaw.coding-control-plane.intake';
   const port = Number(options.port || process.env.CCP_INTAKE_PORT || 4318);
   const nodePath = options.nodePath || process.execPath;
@@ -97,7 +110,7 @@ function buildIntakePlist(options = {}) {
     </array>
     <key>WorkingDirectory</key>
     <string>${workingDirectory}</string>
-${buildEnvBlock({ ...options, extraEnv: { ...(options.extraEnv || {}), CCP_INTAKE_PORT: port } })}
+${buildEnvBlock({ ...options, extraEnv: { ...(options.extraEnv || {}), CCP_INTAKE_PORT: String(port) } })}
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -115,3 +128,5 @@ module.exports = {
   buildSupervisorPlist,
   buildIntakePlist,
 };
+
+export { buildSupervisorPlist, buildIntakePlist };

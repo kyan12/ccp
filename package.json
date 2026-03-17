@@ -22,9 +22,16 @@
   "engines": {
     "node": ">=20"
   },
+  "scripts": {
+    "build": "tsc"
+  },
   "bin": {
-    "ccp-supervisor": "src/bin/supervisor.js",
-    "ccp-intake": "src/bin/intake-server.js",
-    "ccp-jobs": "src/bin/jobs.js"
+    "ccp-supervisor": "dist/bin/supervisor.js",
+    "ccp-intake": "dist/bin/intake-server.js",
+    "ccp-jobs": "dist/bin/jobs.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
   }
 }
