@@ -1,8 +1,80 @@
 import type { JobPacket, IntakePayload, IntakeToLinearResult } from '../types';
+import { spawnSync } from 'child_process';
 const { normalizeVercelFailure, normalizeSentryIssue, normalizeManualIssue } = require('./intake');
 const { createIssueFromJob, updateIssueState, resolveStateName, resolveLinearOrg } = require('./linear');
 const { enrichPayloadWithRepo } = require('./repos');
 const { dispatchLinearIssues } = require('./linear-dispatch');
+
+/**
+ * Use Claude Haiku to generate structured ticket fields from a rough description.
+ * Returns enriched acceptance_criteria, verification_steps, constraints, and a clean title.
+ * Falls back silently on failure (returns original input unchanged).
+ */
+function enrichWithAI(title: string, description: string, repoName?: string): {
+  title: string;
+  description: string;
+  acceptance_criteria: string[];
+  verification_steps: string[];
+  constraints: string[];
+} {
+  const fallback = {
+    title,
+    description,
+    acceptance_criteria: description ? [description] : [],
+    verification_steps: [],
+    constraints: [],
+  };
+
+  try {
+    const prompt = `You are a ticket refinement assistant for a software engineering team.
+
+Given this rough feature request or bug report, generate a structured ticket.
+
+Title: ${title}
+Description: ${description}
+${repoName ? `Repository: ${repoName}` : ''}
+
+Output ONLY valid JSON (no markdown, no code fences) with these fields:
+{
+  "title": "Clean, concise ticket title",
+  "acceptance_criteria": ["3-5 specific, testable criteria as strings"],
+  "verification_steps": ["2-4 concrete verification steps the developer should take"],
+  "constraints": ["1-3 scope/risk notes, e.g. what NOT to touch, blast radius"],
+  "description": "## Description\\n<1-2 sentence summary>\\n\\n## Acceptance Criteria\\n- <bullet items>\\n\\n## Validation\\n- <bullet items>\\n\\n## Risks\\n- <bullet items>"
+}
+
+Rules:
+- Acceptance criteria must be binary pass/fail testable
+- Verification steps should be concrete (e.g. "run pnpm tsc --noEmit", "verify the new page renders at /path")
+- Constraints should mention what's out of scope
+- The description field should be markdown with ## sections (this goes into the Linear ticket body)
+- Keep it practical, not bureaucratic`;
+
+    const result = spawnSync(
+      'claude',
+      ['--print', '--model', 'claude-haiku-4-5', prompt],
+      { encoding: 'utf8', timeout: 30000 }
+    );
+
+    if (result.status !== 0) return fallback;
+
+    const output = (result.stdout || '').trim();
+    // Try to extract JSON from the output
+    const jsonMatch = output.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return fallback;
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    return {
+      title: parsed.title || title,
+      description: parsed.description || description,
+      acceptance_criteria: Array.isArray(parsed.acceptance_criteria) ? parsed.acceptance_criteria : fallback.acceptance_criteria,
+      verification_steps: Array.isArray(parsed.verification_steps) ? parsed.verification_steps : [],
+      constraints: Array.isArray(parsed.constraints) ? parsed.constraints : [],
+    };
+  } catch {
+    return fallback;
+  }
+}
 
 function buildIncidentPacket(kind: string, payload: IntakePayload): JobPacket {
   // For Sentry webhooks, extract project slug as a repo hint before enrichment
@@ -20,6 +92,24 @@ function buildIncidentPacket(kind: string, payload: IntakePayload): JobPacket {
   else if (kind === 'manual') normalized = normalizeManualIssue(enriched);
   else throw new Error(`unsupported intake kind: ${kind}`);
 
+  // For manual issues, enrich with AI-generated structured fields
+  // Skip for automated sources (Sentry/Vercel) which have their own structure
+  let acceptance_criteria = enriched.acceptance_criteria || [normalized.summary];
+  let verification_steps = enriched.verification_steps || [];
+  let constraints = enriched.constraints || [];
+  let goal = normalized.title;
+  let description = normalized.summary;
+
+  if (kind === 'manual' && !enriched.acceptance_criteria?.length) {
+    const repoName = enriched.ownerRepo || enriched.repoKey || undefined;
+    const ai = enrichWithAI(normalized.title, normalized.summary, repoName);
+    goal = ai.title;
+    description = ai.description;
+    acceptance_criteria = ai.acceptance_criteria;
+    verification_steps = ai.verification_steps;
+    constraints = ai.constraints;
+  }
+
   return {
     job_id: `incident_${Date.now()}`,
     ticket_id: enriched.ticket_id || null,
@@ -28,14 +118,14 @@ function buildIncidentPacket(kind: string, payload: IntakePayload): JobPacket {
     ownerRepo: enriched.ownerRepo || null,
     gitUrl: enriched.gitUrl || null,
     repoResolved: !!enriched.repoResolved,
-    goal: normalized.title,
+    goal,
     source: normalized.source,
     kind: normalized.kind,
     label: normalized.label,
-    acceptance_criteria: [normalized.summary],
-    constraints: enriched.constraints || [],
-    verification_steps: enriched.verification_steps || [],
-    metadata: normalized.metadata,
+    acceptance_criteria,
+    constraints,
+    verification_steps,
+    metadata: { ...normalized.metadata, enriched_description: description },
   };
 }
 

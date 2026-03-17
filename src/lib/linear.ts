@@ -113,23 +113,28 @@ function chooseProject(payload: JobPacket, orgKey?: string | null): { key: strin
 function normalizeJobToLinearIssue(packet: JobPacket, orgKey?: string | null): Record<string, unknown> {
   const routing = chooseProject(packet, orgKey);
   const labels: string[] = buildLinearLabels(packet);
+
+  // If the packet has an AI-enriched description (with ## sections), use it directly
+  const enrichedDesc = (packet.metadata as Record<string, unknown>)?.enriched_description as string | undefined;
+  const description = enrichedDesc || [
+    `Job ID: ${packet.job_id || 'pending'}`,
+    `Repo: ${packet.repo || 'unknown'}`,
+    routing.project?.name ? `Linear project: ${routing.project.name}` : null,
+    labels.length ? `Labels:\n- ${labels.join('\n- ')}` : null,
+    packet.working_branch ? `Working branch: ${packet.working_branch}` : null,
+    packet.base_branch ? `Base branch: ${packet.base_branch}` : null,
+    packet.source ? `Source: ${packet.source}` : null,
+    packet.kind ? `Kind: ${packet.kind}` : null,
+    packet.constraints?.length ? `## Constraints\n- ${packet.constraints.join('\n- ')}` : null,
+    packet.acceptance_criteria?.length ? `## Acceptance Criteria\n- ${packet.acceptance_criteria.join('\n- ')}` : null,
+    packet.verification_steps?.length ? `## Validation\n- ${packet.verification_steps.join('\n- ')}` : null,
+    packet.review_feedback?.length ? `Review feedback:\n- ${packet.review_feedback.join('\n- ')}` : null,
+  ].filter(Boolean).join('\n\n');
+
   return {
     identifier: packet.ticket_id || null,
     title: packet.goal || `Coding job ${packet.job_id}`,
-    description: [
-      `Job ID: ${packet.job_id || 'pending'}`,
-      `Repo: ${packet.repo || 'unknown'}`,
-      routing.project?.name ? `Linear project: ${routing.project.name}` : null,
-      labels.length ? `Labels:\n- ${labels.join('\n- ')}` : null,
-      packet.working_branch ? `Working branch: ${packet.working_branch}` : null,
-      packet.base_branch ? `Base branch: ${packet.base_branch}` : null,
-      packet.source ? `Source: ${packet.source}` : null,
-      packet.kind ? `Kind: ${packet.kind}` : null,
-      packet.constraints?.length ? `Constraints:\n- ${packet.constraints.join('\n- ')}` : null,
-      packet.acceptance_criteria?.length ? `Acceptance criteria:\n- ${packet.acceptance_criteria.join('\n- ')}` : null,
-      packet.verification_steps?.length ? `Verification steps:\n- ${packet.verification_steps.join('\n- ')}` : null,
-      packet.review_feedback?.length ? `Review feedback:\n- ${packet.review_feedback.join('\n- ')}` : null,
-    ].filter(Boolean).join('\n\n'),
+    description,
     projectId: routing.project?.id || null,
     projectName: routing.project?.name || null,
     routingKey: routing.key,
