@@ -162,6 +162,7 @@ async function intakeToLinear(kind: string, payload: IntakePayload, options: { a
 module.exports = {
   buildIncidentPacket,
   intakeToLinear,
+  enrichWithAI,
 };
 
-export { buildIncidentPacket, intakeToLinear };
+export { buildIncidentPacket, intakeToLinear, enrichWithAI };
