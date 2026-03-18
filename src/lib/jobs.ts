@@ -22,6 +22,7 @@ const JOBS_DIR: string = path.join(ROOT, 'jobs');
 const DISCORD_RUNS_CHANNEL: string = process.env.CCP_DISCORD_RUNS_CHANNEL || '';
 const DISCORD_ERRORS_CHANNEL: string = process.env.CCP_DISCORD_ERRORS_CHANNEL || '';
 const DISCORD_REVIEW_CHANNEL: string = process.env.CCP_DISCORD_REVIEW_CHANNEL || '';
+const DISCORD_HUMAN_TASKS_CHANNEL: string = process.env.CCP_DISCORD_HUMAN_TASKS_CHANNEL || '';
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -814,6 +815,26 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       if (result.verified && result.verified !== 'not yet') reviewParts.push(`Tests: ${result.verified}`);
       if (remediation.ok && !remediation.skipped) reviewParts.push(`Remediation: ${remediation.job_id}`);
       sendDiscordMessage(DISCORD_REVIEW_CHANNEL, reviewParts.join('\n'));
+    }
+
+    // Detect human-actionable blockers and post to human-tasks channel
+    if (DISCORD_HUMAN_TASKS_CHANNEL && (result.state === 'blocked' || result.state === 'failed')) {
+      const blockerText = (result.blocker || '').toLowerCase();
+      const humanActionPatterns = [
+        /env\s*var|environment\s*variable|not\s*set|missing.*token|missing.*key|missing.*secret/i,
+        /redirect.*uri|callback.*url|oauth.*config|consent.*screen/i,
+        /api\s*key.*required|token.*required|credentials.*missing/i,
+        /permission.*denied|access.*denied|unauthorized|forbidden/i,
+        /rate.?limit|quota.*exceeded/i,
+        /dns|domain|ssl|certificate/i,
+        /billing|payment|subscription/i,
+      ];
+      const isHumanTask = humanActionPatterns.some(p => p.test(blockerText));
+      if (isHumanTask) {
+        const priority = '🔴'; // blocking by definition — the job failed
+        const humanMsg = `${priority} **${ticket} — ${repoName}**\n${result.blocker}`;
+        sendDiscordMessage(DISCORD_HUMAN_TASKS_CHANNEL, humanMsg);
+      }
     }
 
     appendLog(jobId, `[${nowIso()}] FINAL notify: ${sentMain.ok ? 'ok' : (sentMain.stderr || 'failed')}`);
