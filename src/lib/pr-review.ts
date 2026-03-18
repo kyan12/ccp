@@ -108,6 +108,7 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }: { prUrl:
     '--json', 'number,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefName,baseRefName,url,title'
   ]);
   const analysis = classifyPr(pr);
+  const alreadyMerged = String(pr.state).toUpperCase() === 'MERGED';
   const result: PRReviewResult = {
     ok: true,
     prUrl: pr.url as string,
@@ -118,15 +119,18 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }: { prUrl:
     baseRefName: pr.baseRefName as string,
     mergeable: analysis.mergeable,
     reviewDecision: analysis.reviewDecision,
-    disposition: analysis.disposition,
-    blockers: analysis.blockers,
-    blockerType: analysis.blockerType,
-    failedChecks: analysis.failedChecks,
-    pendingChecks: analysis.pendingChecks,
+    disposition: alreadyMerged ? 'approve' : analysis.disposition,
+    blockers: alreadyMerged ? [] : analysis.blockers,
+    blockerType: alreadyMerged ? 'none' : analysis.blockerType,
+    failedChecks: alreadyMerged ? [] : analysis.failedChecks,
+    pendingChecks: alreadyMerged ? [] : analysis.pendingChecks,
     checks: analysis.checks.checks,
-    merged: false,
-    autoMergeEnabled: false,
+    merged: alreadyMerged,
+    autoMergeEnabled: alreadyMerged,
   };
+
+  // If already merged, skip review/merge logic
+  if (alreadyMerged) return result;
 
   if (analysis.disposition === 'approve' && autoMerge) {
     const gh = commandExists('gh') || 'gh';
