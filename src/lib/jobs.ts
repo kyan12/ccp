@@ -543,6 +543,10 @@ function parseSummary(logText: string): Record<string, string> {
 }
 
 function inspectRepoProof(repo: string | null, claimedCommit: string): RepoProof {
+  // Normalize: workers sometimes report "abc1234 (already merged to main)" — extract just the hash
+  const commitMatch = claimedCommit.match(/^([0-9a-f]{7,40})/i);
+  claimedCommit = commitMatch ? commitMatch[1] : claimedCommit;
+
   if (!repo || !fs.existsSync(repo)) {
     return { repoExists: false, git: false, dirty: false, commitExists: false, branch: null, pushed: null, upstream: null, ahead: null, behind: null };
   }
