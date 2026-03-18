@@ -154,12 +154,35 @@ function parseStructuredDescription(description: string | null | undefined): {
   };
 }
 
+/**
+ * Extract an explicit repo reference from ticket description.
+ * Supports: **Repo:** owner/repo, **Repo:** repo-key, or a `repo:` prefix line.
+ */
+function extractExplicitRepo(description: string | null | undefined): string | null {
+  if (!description) return null;
+  // Match **Repo:** value or repo: value at start of line
+  const match = description.match(/^\*?\*?Repo:?\*?\*?\s*(.+)$/im);
+  if (match) return match[1].trim();
+  return null;
+}
+
 function issueToPacket(issue: LinearDispatchIssue): JobPacket {
-  const mapping: RepoMapping | null = findRepoMapping({
-    title: issue.title,
-    description: issue.description,
-    repo: issue.description,
-  });
+  // First try explicit repo tag in description
+  const explicitRepo = extractExplicitRepo(issue.description);
+  let mapping: RepoMapping | null = null;
+
+  if (explicitRepo) {
+    mapping = findRepoMapping({ repo: explicitRepo, repoKey: explicitRepo });
+  }
+
+  // Fall back to fuzzy match on title/description
+  if (!mapping) {
+    mapping = findRepoMapping({
+      title: issue.title,
+      description: issue.description,
+      repo: issue.description,
+    });
+  }
   const enriched = enrichPayloadWithRepo({
     title: issue.title,
     description: issue.description,
