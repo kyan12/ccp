@@ -258,7 +258,19 @@ async function dispatchLinearIssues(): Promise<DispatchResult[]> {
   const out: DispatchResult[] = [];
 
   for (const issue of issues) {
-    if (state.dispatchedIssueIds[issue.id]) continue;
+    const prev = state.dispatchedIssueIds[issue.id];
+    if (prev) {
+      // Ticket is back in Todo/Backlog after being dispatched — check if job needs re-run
+      const { listJobs } = require('./jobs');
+      const allJobs: Array<{ job_id: string; state: string }> = listJobs();
+      const oldJob = allJobs.find((j: { job_id: string }) => j.job_id === prev.job_id);
+      const terminalStates = new Set(['done', 'verified', 'deployed', 'cancelled']);
+      const needsRedispatch = !oldJob || terminalStates.has(oldJob.state) || oldJob.state === 'blocked' || oldJob.state === 'failed';
+      if (!needsRedispatch) continue; // still actively running, skip
+      // Clear from dedup cache so it gets re-dispatched
+      delete state.dispatchedIssueIds[issue.id];
+      console.log(`[linear-dispatch] ${prev.identifier} back in Todo/Backlog — clearing dedup cache for re-dispatch`);
+    }
     const packet = issueToPacket(issue);
     if (!packet.repo || !packet.repoResolved) {
       out.push({ identifier: issue.identifier, skipped: true, reason: `repo unavailable: ${packet.repo || 'unmapped'}` });
