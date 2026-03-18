@@ -1,0 +1,38 @@
+{
+  "apiKeyEnv": "LINEAR_API_KEY",
+  "teamId": "60125b93-1025-4667-a59c-2dd74a411344",
+  "teamKey": "PRO",
+  "defaultStates": {
+    "inbox": "Backlog",
+    "ready": "Todo",
+    "running": "In Progress",
+    "blocked": "Blocked",
+    "review": "In Review",
+    "verified": "Done",
+    "closed": "Done",
+    "done": "Done"
+  },
+  "projects": {
+    "controlPlane": {
+      "id": "89d1fd64-04d1-4a1e-bf2e-801759bda3e5",
+      "name": "Control Plane"
+    },
+    "reliability": {
+      "id": "a3e1b580-9c98-4dfd-9221-400c94c559e2",
+      "name": "Reliability / Incidents"
+    },
+    "product": {
+      "id": "175b5826-7faa-4ed3-9434-f9d81e1ce23f",
+      "name": "Product / Delivery"
+    }
+  },
+  "defaultLabels": [
+    "bug",
+    "feature",
+    "deploy",
+    "runtime",
+    "regression",
+    "autocreated",
+    "urgent"
+  ]
+}
