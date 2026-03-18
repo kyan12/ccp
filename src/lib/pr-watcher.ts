@@ -140,11 +140,17 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
       if (packet.ticket_id) {
         try {
           const { syncJobToLinear } = require('./linear');
-          const updated = { ...status, state: 'done' };
-          syncJobToLinear({ packet, status: updated, result }).then((r: { ok: boolean }) => {
+          const updatedStatus = { ...status, state: 'done' };
+          const updatedResult = { ...result, state: 'done' };
+          syncJobToLinear({ packet, status: updatedStatus, result: updatedResult }).then((r: { ok: boolean }) => {
             if (r.ok) appendLog(jobId, `[${nowIso()}] pr-watcher: Linear ${packet.ticket_id} → Done`);
-          }).catch(() => {});
-        } catch (_) {}
+            else appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync returned ok=false`);
+          }).catch((err: Error) => {
+            appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync error: ${err.message}`);
+          });
+        } catch (err) {
+          appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync require error: ${(err as Error).message}`);
+        }
       }
     }
 
