@@ -626,26 +626,69 @@ function cleanRepoIfDirty(repoPath: string, proof: RepoProof): string | null {
   return log.join('; ');
 }
 
+/**
+ * Extract a concise reason the worker failed/blocked from its log output.
+ * Looks for error patterns, the worker's own summary, or the last meaningful lines.
+ */
+function extractWorkerFailureContext(logText: string, maxLen: number = 200): string {
+  // 1. Worker's own blocker/summary line
+  const blockerMatch = logText.match(/^Blocker:\s*(.+)$/im);
+  if (blockerMatch && blockerMatch[1].trim() !== 'none') {
+    return blockerMatch[1].trim().slice(0, maxLen);
+  }
+  const summaryMatch = logText.match(/^Summary:\s*(.+)$/im);
+  if (summaryMatch) {
+    return summaryMatch[1].trim().slice(0, maxLen);
+  }
+
+  // 2. Common error patterns
+  const errorPatterns = [
+    /error(?:\[.+?\])?:\s*(.+)/im,
+    /(?:ERR!|Error|FATAL|panic|Traceback)[\s:]+(.+)/im,
+    /Cannot find module\s+'([^']+)'/i,
+    /(?:ENOENT|EACCES|EPERM):\s*(.+)/i,
+    /API Error[:\s]+(.+)/im,
+    /rate.?limit|overloaded|529|503/im,
+  ];
+  for (const pat of errorPatterns) {
+    const m = logText.match(pat);
+    if (m) return (m[1] || m[0]).trim().slice(0, maxLen);
+  }
+
+  // 3. Last non-empty lines before WORKER_EXIT_CODE (often the most useful)
+  const exitIdx = logText.lastIndexOf('WORKER_EXIT_CODE');
+  const textBeforeExit = exitIdx > 0 ? logText.slice(Math.max(0, exitIdx - 1000), exitIdx) : logText.slice(-1000);
+  const lines = textBeforeExit.split('\n').map(l => l.trim()).filter(l => l.length > 5);
+  if (lines.length > 0) {
+    return lines.slice(-3).join(' | ').slice(0, maxLen);
+  }
+
+  return 'no diagnostic output captured';
+}
+
 function inferBlockedReason(logText: string, result: { state: string; commit: string; prod: string; verified: string; pr_url: string | null }, proof: RepoProof): string | null {
   const permissionMatch = logText.match(/I need file write permission to proceed\.[\s\S]*?(?=WORKER_EXIT_CODE:|$)/i);
   if (permissionMatch) {
     return permissionMatch[0].trim();
   }
   const hasReviewDelivery = !!result.pr_url;
+  const workerContext = extractWorkerFailureContext(logText);
+  const proofDetail = `(commit=${proof.commitExists ? 'yes' : 'no'}, dirty=${proof.dirty ? 'yes' : 'no'}, pushed=${proof.pushed ?? 'unknown'})`;
+
   if ((result.state === 'coded' || result.state === 'done' || result.state === 'verified') && !proof.commitExists && !proof.dirty) {
-    return 'worker reported progress without a commit or working tree changes';
+    return `no commit or file changes found ${proofDetail}. Worker said: ${workerContext}`;
   }
   if ((result.state === 'coded' || result.state === 'done' || result.state === 'verified') && proof.dirty && !proof.commitExists) {
-    return 'worker left uncommitted local changes without creating a verifiable commit';
+    return `uncommitted local changes but no commit created ${proofDetail}. Worker said: ${workerContext}`;
   }
   if ((result.state === 'coded' || result.state === 'done' || result.state === 'verified') && proof.commitExists && proof.pushed === false && !hasReviewDelivery) {
-    return 'worker created a local-only commit but did not push it';
+    return `local commit exists but was not pushed ${proofDetail}. Worker said: ${workerContext}`;
   }
   if ((result.state === 'done' || result.state === 'verified') && !proof.commitExists) {
-    return 'worker reported completion without a verifiable commit';
+    return `claimed done but no verifiable commit ${proofDetail}. Worker said: ${workerContext}`;
   }
   if (result.prod === 'yes' && !proof.commitExists) {
-    return 'worker reported prod=yes without a verifiable commit';
+    return `claimed prod=yes but no verifiable commit ${proofDetail}. Worker said: ${workerContext}`;
   }
   return null;
 }
@@ -741,8 +784,10 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
 
     let runsMsg: string;
     if (exitCode !== 0 || result.state === 'blocked' || result.state === 'failed') {
-      const blocker = result.blocker ? (result.blocker.length > 100 ? result.blocker.slice(0, 97) + '...' : result.blocker) : 'unknown';
-      runsMsg = `🔴 ${result.state === 'blocked' ? 'BLOCKED' : 'FAIL'} — ${ticket} | ${repoName} | ${blocker}`;
+      const blocker = result.blocker ? (result.blocker.length > 200 ? result.blocker.slice(0, 197) + '...' : result.blocker) : 'unknown';
+      const emoji = result.state === 'blocked' ? '🔴 BLOCKED' : '❌ FAIL';
+      const exitInfo = exitCode !== 0 ? ` (exit ${exitCode})` : '';
+      runsMsg = `${emoji} — ${ticket} | ${repoName}${exitInfo}\n${blocker}`;
     } else {
       const parts: string[] = [`✅ DONE — ${ticket} | ${repoName}`];
       if (commitShort) parts.push(commitShort);
