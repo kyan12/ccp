@@ -38,6 +38,29 @@ async function handleLinearWebhook(payload: Record<string, unknown>, res: http.S
     return;
   }
 
+  // Ignore updates triggered by our own API key to prevent feedback loops.
+  // Linear includes updatedFrom with changed fields — if the only changes are
+  // state or comment-related, it's likely our own sync. Also check actor.
+  if (action === 'update') {
+    const updatedFrom = payload.updatedFrom as Record<string, unknown> | undefined;
+    const changedFields = updatedFrom ? Object.keys(updatedFrom) : [];
+    // If the only changes are state, stateId, or updatedAt — skip (our own sync)
+    const ownUpdateFields = new Set(['stateId', 'state', 'updatedAt', 'sortOrder', 'startedAt', 'completedAt', 'canceledAt', 'triagedAt']);
+    const isOwnUpdate = changedFields.length > 0 && changedFields.every((f) => ownUpdateFields.has(f));
+    if (isOwnUpdate) {
+      process.stdout.write(`[linear-webhook] skipping own state update for ${identifier} (fields: ${changedFields.join(', ')})\n`);
+      json(res, 200, { ok: true, ignored: true, reason: 'own state update' });
+      return;
+    }
+    // Also skip if no meaningful fields changed at all
+    if (changedFields.length === 0) {
+      process.stdout.write(`[linear-webhook] skipping update with no changed fields for ${identifier}\n`);
+      json(res, 200, { ok: true, ignored: true, reason: 'no changed fields' });
+      return;
+    }
+    process.stdout.write(`[linear-webhook] processing update for ${identifier} (changed: ${changedFields.join(', ')})\n`);
+  }
+
   json(res, 200, { ok: true, queued: true, action, type, identifier });
 
   if (_linearWebhookTimeout) clearTimeout(_linearWebhookTimeout);
