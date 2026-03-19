@@ -67,6 +67,11 @@ function collectWatchableJobs(): Array<{ status: JobStatus; result: JobResult; p
     try { result = readJson(rPath); } catch { continue; }
     if (!result.pr_url) continue;
 
+    // Skip jobs already finalized — PR merged AND job state is done/verified
+    // These don't need further watching; prevents redundant API calls
+    if ((status.state === 'done' || status.state === 'verified') &&
+        status.integrations?.prReview?.merged) continue;
+
     let packet: JobPacket;
     try { packet = readJson(packetPath(status.job_id)); } catch { continue; }
 
