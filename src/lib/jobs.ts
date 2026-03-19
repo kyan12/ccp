@@ -338,7 +338,7 @@ function buildPrompt(packet: JobPacket): string {
   bits.push('Risk: <low/medium/high>');
   bits.push('Summary: <1-3 sentence description of what you did>');
   bits.push('Do not claim pushed or deployed unless it actually happened. A local commit on main is not the same as pushed.');
-  bits.push('If you make code changes, you must finish one delivery path before considering the task complete: either (A) push to origin/main, or (B) push a branch for review. Do not stop at a local-only commit.');
+  bits.push('If you make code changes, you MUST create a feature branch (never push directly to main), push it to origin, and create a pull request via `gh pr create`. Do not stop at a local-only commit. Do not push directly to main.');
   return bits.join('\n\n');
 }
 
