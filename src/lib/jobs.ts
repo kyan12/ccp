@@ -631,7 +631,7 @@ function cleanRepoIfDirty(repoPath: string, proof: RepoProof): string | null {
  * Extract a concise reason the worker failed/blocked from its log output.
  * Looks for error patterns, the worker's own summary, or the last meaningful lines.
  */
-function extractWorkerFailureContext(logText: string, maxLen: number = 200): string {
+function extractWorkerFailureContext(logText: string, maxLen: number = 500): string {
   // 1. Worker's own blocker/summary line
   const blockerMatch = logText.match(/^Blocker:\s*(.+)$/im);
   if (blockerMatch && blockerMatch[1].trim() !== 'none') {
@@ -785,7 +785,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
 
     let runsMsg: string;
     if (exitCode !== 0 || result.state === 'blocked' || result.state === 'failed') {
-      const blocker = result.blocker ? (result.blocker.length > 200 ? result.blocker.slice(0, 197) + '...' : result.blocker) : 'unknown';
+      const maxBlocker = 1800;
+      const blocker = result.blocker ? (result.blocker.length > maxBlocker ? result.blocker.slice(0, maxBlocker - 3) + '...' : result.blocker) : 'unknown';
       const emoji = result.state === 'blocked' ? '🔴 BLOCKED' : '❌ FAIL';
       const exitInfo = exitCode !== 0 ? ` (exit ${exitCode})` : '';
       runsMsg = `${emoji} — ${ticket} | ${repoName}${exitInfo}\n${blocker}`;

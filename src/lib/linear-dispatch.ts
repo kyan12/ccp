@@ -183,11 +183,24 @@ function issueToPacket(issue: LinearDispatchIssue): JobPacket {
       repo: issue.description,
     });
   }
-  const enriched = enrichPayloadWithRepo({
-    title: issue.title,
-    description: issue.description,
-    repo: mapping?.ownerRepo || null,
-  });
+  // When we already resolved via explicit repo tag, bypass enrichPayloadWithRepo
+  // which re-runs fuzzy findRepoMapping on the full description — that can match
+  // short aliases (e.g. "sma" inside "ReadableStream") against the wrong repo.
+  const enriched = mapping
+    ? {
+        title: issue.title,
+        description: issue.description,
+        repo: mapping.localPath,
+        repoKey: mapping.key,
+        ownerRepo: mapping.ownerRepo,
+        gitUrl: mapping.gitUrl,
+        repoResolved: true,
+      }
+    : enrichPayloadWithRepo({
+        title: issue.title,
+        description: issue.description,
+        repo: null,
+      });
   const parsed = parseStructuredDescription(issue.description);
 
   let acceptance_criteria: string[];

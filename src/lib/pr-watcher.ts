@@ -1,6 +1,7 @@
 import fs = require('fs');
 import path = require('path');
-import type { JobStatus, JobResult, JobPacket, PRReviewResult, PrWatcherCycleResult } from '../types';
+import { spawnSync } from 'child_process';
+import type { JobStatus, JobResult, JobPacket, PRReviewResult, PrWatcherCycleResult, RunResult } from '../types';
 const { reviewPr } = require('./pr-review');
 const {
   JOBS_DIR,
@@ -11,6 +12,7 @@ const {
   packetPath,
   resultPath,
   appendLog,
+  sendDiscordMessage,
 } = require('./jobs');
 
 /**
@@ -79,6 +81,70 @@ function collectWatchableJobs(): Array<{ status: JobStatus; result: JobResult; p
   }
 
   return watchable;
+}
+
+/**
+ * Attempt to auto-rebase a branch against its base to resolve merge conflicts.
+ * Returns { ok, message } — ok=true if rebase succeeded and was force-pushed.
+ */
+function attemptAutoRebase(packet: JobPacket, review: PRReviewResult, jobId: string): { ok: boolean; message: string } {
+  const repoPath = packet.repo;
+  if (!repoPath || !fs.existsSync(repoPath)) {
+    return { ok: false, message: `repo path not found: ${repoPath}` };
+  }
+
+  const headBranch = review.headRefName;
+  const baseBranch = review.baseRefName || 'main';
+  if (!headBranch) {
+    return { ok: false, message: 'no headRefName on PR' };
+  }
+
+  const git = (args: string[]): RunResult =>
+    spawnSync('git', args, { cwd: repoPath, encoding: 'utf8', timeout: 60_000 }) as unknown as RunResult;
+
+  appendLog(jobId, `[${nowIso()}] auto-rebase: starting rebase of ${headBranch} onto ${baseBranch}`);
+
+  // Fetch latest
+  const fetchOut = git(['fetch', 'origin']);
+  if (fetchOut.status !== 0) {
+    return { ok: false, message: `fetch failed: ${(fetchOut.stderr || '').slice(0, 200)}` };
+  }
+
+  // Checkout the feature branch
+  const checkoutOut = git(['checkout', headBranch]);
+  if (checkoutOut.status !== 0) {
+    // Try tracking remote
+    const trackOut = git(['checkout', '-B', headBranch, `origin/${headBranch}`]);
+    if (trackOut.status !== 0) {
+      return { ok: false, message: `checkout failed: ${(trackOut.stderr || '').slice(0, 200)}` };
+    }
+  }
+
+  // Pull latest for the branch
+  git(['reset', '--hard', `origin/${headBranch}`]);
+
+  // Attempt rebase
+  const rebaseOut = git(['rebase', `origin/${baseBranch}`]);
+  if (rebaseOut.status !== 0) {
+    // Rebase failed — conflicts too complex for auto-resolve
+    git(['rebase', '--abort']);
+    // Return to main so we don't leave the repo on a broken branch
+    git(['checkout', baseBranch]);
+    return { ok: false, message: `rebase conflicts could not be auto-resolved: ${(rebaseOut.stderr || rebaseOut.stdout || '').slice(0, 300)}` };
+  }
+
+  // Force-push the rebased branch
+  const pushOut = git(['push', 'origin', headBranch, '--force-with-lease']);
+  if (pushOut.status !== 0) {
+    git(['checkout', baseBranch]);
+    return { ok: false, message: `force-push failed: ${(pushOut.stderr || '').slice(0, 200)}` };
+  }
+
+  // Return to base branch
+  git(['checkout', baseBranch]);
+
+  appendLog(jobId, `[${nowIso()}] auto-rebase: successfully rebased ${headBranch} onto ${baseBranch} and force-pushed`);
+  return { ok: true, message: `rebased ${headBranch} onto origin/${baseBranch} and force-pushed` };
 }
 
 /**
@@ -174,6 +240,28 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
     // PR is blocked — consider remediation
     if (review.disposition === 'block') {
       appendLog(jobId, `[${nowIso()}] pr-watcher: PR blocked (${review.blockerType}): ${(review.blockers || []).join('; ')}`);
+
+      // Auto-rebase for merge conflicts before falling back to worker remediation
+      if (review.blockerType === 'merge') {
+        const rebaseResult = attemptAutoRebase(packet, review, jobId);
+        entry.autoRebase = rebaseResult;
+        if (rebaseResult.ok) {
+          entry.action = 'auto-rebased';
+          appendLog(jobId, `[${nowIso()}] pr-watcher: auto-rebase succeeded — ${rebaseResult.message}`);
+          // Notify Discord thread if one exists
+          const currentStatus: JobStatus = loadStatus(jobId);
+          if (currentStatus.discord_thread_id) {
+            try {
+              sendDiscordMessage(currentStatus.discord_thread_id, `🔄 Auto-rebased branch to resolve merge conflicts: ${rebaseResult.message}`);
+            } catch { /* best-effort */ }
+          }
+          // Don't fall through to remediation — rebase handled it
+          actions.push(entry);
+          continue;
+        } else {
+          appendLog(jobId, `[${nowIso()}] pr-watcher: auto-rebase failed — ${rebaseResult.message}. Falling back to remediation.`);
+        }
+      }
 
       if (remediationEnabled() && !remediationExists(jobId)) {
         const { maybeEnqueueReviewRemediation } = require('./jobs');
