@@ -241,25 +241,40 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
     if (review.disposition === 'block') {
       appendLog(jobId, `[${nowIso()}] pr-watcher: PR blocked (${review.blockerType}): ${(review.blockers || []).join('; ')}`);
 
-      // Auto-rebase for merge conflicts before falling back to worker remediation
+      // Auto-rebase for merge conflicts before falling back to worker remediation.
+      // Only attempt once per conflict detection — track via status.integrations.autoRebase.
       if (review.blockerType === 'merge') {
-        const rebaseResult = attemptAutoRebase(packet, review, jobId);
-        entry.autoRebase = rebaseResult;
-        if (rebaseResult.ok) {
-          entry.action = 'auto-rebased';
-          appendLog(jobId, `[${nowIso()}] pr-watcher: auto-rebase succeeded — ${rebaseResult.message}`);
-          // Notify Discord thread if one exists
-          const currentStatus: JobStatus = loadStatus(jobId);
-          if (currentStatus.discord_thread_id) {
-            try {
-              sendDiscordMessage(currentStatus.discord_thread_id, `🔄 Auto-rebased branch to resolve merge conflicts: ${rebaseResult.message}`);
-            } catch { /* best-effort */ }
+        const currentForRebase: JobStatus = loadStatus(jobId);
+        const prevRebase = (currentForRebase.integrations as Record<string, unknown>)?.autoRebase as Record<string, unknown> | undefined;
+        const alreadyAttempted = prevRebase?.attempted === true;
+
+        if (!alreadyAttempted) {
+          const rebaseResult = attemptAutoRebase(packet, review, jobId);
+          entry.autoRebase = rebaseResult;
+
+          // Record the attempt so we don't retry every cycle
+          saveStatus(jobId, {
+            integrations: {
+              ...(currentForRebase.integrations || {}),
+              autoRebase: { attempted: true, ok: rebaseResult.ok, message: rebaseResult.message, at: nowIso() },
+            },
+          });
+
+          if (rebaseResult.ok) {
+            entry.action = 'auto-rebased';
+            appendLog(jobId, `[${nowIso()}] pr-watcher: auto-rebase succeeded — ${rebaseResult.message}`);
+            if (currentForRebase.discord_thread_id) {
+              try {
+                sendDiscordMessage(currentForRebase.discord_thread_id, `🔄 Auto-rebased branch to resolve merge conflicts: ${rebaseResult.message}`);
+              } catch { /* best-effort */ }
+            }
+            actions.push(entry);
+            continue;
+          } else {
+            appendLog(jobId, `[${nowIso()}] pr-watcher: auto-rebase failed — ${rebaseResult.message}. Falling back to remediation.`);
           }
-          // Don't fall through to remediation — rebase handled it
-          actions.push(entry);
-          continue;
         } else {
-          appendLog(jobId, `[${nowIso()}] pr-watcher: auto-rebase failed — ${rebaseResult.message}. Falling back to remediation.`);
+          entry.autoRebase = { skipped: true, reason: 'already attempted' };
         }
       }
 
