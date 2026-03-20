@@ -225,8 +225,10 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
       }
 
       // Fire webhook callback on merge (app-dispatched fixes)
-      const webhookUrl = (packet.metadata as Record<string, unknown>)?.webhookUrl as string | null;
-      const fixId = (packet.metadata as Record<string, unknown>)?.fixId as string | null;
+      const meta = (packet.metadata as Record<string, unknown>) || {};
+      const innerMeta = (meta.metadata as Record<string, unknown>) || {};
+      const webhookUrl = (meta.webhookUrl || innerMeta.webhookUrl || null) as string | null;
+      const fixId = (meta.fixId || innerMeta.fixId || null) as string | null;
       if (webhookUrl && fixId && review.merged) {
         const webhookPayload = JSON.stringify({
           fixId,

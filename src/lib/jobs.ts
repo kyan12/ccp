@@ -876,8 +876,11 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   }
 
   // Fire webhook callback if the job has a webhookUrl in metadata (app-dispatched fixes)
-  const webhookUrl = (packet.metadata as Record<string, unknown>)?.webhookUrl as string | null;
-  const fixId = (packet.metadata as Record<string, unknown>)?.fixId as string | null;
+  // metadata can be nested: packet.metadata.metadata.webhookUrl (normalizeManualIssue wraps payload)
+  const meta = (packet.metadata as Record<string, unknown>) || {};
+  const innerMeta = (meta.metadata as Record<string, unknown>) || {};
+  const webhookUrl = (meta.webhookUrl || innerMeta.webhookUrl || null) as string | null;
+  const fixId = (meta.fixId || innerMeta.fixId || null) as string | null;
   if (webhookUrl && fixId) {
     const statusMap: Record<string, string> = {
       coded: 'pr_open', done: 'merged', verified: 'verified',
