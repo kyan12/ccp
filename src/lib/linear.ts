@@ -115,8 +115,10 @@ function normalizeJobToLinearIssue(packet: JobPacket, orgKey?: string | null): R
   const labels: string[] = buildLinearLabels(packet);
 
   // If the packet has an AI-enriched description (with ## sections), use it directly
+  // Always append Repo: tag so dispatch can resolve the repo from the Linear issue
   const enrichedDesc = (packet.metadata as Record<string, unknown>)?.enriched_description as string | undefined;
-  const description = enrichedDesc || [
+  const repoTag = packet.ownerRepo ? `\n\n**Repo:** ${packet.ownerRepo}` : (packet.repo ? `\n\n**Repo:** ${packet.repo}` : '');
+  const description = enrichedDesc ? (enrichedDesc + repoTag) : [
     `Job ID: ${packet.job_id || 'pending'}`,
     `Repo: ${packet.repo || 'unknown'}`,
     routing.project?.name ? `Linear project: ${routing.project.name}` : null,
