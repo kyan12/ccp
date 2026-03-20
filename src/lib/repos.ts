@@ -26,6 +26,17 @@ function findRepoMapping(payload: IntakePayload = {}): RepoMapping | null {
     (payload.metadata as Record<string, unknown>)?.culprit as string,
   ].filter(Boolean).map(normalize) as string[];
 
+  // Pass 1: exact match on key, ownerRepo, or aliases (prevents "dida" matching "didahairstudio")
+  for (const mapping of cfg.mappings || []) {
+    const exactCandidates: string[] = [mapping.key, mapping.ownerRepo, ...(mapping.aliases || [])]
+      .filter(Boolean)
+      .map(normalize) as string[];
+    if (exactCandidates.some((candidate) => haystacks.some((hay) => hay === candidate))) {
+      return mapping;
+    }
+  }
+
+  // Pass 2: substring match (fuzzy fallback)
   for (const mapping of cfg.mappings || []) {
     const candidates: string[] = [mapping.key, mapping.ownerRepo, mapping.gitUrl, mapping.localPath, ...(mapping.aliases || [])]
       .filter(Boolean)
