@@ -259,8 +259,8 @@ async function ensureLabels(names: string[] = [], orgKey?: string | null): Promi
   return ids;
 }
 
-async function findIssueByIdentifier(identifier: string): Promise<LinearIssue | null> {
-  const cfg = linearConfig();
+async function findIssueByIdentifier(identifier: string, orgKey?: string | null): Promise<LinearIssue | null> {
+  const cfg = linearConfig(orgKey);
   if (!identifier || !cfg.teamId) return null;
   const data = await linearRequest(
     `query RecentTeamIssues($teamId: String!) {
@@ -278,6 +278,7 @@ async function findIssueByIdentifier(identifier: string): Promise<LinearIssue | 
       }
     }`,
     { teamId: cfg.teamId },
+    orgKey,
   ) as Record<string, unknown>;
   const issues = ((data?.team as Record<string, unknown>)?.issues as Record<string, unknown>)?.nodes as LinearIssue[] || [];
   return issues.find((issue) => issue.identifier === identifier) || null;
@@ -342,7 +343,7 @@ async function updateIssueState(issueId: string, stateName: string, orgKey?: str
   return ((data?.issueUpdate as Record<string, unknown>)?.issue as LinearIssue) || null;
 }
 
-async function createIssueComment(issueId: string, body: string): Promise<{ id: string; body: string } | null> {
+async function createIssueComment(issueId: string, body: string, orgKey?: string | null): Promise<{ id: string; body: string } | null> {
   const data = await linearRequest(
     `mutation CommentCreate($input: CommentCreateInput!) {
       commentCreate(input: $input) {
@@ -359,6 +360,7 @@ async function createIssueComment(issueId: string, body: string): Promise<{ id: 
         body,
       },
     },
+    orgKey,
   ) as Record<string, unknown>;
   return ((data?.commentCreate as Record<string, unknown>)?.comment as { id: string; body: string }) || null;
 }
@@ -385,8 +387,10 @@ async function postCompletionComment(
 }
 
 async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; status: JobStatus; result: JobResult }): Promise<LinearSyncResult> {
-  if (!hasLinearCredentials()) {
-    return { ok: false, skipped: true, reason: 'LINEAR_API_KEY missing' };
+  // Resolve which Linear org this job belongs to (e.g. 'smartadvocateai' for redwood)
+  const orgKey = resolveLinearOrg(packet);
+  if (!hasLinearCredentials(orgKey)) {
+    return { ok: false, skipped: true, reason: `LINEAR API key missing for org=${orgKey || 'default'}` };
   }
 
   const lifecycleMap: Record<string, string> = {
@@ -401,7 +405,7 @@ async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; 
   };
 
   const desiredStateName = resolveStateName(lifecycleMap[result?.state || status?.state || 'ready'] || 'ready');
-  const canonicalIssue = packet.ticket_id ? await findIssueByIdentifier(packet.ticket_id).catch(() => null) : null;
+  const canonicalIssue = packet.ticket_id ? await findIssueByIdentifier(packet.ticket_id, orgKey).catch(() => null) : null;
   let link = getJobLinearLink(packet.job_id);
   let issue: LinearIssue | null = null;
 
@@ -431,11 +435,11 @@ async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; 
   }
 
   try {
-    await updateIssueState(link!.issueId, desiredStateName);
-    await createIssueComment(link!.issueId, buildCommentBody(status || {}, result || {}));
+    await updateIssueState(link!.issueId, desiredStateName, orgKey);
+    await createIssueComment(link!.issueId, buildCommentBody(status || {}, result || {}), orgKey);
   } catch (error) {
     if (!/Entity not found: Issue/i.test((error as Error).message || '')) throw error;
-    issue = packet.ticket_id ? await findIssueByIdentifier(packet.ticket_id).catch(() => null) : null;
+    issue = packet.ticket_id ? await findIssueByIdentifier(packet.ticket_id, orgKey).catch(() => null) : null;
     if (!issue?.id) {
       if (packet.ticket_id) {
         return { ok: false, skipped: true, reason: `canonical Linear issue not found for ${packet.ticket_id}` };
@@ -449,8 +453,8 @@ async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; 
       url: issue.url,
       projectName: issue.project?.name || null,
     });
-    await updateIssueState(link.issueId, desiredStateName);
-    await createIssueComment(link.issueId, buildCommentBody(status || {}, result || {}));
+    await updateIssueState(link.issueId, desiredStateName, orgKey);
+    await createIssueComment(link.issueId, buildCommentBody(status || {}, result || {}), orgKey);
   }
 
   return {
