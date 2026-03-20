@@ -140,7 +140,7 @@ function normalizeJobToLinearIssue(packet: JobPacket, orgKey?: string | null): R
     projectId: routing.project?.id || null,
     projectName: routing.project?.name || null,
     routingKey: routing.key,
-    labels,
+    labels: [...labels, ...(packet.repoKey ? [`repo:${packet.repoKey}`] : [])],
   };
 }
 
