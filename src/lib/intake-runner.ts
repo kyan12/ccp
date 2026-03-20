@@ -110,6 +110,12 @@ function buildIncidentPacket(kind: string, payload: IntakePayload): JobPacket {
     constraints = ai.constraints;
   }
 
+  // Ensure **Repo:** tag is at the top of the description for CCP dispatch routing
+  const repoOwner = enriched.ownerRepo || enriched.repoKey || null;
+  if (repoOwner && !description.includes('**Repo:**')) {
+    description = `**Repo:** ${repoOwner}\n\n${description}`;
+  }
+
   return {
     job_id: `incident_${Date.now()}`,
     ticket_id: enriched.ticket_id || null,
