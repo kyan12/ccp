@@ -524,7 +524,7 @@ function notifyStart(jobId: string): void {
   const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   const repoName = packet.repo ? path.basename(packet.repo) : 'unknown';
   const ticket = packet.ticket_id || jobId;
-  const goal = packet.goal ? (packet.goal.length > 80 ? packet.goal.slice(0, 77) + '...' : packet.goal) : '';
+  const goal = packet.goal ? (packet.goal.length > 200 ? packet.goal.slice(0, 197) + '...' : packet.goal) : '';
   const msg = `🟡 START — ${ticket} | ${repoName} | ${goal}`;
   const sent = sendDiscordMessage(DISCORD_RUNS_CHANNEL, msg);
   appendLog(jobId, `[${nowIso()}] START notify: ${sent.ok ? 'ok' : (sent.stderr || 'failed')}`);
@@ -796,7 +796,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       if (result.risk) parts.push(`risk:${result.risk}`);
       if (result.pr_url) parts.push(`→ PR ${result.pr_url.split('/').pop()}`);
       if (result.verified && result.verified !== 'not yet') {
-        const v = result.verified.length > 60 ? result.verified.slice(0, 57) + '...' : result.verified;
+        const v = result.verified.length > 200 ? result.verified.slice(0, 197) + '...' : result.verified;
         parts.push(v);
       }
       runsMsg = parts.join(' | ');
