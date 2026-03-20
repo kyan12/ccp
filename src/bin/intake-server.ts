@@ -298,6 +298,79 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       return;
     }
 
+    // ── App intake (proteusx-seo control-plane client) ──
+    if (url.pathname === '/api/intake') {
+      // Verify HMAC signature if CONTROL_PLANE_SECRET is set
+      const secret = process.env.CONTROL_PLANE_SECRET;
+      if (secret) {
+        const sigHeader = (req.headers['x-signature-256'] || '') as string;
+        const rawBody = JSON.stringify(payload);
+        const expected = `sha256=${require('crypto').createHmac('sha256', secret).update(rawBody).digest('hex')}`;
+        if (!sigHeader || sigHeader !== expected) {
+          json(res, 403, { ok: false, error: 'bad signature' });
+          return;
+        }
+      }
+
+      // Map app fix request to Linear ticket
+      const fixId = (payload.fixId || '') as string;
+      const title = (payload.title || 'App-dispatched fix request') as string;
+      const description = (payload.description || '') as string;
+      const issueType = (payload.issueType || 'fix') as string;
+      const pageUrl = (payload.pageUrl || null) as string | null;
+      const severity = (payload.severity || 'medium') as string;
+      const cmsType = (payload.cmsType || null) as string | null;
+      const fixInstructions = payload.fixInstructions as Record<string, unknown> | null;
+      const context = payload.context as Record<string, unknown> || {};
+      const webhookUrl = (payload.webhookUrl || null) as string | null;
+
+      // Resolve repo from context or default to proteusx-seo
+      const repoTag = (context.repo || context.ownerRepo || 'ProteusX-Consulting/proteusx-seo') as string;
+      const { findRepoMapping } = require('../lib/repos');
+      const repoMapping = findRepoMapping({ repo: repoTag, repoKey: repoTag });
+
+      // Build structured description for CCP worker
+      const descParts: string[] = [
+        `**Repo:** ${repoMapping?.ownerRepo || repoTag}`,
+        '',
+        description,
+      ];
+      if (pageUrl) descParts.push('', `**Affected URL:** ${pageUrl}`);
+      if (severity !== 'medium') descParts.push(`**Severity:** ${severity}`);
+      if (cmsType) descParts.push(`**CMS:** ${cmsType}`);
+      if (fixInstructions) descParts.push('', '**Fix Instructions:**', '```json', JSON.stringify(fixInstructions, null, 2), '```');
+
+      const intakePayload = {
+        title,
+        summary: description,
+        description: descParts.join('\n'),
+        repo: repoMapping?.localPath || null,
+        repoKey: repoMapping?.key || null,
+        ownerRepo: repoMapping?.ownerRepo || repoTag,
+        kind: issueType,
+        label: severity === 'critical' ? 'bug' : 'feature',
+        source: 'app',
+        metadata: {
+          fixId,
+          pageUrl,
+          severity,
+          cmsType,
+          webhookUrl,
+          ...(context || {}),
+        },
+      };
+
+      const result = await intakeToLinear('manual', intakePayload, { autoDispatch, autoStart, maxConcurrent });
+
+      json(res, 200, {
+        requestId: fixId || result.identifier || 'unknown',
+        linearTicketId: result.identifier || null,
+        linearTicketUrl: result.url || null,
+        status: 'queued',
+      });
+      return;
+    }
+
     // GitHub webhook
     if (url.pathname === '/webhook/github') {
       const ghEvent = (req.headers['x-github-event'] || '') as string;
