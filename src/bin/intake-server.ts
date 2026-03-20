@@ -231,6 +231,11 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
     const url = new URL(req.url!, `http://${req.headers.host}`);
 
     // ── Dashboard ──
+    if (req.method === 'GET' && url.pathname === '/') {
+      res.writeHead(302, { Location: '/dashboard' });
+      res.end();
+      return;
+    }
     if (req.method === 'GET' && (url.pathname === '/dashboard' || url.pathname === '/dashboard/')) {
       serveDashboard(res);
       return;
