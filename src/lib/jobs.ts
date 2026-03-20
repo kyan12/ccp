@@ -875,6 +875,39 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     }
   }
 
+  // Fire webhook callback if the job has a webhookUrl in metadata (app-dispatched fixes)
+  const webhookUrl = (packet.metadata as Record<string, unknown>)?.webhookUrl as string | null;
+  const fixId = (packet.metadata as Record<string, unknown>)?.fixId as string | null;
+  if (webhookUrl && fixId) {
+    const statusMap: Record<string, string> = {
+      coded: 'pr_open', done: 'merged', verified: 'verified',
+      blocked: 'failed', failed: 'failed',
+    };
+    const webhookStatus = statusMap[finalState] || 'in_progress';
+    const webhookPayload = JSON.stringify({
+      fixId,
+      requestId: packet.ticket_id || jobId,
+      status: webhookStatus,
+      prUrl: result.pr_url || null,
+      linearTicketId: packet.ticket_id || null,
+      error: result.blocker || null,
+    });
+    const secret = process.env.CONTROL_PLANE_SECRET;
+    const sig = secret ? `sha256=${require('crypto').createHmac('sha256', secret).update(webhookPayload).digest('hex')}` : '';
+    try {
+      const https = require('https');
+      const http = require('http');
+      const parsed = new URL(webhookUrl);
+      const mod = parsed.protocol === 'https:' ? https : http;
+      const whReq = mod.request(parsed, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(sig ? { 'X-Signature-256': sig } : {}) } });
+      whReq.write(webhookPayload);
+      whReq.end();
+      appendLog(jobId, `[${nowIso()}] webhook callback sent to ${webhookUrl} (status=${webhookStatus})`);
+    } catch (whErr) {
+      appendLog(jobId, `[${nowIso()}] webhook callback failed: ${(whErr as Error).message}`);
+    }
+  }
+
   // Outage circuit breaker: detect API failures and trigger outage mode
   const wasApiFailure = (exitCode !== 0 || finalState === 'blocked') && isApiOutageLog(logText);
   const { enteredOutage } = recordJobOutcome(wasApiFailure);

@@ -223,6 +223,31 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
           appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync require error: ${(err as Error).message}`);
         }
       }
+
+      // Fire webhook callback on merge (app-dispatched fixes)
+      const webhookUrl = (packet.metadata as Record<string, unknown>)?.webhookUrl as string | null;
+      const fixId = (packet.metadata as Record<string, unknown>)?.fixId as string | null;
+      if (webhookUrl && fixId && review.merged) {
+        const webhookPayload = JSON.stringify({
+          fixId,
+          requestId: packet.ticket_id || jobId,
+          status: 'merged',
+          prUrl: result.pr_url || null,
+          linearTicketId: packet.ticket_id || null,
+        });
+        const secret = process.env.CONTROL_PLANE_SECRET;
+        const sig = secret ? `sha256=${require('crypto').createHmac('sha256', secret).update(webhookPayload).digest('hex')}` : '';
+        try {
+          const parsed = new URL(webhookUrl);
+          const mod = parsed.protocol === 'https:' ? require('https') : require('http');
+          const whReq = mod.request(parsed, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(sig ? { 'X-Signature-256': sig } : {}) } });
+          whReq.write(webhookPayload);
+          whReq.end();
+          appendLog(jobId, `[${nowIso()}] pr-watcher: webhook callback sent (status=merged)`);
+        } catch (whErr) {
+          appendLog(jobId, `[${nowIso()}] pr-watcher: webhook callback failed: ${(whErr as Error).message}`);
+        }
+      }
     }
 
     // PR is approved and green
