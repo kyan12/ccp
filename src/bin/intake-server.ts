@@ -324,10 +324,33 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       const context = payload.context as Record<string, unknown> || {};
       const webhookUrl = (payload.webhookUrl || null) as string | null;
 
-      // Resolve repo from context or default to proteusx-seo
-      const repoTag = (context.repo || context.ownerRepo || 'ProteusX-Consulting/proteusx-seo') as string;
+      // Resolve repo from context — auto-onboard if unknown
+      const repoTag = (context.repo || context.ownerRepo) as string | undefined;
+      if (!repoTag) {
+        return json(res, 400, { error: 'Missing context.repo — cannot determine target repository' });
+      }
       const { findRepoMapping } = require('../lib/repos');
-      const repoMapping = findRepoMapping({ repo: repoTag, repoKey: repoTag });
+      let repoMapping = findRepoMapping({ repo: repoTag, repoKey: repoTag });
+      if (!repoMapping) {
+        // Auto-onboard: clone, add to repos.json, set up webhook
+        console.log(`[intake] Auto-onboarding unknown repo: ${repoTag}`);
+        try {
+          const { onboardRepo } = require('../lib/onboard-repo');
+          const onboardResult = await onboardRepo(repoTag);
+          if (!onboardResult.ok) {
+            return json(res, 400, { error: `Failed to onboard repo ${repoTag}: ${onboardResult.error}` });
+          }
+          console.log(`[intake] Onboarded ${repoTag}: ${onboardResult.steps.map((s: { name: string; result: string }) => `${s.name}=${s.result}`).join(', ')}`);
+          // Re-resolve after onboarding
+          repoMapping = findRepoMapping({ repo: repoTag, repoKey: repoTag });
+          if (!repoMapping) {
+            return json(res, 500, { error: `Onboarded ${repoTag} but still cannot resolve mapping` });
+          }
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return json(res, 400, { error: `Failed to onboard repo ${repoTag}: ${msg}` });
+        }
+      }
 
       // Build structured description for CCP worker
       const descParts: string[] = [
@@ -369,6 +392,21 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         status: 'queued',
       });
       return;
+    }
+
+    // Onboard a new repo
+    if (url.pathname === '/api/onboard') {
+      try {
+        const ownerRepo = (payload.ownerRepo || payload.repo) as string | undefined;
+        if (!ownerRepo || !ownerRepo.includes('/')) {
+          return json(res, 400, { error: 'Missing or invalid ownerRepo (expected owner/name)' });
+        }
+        const { onboardRepo } = require('../lib/onboard-repo');
+        const result = await onboardRepo(ownerRepo);
+        return json(res, result.ok ? 200 : 400, result);
+      } catch (e: unknown) {
+        return json(res, 500, { error: e instanceof Error ? e.message : String(e) });
+      }
     }
 
     // GitHub webhook

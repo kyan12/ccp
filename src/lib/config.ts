@@ -15,9 +15,15 @@ function loadConfig<T = Record<string, unknown>>(name: string, fallback: T = {} 
   return (readJsonIfExists(primary) || readJsonIfExists(example) || fallback) as T;
 }
 
+function saveConfig(name: string, data: unknown): void {
+  const file = path.join(CONFIG_DIR, `${name}.json`);
+  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n', 'utf8');
+}
+
 module.exports = {
   CONFIG_DIR,
   loadConfig,
+  saveConfig,
 };
 
-export { CONFIG_DIR, loadConfig };
+export { CONFIG_DIR, loadConfig, saveConfig };
