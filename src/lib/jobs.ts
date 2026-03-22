@@ -97,6 +97,18 @@ function resultPath(jobId: string): string {
   return path.join(jobDir(jobId), 'result.json');
 }
 
+/** Resolve local repo path to "owner/repo" string via git remote */
+function resolveOwnerRepo(repoPath: string): string | null {
+  const git = commandExists('git');
+  if (!git) return null;
+  const out = run(git, ['-C', repoPath, 'remote', 'get-url', 'origin']);
+  if (out.status !== 0) return null;
+  const url = out.stdout.trim();
+  // git@github.com:owner/repo.git or https://github.com/owner/repo.git
+  const match = url.match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
+  return match ? match[1] : null;
+}
+
 function loadStatus(jobId: string): JobStatus {
   return readJson(statusPath(jobId)) as unknown as JobStatus;
 }
@@ -538,8 +550,22 @@ function parseSummary(logText: string): Record<string, string> {
     const matches = [...logText.matchAll(re)];
     if (matches.length) fields[key.toLowerCase()] = matches[matches.length - 1][1].trim();
   }
-  const prMatches = [...logText.matchAll(/PR created:\s*(https:\/\/github\.com\/\S+)/gmi)];
-  if (prMatches.length) fields.pr_url = prMatches[prMatches.length - 1][1].trim();
+  // Extract PR URL — try multiple patterns workers use:
+  // 1. "PR created: <url>"
+  // 2. "PR: <url>"  
+  // 3. Any github.com pull request URL in the log
+  const prPatterns = [
+    /PR created:\s*(https:\/\/github\.com\/\S+\/pull\/\d+)/gmi,
+    /^PR:\s*(https:\/\/github\.com\/\S+\/pull\/\d+)/gmi,
+    /(https:\/\/github\.com\/[^\s"']+\/pull\/\d+)/gm,
+  ];
+  for (const pattern of prPatterns) {
+    const matches = [...logText.matchAll(pattern)];
+    if (matches.length) {
+      fields.pr_url = matches[matches.length - 1][1].trim();
+      break;
+    }
+  }
   return fields;
 }
 
@@ -726,13 +752,29 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     appendLog(jobId, `[${nowIso()}] repo cleanup: ${cleanResult}`);
   }
 
+  // Fallback: if no PR URL found in logs but branch was pushed, check GitHub for an open PR
+  let prUrl: string | null = summary.pr_url || null;
+  if (!prUrl && proof.pushed && proof.branch && proof.branch !== 'main' && proof.branch !== 'master' && packet.repo) {
+    const gh = commandExists('gh');
+    if (gh) {
+      const ownerRepo = resolveOwnerRepo(packet.repo);
+      if (ownerRepo) {
+        const prCheck = run(gh, ['pr', 'view', proof.branch, '--repo', ownerRepo, '--json', 'url', '-q', '.url']);
+        if (prCheck.status === 0 && prCheck.stdout.trim().startsWith('https://')) {
+          prUrl = prCheck.stdout.trim();
+          appendLog(jobId, `[${nowIso()}] pr_url recovered from GitHub: ${prUrl}`);
+        }
+      }
+    }
+  }
+
   const result: JobResult = {
     job_id: jobId,
     state: finalState,
     commit: proof.commitExists ? (summary.commit || 'none') : 'none',
     branch: proof.branch || 'unknown',
     pushed: typeof proof.pushed === 'boolean' ? (proof.pushed ? 'yes' : 'no') : 'unknown',
-    pr_url: summary.pr_url || null,
+    pr_url: prUrl,
     prod: finalState === 'blocked' ? 'no' : (summary.prod || 'no'),
     verified: finalState === 'blocked' ? 'not yet' : (summary.verified || 'not yet'),
     blocker: inferredBlocker || (summary.blocker && summary.blocker !== 'none' ? summary.blocker : null),
