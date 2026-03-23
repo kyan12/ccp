@@ -350,7 +350,7 @@ function buildPrompt(packet: JobPacket): string {
   bits.push('Risk: <low/medium/high>');
   bits.push('Summary: <1-3 sentence description of what you did>');
   bits.push('Do not claim pushed or deployed unless it actually happened. A local commit on main is not the same as pushed.');
-  bits.push('If you make code changes, you MUST create a feature branch (never push directly to main), push it to origin, and create a pull request via `gh pr create`. Do not stop at a local-only commit. Do not push directly to main.');
+  bits.push('If you make code changes, you MUST create a feature branch FROM main (e.g. `git checkout -b feat/my-branch main`), push it to origin, and create a pull request via `gh pr create --base main`. Never push directly to main. Never branch from another feature branch. Do not stop at a local-only commit.');
   return bits.join('\n\n');
 }
 
@@ -1003,6 +1003,11 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
     `export GIT_COMMITTER_NAME=${shellQuote(gitUser.name)}`,
     `export GIT_COMMITTER_EMAIL=${shellQuote(gitUser.email)}`,
     `cd ${shellQuote(packet.repo!)}`,
+    // Ensure repo is on main with latest code before worker starts
+    // (prevents stale branch issues and accidental branching from feature branches)
+    packet.working_branch ? null : 'git checkout main 2>/dev/null || true',
+    packet.working_branch ? null : 'git fetch origin main --quiet',
+    packet.working_branch ? null : 'git reset --hard origin/main',
     packet.working_branch ? `git checkout ${shellQuote(packet.working_branch)}` : null,
     packet.working_branch ? `git pull --ff-only origin ${shellQuote(packet.working_branch)} || true` : null,
     `echo "[${nowIso()}] worker start" >> ${shellQuote(logFile)}`,
