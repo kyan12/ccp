@@ -106,7 +106,17 @@ function isPeakHour(now?: Date): { peak: boolean; label: string | null; nextOffP
  * Should the supervisor dispatch new jobs right now?
  */
 function canDispatchJobs(priority?: string): { allowed: boolean; reason: string } {
-  // Check outage state first (takes priority over peak scheduling)
+  // Check rate limit first (takes priority over everything)
+  try {
+    const { isRateLimited } = require('./outage');
+    const rl = isRateLimited();
+    if (rl.paused) {
+      const resetStr = new Date(rl.resetAt).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+      return { allowed: false, reason: `rate limited — paused until ${resetStr} ET` };
+    }
+  } catch { /* ignore */ }
+
+  // Check outage state (takes priority over peak scheduling)
   try {
     const outageStatePath = path.join(ROOT, 'configs', 'outage.json');
     if (fs.existsSync(outageStatePath)) {

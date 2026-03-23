@@ -963,6 +963,18 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     appendLog(jobId, `[${nowIso()}] outage mode activated`);
   }
 
+  // Rate limit detection: if worker hit usage limits, pause until reset time
+  const { detectRateLimit: detectRL, recordRateLimit } = require('./outage');
+  const rateLimit = detectRL(logText);
+  if (rateLimit) {
+    recordRateLimit(rateLimit.resetAt, rateLimit.reason);
+    const resetDate = new Date(rateLimit.resetAt);
+    const resetStr = resetDate.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+    const alertMsg = `⏸️ RATE LIMITED — Claude usage limit hit. Pausing all dispatch until ${resetStr} ET. Last job: ${packet.ticket_id || jobId}`;
+    sendDiscordMessage(DISCORD_ERRORS_CHANNEL, alertMsg);
+    appendLog(jobId, `[${nowIso()}] rate limit detected — pausing until ${rateLimit.resetAt}`);
+  }
+
   return { ok: true, state: finalState, exitCode, result, linear };
 }
 
