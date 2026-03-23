@@ -71,6 +71,7 @@ async function listDispatchCandidates(): Promise<LinearDispatchIssue[]> {
                 state { name }
                 project { id name }
                 labels { nodes { id name } }
+                relations { nodes { type relatedIssue { identifier state { name } } } }
               }
             }
           }
@@ -88,6 +89,30 @@ async function listDispatchCandidates(): Promise<LinearDispatchIssue[]> {
     }
   }
   return allIssues;
+}
+
+/**
+ * Check if an issue has unresolved blockers (Linear "is blocked by" relations).
+ * Returns null if no blockers, or a reason string if blocked.
+ */
+function checkBlockedByDependencies(issue: LinearDispatchIssue): string | null {
+  const relations = (issue as unknown as Record<string, unknown>).relations as { nodes: Array<{ type: string; relatedIssue: { identifier: string; state: { name: string } } }> } | undefined;
+  if (!relations?.nodes?.length) return null;
+
+  const doneStates = new Set(['Done', 'Canceled', 'Cancelled', 'Deployed', 'Verified']);
+  const blockers: string[] = [];
+
+  for (const rel of relations.nodes) {
+    // Linear relation type "blocks" means relatedIssue blocks this issue
+    if (rel.type === 'blocks' && rel.relatedIssue) {
+      if (!doneStates.has(rel.relatedIssue.state?.name)) {
+        blockers.push(`${rel.relatedIssue.identifier} (${rel.relatedIssue.state?.name})`);
+      }
+    }
+  }
+
+  if (blockers.length === 0) return null;
+  return `blocked by: ${blockers.join(', ')}`;
 }
 
 function chooseKind(issue: LinearDispatchIssue): string {
@@ -284,6 +309,13 @@ async function dispatchLinearIssues(): Promise<DispatchResult[]> {
       delete state.dispatchedIssueIds[issue.id];
       console.log(`[linear-dispatch] ${prev.identifier} back in Todo/Backlog — clearing dedup cache for re-dispatch`);
     }
+    // Check dependency blockers — skip if blocked by unfinished issues
+    const blockerReason = checkBlockedByDependencies(issue);
+    if (blockerReason) {
+      out.push({ identifier: issue.identifier, skipped: true, reason: blockerReason });
+      continue;
+    }
+
     const packet = issueToPacket(issue);
     if (!packet.repo || !packet.repoResolved) {
       out.push({ identifier: issue.identifier, skipped: true, reason: `repo unavailable: ${packet.repo || 'unmapped'}` });

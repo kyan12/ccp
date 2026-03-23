@@ -1166,11 +1166,18 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
   }
 
   const refreshed = listJobs();
-  const activeRunning = refreshed.filter((job) => job.state === 'running').length;
-  const capacity = Math.max(0, maxConcurrent - activeRunning);
+  const activeRunning = refreshed.filter((job) => job.state === 'running');
+  const capacity = Math.max(0, maxConcurrent - activeRunning.length);
   const queued = refreshed
     .filter((job) => job.state === 'queued')
     .sort((a, b) => (a.updated_at > b.updated_at ? 1 : -1));
+
+  // Build set of repos that already have a running job (for per-repo serial enforcement)
+  const busyRepos = new Set<string>();
+  for (const job of activeRunning) {
+    const packet = readJson(packetPath(job.job_id)) as unknown as JobPacket;
+    if (packet.repo) busyRepos.add(packet.repo);
+  }
 
   // Check peak-hour scheduling + outage state before dispatching new jobs
   const { canDispatchJobs } = require('./scheduling');
@@ -1195,17 +1202,26 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
       summary.skipped.push({ job_id: job.job_id, reason: scheduleCheck.reason });
     });
   } else {
-    queued.forEach((job, index) => {
-      if (index >= capacity) {
+    let started = 0;
+    for (const job of queued) {
+      if (started >= capacity) {
         summary.skipped.push({ job_id: job.job_id, reason: 'capacity' });
-        return;
+        continue;
+      }
+      // Per-repo serial: skip if another job is already running on this repo
+      const packet = readJson(packetPath(job.job_id)) as unknown as JobPacket;
+      if (packet.repo && busyRepos.has(packet.repo)) {
+        summary.skipped.push({ job_id: job.job_id, reason: `repo busy: ${path.basename(packet.repo)}` });
+        continue;
       }
       try {
         summary.started.push({ job_id: job.job_id, ...startJob(job.job_id) });
+        if (packet.repo) busyRepos.add(packet.repo);
+        started++;
       } catch (error) {
         summary.errors.push({ job_id: job.job_id, action: 'start', error: (error as Error).message });
       }
-    });
+    }
   }
 
   try {
