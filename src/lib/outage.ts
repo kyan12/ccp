@@ -15,11 +15,11 @@ const OUTAGE_STATE_PATH: string = path.join(ROOT, 'configs', 'outage.json');
 
 // Patterns in worker logs that indicate an Anthropic API error (not a code bug)
 const API_ERROR_PATTERNS: RegExp[] = [
-  /API Error: 5\d\d /i,
+  /API Error: 5\d\d\b/i,
   /api_error.*internal server error/i,
   /"type":"api_error"/i,
   /overloaded_error/i,
-  /529/,
+  /\b529\b/,
   /ECONNRESET|ETIMEDOUT|ECONNREFUSED/,
   /anthropic.*unavailable/i,
   /service.*unavailable/i,
