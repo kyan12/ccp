@@ -847,7 +847,22 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       runsMsg = parts.join(' | ');
     }
 
-    const target = exitCode === 0 && result.state !== 'blocked' && result.state !== 'failed' ? DISCORD_RUNS_CHANNEL : DISCORD_ERRORS_CHANNEL;
+    // Detect worker waiting for human input: exit code 0, no commits, question patterns in output
+    let humanInputRoute = false;
+    if (exitCode === 0 && !commitShort && DISCORD_HUMAN_TASKS_CHANNEL) {
+      const questionPatterns = [/waiting for/i, /need clarification/i, /\bwhich\b/i, /please specify/i, /please confirm/i];
+      if (questionPatterns.some(p => p.test(logText))) {
+        humanInputRoute = true;
+        const lines = logText.split('\n');
+        const matchedLines = lines.filter(l => questionPatterns.some(p => p.test(l)));
+        const questionExcerpt = matchedLines.slice(0, 5).join('\n').slice(0, 1000);
+        runsMsg = `🟡 NEEDS INPUT — ${ticket} | ${repoName}\n${questionExcerpt}`;
+      }
+    }
+
+    const target = humanInputRoute
+      ? DISCORD_HUMAN_TASKS_CHANNEL
+      : (exitCode === 0 && result.state !== 'blocked' && result.state !== 'failed' ? DISCORD_RUNS_CHANNEL : DISCORD_ERRORS_CHANNEL);
     const sentMain = sendDiscordMessage(target, runsMsg);
 
     if (result.pr_url && prReview.ok) {
