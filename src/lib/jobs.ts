@@ -10,6 +10,8 @@ const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./
 const { dispatchLinearIssues } = require('./linear-dispatch');
 const { reviewPr } = require('./pr-review');
 const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = require('./outage');
+const { prReviewPolicy } = require('./pr-policy');
+const { fireWebhookCallback } = require('./webhook-callback');
 // Lazy-require to avoid circular dependency (pr-watcher imports from jobs)
 let _runPrWatcherCycle: (() => Promise<PrWatcherCycleResult>) | undefined;
 function getRunPrWatcherCycle(): () => Promise<PrWatcherCycleResult> {
@@ -393,25 +395,7 @@ function sendToThread(threadId: string, message: string): DiscordMessageResult {
   return sendDiscordMessage(threadId, message);
 }
 
-function prReviewPolicy(repoPath?: string): { enabled: boolean; autoMerge: boolean; mergeMethod: string } {
-  const globalAutoMerge = String(process.env.CCP_PR_AUTOMERGE || 'false').toLowerCase() === 'true';
-  const globalMergeMethod = process.env.CCP_PR_MERGE_METHOD || 'squash';
-
-  let repoAutoMerge = globalAutoMerge;
-  let repoMergeMethod = globalMergeMethod;
-  try {
-    const { findRepoByPath } = require('./repos');
-    const repo = repoPath ? findRepoByPath(repoPath) : null;
-    if (repo?.autoMerge !== undefined) repoAutoMerge = !!repo.autoMerge;
-    if (repo?.mergeMethod) repoMergeMethod = repo.mergeMethod;
-  } catch { /* repos module not available */ }
-
-  return {
-    enabled: String(process.env.CCP_PR_REVIEW_ENABLED || 'true').toLowerCase() !== 'false',
-    autoMerge: repoAutoMerge,
-    mergeMethod: repoMergeMethod,
-  };
-}
+// prReviewPolicy is now imported from ./pr-policy
 
 function formatPrReview(review: PRReviewResult | null): string | null {
   if (!review) return null;
@@ -936,40 +920,16 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   }
 
   // Fire webhook callback if the job has a webhookUrl in metadata (app-dispatched fixes)
-  // metadata can be nested: packet.metadata.metadata.webhookUrl (normalizeManualIssue wraps payload)
-  const meta = (packet.metadata as Record<string, unknown>) || {};
-  const innerMeta = (meta.metadata as Record<string, unknown>) || {};
-  const webhookUrl = (meta.webhookUrl || innerMeta.webhookUrl || null) as string | null;
-  const fixId = (meta.fixId || innerMeta.fixId || null) as string | null;
-  if (webhookUrl && fixId) {
-    const statusMap: Record<string, string> = {
-      coded: 'pr_open', done: 'merged', verified: 'verified',
-      blocked: 'failed', failed: 'failed',
-    };
-    const webhookStatus = statusMap[finalState] || 'in_progress';
-    const webhookPayload = JSON.stringify({
-      fixId,
-      requestId: packet.ticket_id || jobId,
-      status: webhookStatus,
-      prUrl: result.pr_url || null,
-      linearTicketId: packet.ticket_id || null,
-      error: result.blocker || null,
-    });
-    const secret = process.env.CONTROL_PLANE_SECRET;
-    const sig = secret ? `sha256=${require('crypto').createHmac('sha256', secret).update(webhookPayload).digest('hex')}` : '';
-    try {
-      const https = require('https');
-      const http = require('http');
-      const parsed = new URL(webhookUrl);
-      const mod = parsed.protocol === 'https:' ? https : http;
-      const whReq = mod.request(parsed, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(sig ? { 'X-Signature-256': sig } : {}) } });
-      whReq.write(webhookPayload);
-      whReq.end();
-      appendLog(jobId, `[${nowIso()}] webhook callback sent to ${webhookUrl} (status=${webhookStatus})`);
-    } catch (whErr) {
-      appendLog(jobId, `[${nowIso()}] webhook callback failed: ${(whErr as Error).message}`);
-    }
-  }
+  const statusMap: Record<string, string> = {
+    coded: 'pr_open', done: 'merged', verified: 'verified',
+    blocked: 'failed', failed: 'failed',
+  };
+  const webhookStatus = statusMap[finalState] || 'in_progress';
+  const whLog = fireWebhookCallback({
+    packet, jobId, status: webhookStatus,
+    prUrl: result.pr_url || null, error: result.blocker || null,
+  });
+  if (whLog) appendLog(jobId, `[${nowIso()}] ${whLog}`);
 
   // Outage circuit breaker: detect API failures and trigger outage mode
   const wasApiFailure = (exitCode !== 0 || finalState === 'blocked') && isApiOutageLog(logText);
