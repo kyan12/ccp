@@ -339,6 +339,9 @@ function buildPrompt(packet: JobPacket): string {
     bits.push(`Verification steps (you MUST complete each step before reporting done):\n${packet.verification_steps.map((vs, i) => `${i + 1}. ${vs}`).join('\n')}`);
   }
   if (packet.review_feedback?.length) bits.push(`Review feedback to address:\n- ${packet.review_feedback.join('\n- ')}`);
+  bits.push('Never ask clarifying questions. You are running non-interactively — no one will answer.');
+  bits.push('If the ticket is ambiguous, investigate the codebase and make your best judgment.');
+  bits.push('If truly blocked (missing credentials, broken build, etc.), exit with a clear blocker description — do not ask questions.');
   bits.push('Make only the minimum necessary changes for this task.');
   bits.push('Before reporting State: coded/done/verified, you MUST describe what you did to verify your changes work. If you cannot verify, report State: blocked with Blocker: unable to verify.');
   bits.push('At the end, output a final compact summary with these exact labels on separate lines:');
@@ -1347,6 +1350,7 @@ module.exports = {
   statusPath,
   archiveOldJobs,
   healthCheck,
+  buildPrompt,
   sendDiscordMessage,
   createDiscordThread,
   sendToThread,
@@ -1355,6 +1359,7 @@ module.exports = {
 export {
   ROOT,
   JOBS_DIR,
+  buildPrompt,
   createJob,
   listJobs,
   jobsByState,

@@ -23,7 +23,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc && cp -r src/dashboard dist/"
+    "build": "tsc && cp -r src/dashboard dist/",
+    "test": "tsc && node dist/lib/jobs.test.js"
   },
   "bin": {
     "ccp-supervisor": "dist/bin/supervisor.js",
