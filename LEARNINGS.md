@@ -26,11 +26,34 @@ boundary) so the pattern matches API errors at end-of-line.
 - **Auto-onboarding** (426d945): Unknown repos referenced in intake get auto-cloned
   and registered. Reduces manual config overhead.
 
-### Code Health Observations
+### Code Health Observations (resolved 2026-03-28)
 
-- `prReviewPolicy()` is duplicated identically in `jobs.ts` and `pr-watcher.ts`.
-  Should be extracted to a shared module to prevent drift.
-- Webhook callback logic (HMAC signing + HTTP POST) is duplicated between
-  `finalizeJob()` in `jobs.ts` and `runPrWatcherCycle()` in `pr-watcher.ts`.
-- `scheduling.ts` reads `outage.json` directly from disk instead of using
-  `getOutageStatus()` from `outage.ts` — minor duplication risk.
+- ~~`prReviewPolicy()` duplicated in `jobs.ts` and `pr-watcher.ts`~~ → extracted to `pr-policy.ts`
+- ~~Webhook callback logic duplicated between `finalizeJob()` and `runPrWatcherCycle()`~~ → extracted to `webhook-callback.ts`
+- ~~`scheduling.ts` reads `outage.json` directly~~ → now uses `getOutageStatus()` from `outage.ts`
+
+## 2026-03-28 — Nightly Review
+
+### Refactor: Extract shared PR policy and webhook callback modules
+
+Three code health issues from the previous review were resolved:
+
+1. **`prReviewPolicy()` extracted to `pr-policy.ts`** — Was duplicated identically in `jobs.ts`
+   and `pr-watcher.ts`. Now both import from a single source of truth. Prevents policy drift.
+
+2. **Webhook callback extracted to `webhook-callback.ts`** — HMAC signing + HTTP POST logic was
+   duplicated between `finalizeJob()` in `jobs.ts` and `runPrWatcherCycle()` in `pr-watcher.ts`.
+   Shared module handles metadata extraction (including nested metadata), HMAC signing, and HTTP
+   dispatch. Both callers now use `fireWebhookCallback()`.
+
+3. **`scheduling.ts` now uses `getOutageStatus()`** — Was reading `configs/outage.json` directly
+   from disk, bypassing the `outage.ts` module. Now uses the canonical `getOutageStatus()` function,
+   ensuring consistent state parsing and reducing coupling to file format.
+
+### Patterns Worth Reinforcing
+
+- **Human-input routing** (03e6e0c): Jobs that need human input are routed to `#human-tasks`
+  instead of `#coding-errors`. Good separation of concerns — operator attention goes to the
+  right channel.
+- **Non-interactive constraints** (c2e25dd): Worker prompt explicitly states it's running
+  non-interactively, preventing the agent from asking clarifying questions that no one will answer.

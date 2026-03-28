@@ -14,6 +14,8 @@ const {
   appendLog,
   sendDiscordMessage,
 } = require('./jobs');
+const { prReviewPolicy } = require('./pr-policy');
+const { fireWebhookCallback } = require('./webhook-callback');
 
 /**
  * PR-lifecycle watcher: scans finalized PR-backed jobs and re-evaluates
@@ -28,26 +30,7 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function prReviewPolicy(repoPath?: string): { enabled: boolean; autoMerge: boolean; mergeMethod: string } {
-  const globalAutoMerge = String(process.env.CCP_PR_AUTOMERGE || 'false').toLowerCase() === 'true';
-  const globalMergeMethod = process.env.CCP_PR_MERGE_METHOD || 'squash';
-
-  // Check per-repo config
-  let repoAutoMerge = globalAutoMerge;
-  let repoMergeMethod = globalMergeMethod;
-  try {
-    const { findRepoByPath } = require('./repos');
-    const repo = repoPath ? findRepoByPath(repoPath) : null;
-    if (repo?.autoMerge !== undefined) repoAutoMerge = !!repo.autoMerge;
-    if (repo?.mergeMethod) repoMergeMethod = repo.mergeMethod;
-  } catch { /* repos module not available */ }
-
-  return {
-    enabled: String(process.env.CCP_PR_REVIEW_ENABLED || 'true').toLowerCase() !== 'false',
-    autoMerge: repoAutoMerge,
-    mergeMethod: repoMergeMethod,
-  };
-}
+// prReviewPolicy is now imported from ./pr-policy
 
 function remediationEnabled(): boolean {
   return String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
@@ -225,30 +208,11 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
       }
 
       // Fire webhook callback on merge (app-dispatched fixes)
-      const meta = (packet.metadata as Record<string, unknown>) || {};
-      const innerMeta = (meta.metadata as Record<string, unknown>) || {};
-      const webhookUrl = (meta.webhookUrl || innerMeta.webhookUrl || null) as string | null;
-      const fixId = (meta.fixId || innerMeta.fixId || null) as string | null;
-      if (webhookUrl && fixId && review.merged) {
-        const webhookPayload = JSON.stringify({
-          fixId,
-          requestId: packet.ticket_id || jobId,
-          status: 'merged',
-          prUrl: result.pr_url || null,
-          linearTicketId: packet.ticket_id || null,
+      if (review.merged) {
+        const whLog = fireWebhookCallback({
+          packet, jobId, status: 'merged', prUrl: result.pr_url || null,
         });
-        const secret = process.env.CONTROL_PLANE_SECRET;
-        const sig = secret ? `sha256=${require('crypto').createHmac('sha256', secret).update(webhookPayload).digest('hex')}` : '';
-        try {
-          const parsed = new URL(webhookUrl);
-          const mod = parsed.protocol === 'https:' ? require('https') : require('http');
-          const whReq = mod.request(parsed, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(sig ? { 'X-Signature-256': sig } : {}) } });
-          whReq.write(webhookPayload);
-          whReq.end();
-          appendLog(jobId, `[${nowIso()}] pr-watcher: webhook callback sent (status=merged)`);
-        } catch (whErr) {
-          appendLog(jobId, `[${nowIso()}] pr-watcher: webhook callback failed: ${(whErr as Error).message}`);
-        }
+        if (whLog) appendLog(jobId, `[${nowIso()}] pr-watcher: ${whLog}`);
       }
     }
 
