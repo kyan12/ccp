@@ -6,7 +6,12 @@ const CONFIG_DIR: string = path.join(ROOT, 'configs');
 
 function readJsonIfExists(file: string): unknown | null {
   if (!fs.existsSync(file)) return null;
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    console.error(`[ccp] failed to parse ${file}: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 function loadConfig<T = Record<string, unknown>>(name: string, fallback: T = {} as T): T {
