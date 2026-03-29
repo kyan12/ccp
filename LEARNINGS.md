@@ -57,3 +57,32 @@ Three code health issues from the previous review were resolved:
   right channel.
 - **Non-interactive constraints** (c2e25dd): Worker prompt explicitly states it's running
   non-interactively, preventing the agent from asking clarifying questions that no one will answer.
+
+## 2026-03-29 — Nightly Review
+
+### Bug Fixed: Unhandled JSON.parse in config.ts
+
+`readJsonIfExists` in `config.ts` called `JSON.parse` without error handling. A corrupted
+config file (partial write, manual edit mistake, disk issue) would throw an unhandled exception,
+crashing the entire supervisor or intake server. Since `loadConfig` chains
+`primary || example || fallback`, the correct behavior on parse failure is to return null and
+fall through to the next source — which is what the fix does.
+
+### Code Health Observations
+
+- **Webhook callback fire-and-forget** (`webhook-callback.ts`): `fireWebhookCallback` uses
+  `http.request` without awaiting the response or handling `error` events on the request object.
+  The try-catch only catches synchronous errors (e.g. invalid URL), not network failures.
+  The `whReq.on('error', ...)` handler is missing.
+- **Advisory lock in `saveStatus`** (`jobs.ts:118-152`): Lock file uses a sleep-polling loop
+  with `spawnSync('sleep', ['0.05'])` and proceeds anyway on timeout. This is advisory at best.
+  Consider atomic rename pattern for safer concurrent writes.
+- **Silent catch blocks** (`jobs.ts:126,133,150`): Three `catch (_) {}` blocks swallow errors
+  during lock file operations. Should log to stderr for debuggability.
+
+### Patterns Worth Reinforcing
+
+- **Refactor follow-through** (87d3172): Previous nightly identified three duplication issues;
+  the next review resolved all three. Good cadence of identify → fix → verify.
+- **Test coverage expanding** (jobs.test.ts): Tests now cover non-interactive constraints,
+  ambiguous ticket handling, and blocker scenarios. Coverage is growing with each feature.
