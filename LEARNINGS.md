@@ -86,3 +86,36 @@ fall through to the next source — which is what the fix does.
   the next review resolved all three. Good cadence of identify → fix → verify.
 - **Test coverage expanding** (jobs.test.ts): Tests now cover non-interactive constraints,
   ambiguous ticket handling, and blocker scenarios. Coverage is growing with each feature.
+
+## 2026-03-30 — Nightly Review
+
+### Bug Fixed: Webhook callback missing error handler + silent catch blocks
+
+Two code health issues from the 2026-03-29 review were resolved:
+
+1. **`fireWebhookCallback` missing `whReq.on('error', ...)`** — Node.js `http.request` emits
+   an `error` event on network failures (DNS resolution, connection refused, timeout). Without
+   a handler, this becomes an unhandled `error` event that crashes the process. Added an error
+   handler that logs to stderr. The function remains fire-and-forget by design, but network
+   errors are now visible in logs instead of crashing the supervisor.
+
+2. **Silent `catch (_) {}` blocks in `saveStatus`** — Three catch blocks in the advisory lock
+   logic swallowed all errors silently, making lock contention or filesystem issues invisible.
+   Added `console.error` logging to all three: stale lock removal, lock acquisition contention,
+   and lock release. Errors are now debuggable in production logs.
+
+### Code Health Observations
+
+- **Advisory lock pattern** (`jobs.ts:118-152`): The sleep-polling advisory lock still proceeds
+  on timeout. An atomic rename pattern (write to temp, rename over target) would be safer for
+  concurrent writes. Lower priority since CCP typically runs single-instance.
+- **No tests for webhook callback** (`webhook-callback.ts`): The module has no test file.
+  Adding tests for error handling, HMAC signing, and nested metadata extraction would prevent
+  regressions.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Three consecutive reviews (3/26, 3/28, 3/29, 3/30) each identified
+  issues and the following review resolved them. The identify → fix → verify loop is working well.
+- **Graceful degradation** (52691ec): Corrupted JSON config files now return null and fall through
+  to the next config source, rather than crashing. Good resilience pattern.
