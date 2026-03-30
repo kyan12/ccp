@@ -123,15 +123,16 @@ function saveStatus(jobId: string, patch: Partial<JobStatus>): JobStatus {
   while (fs.existsSync(lockFile)) {
     if (Date.now() - start > maxWait) {
       console.warn(`[ccp] lock timeout for ${jobId}, removing stale lock`);
-      try { fs.unlinkSync(lockFile); } catch (_) {}
+      try { fs.unlinkSync(lockFile); } catch (e) { console.error(`[ccp] failed to remove stale lock for ${jobId}: ${(e as Error).message}`); }
       break;
     }
     spawnSync('sleep', ['0.05']);
   }
   try {
     fs.writeFileSync(lockFile, String(process.pid), { flag: 'wx' });
-  } catch (_) {
+  } catch (e) {
     // Another process grabbed it; proceed anyway (advisory lock)
+    console.error(`[ccp] lock acquisition contention for ${jobId}: ${(e as Error).message}`);
   }
   try {
     const current = loadStatus(jobId);
@@ -147,7 +148,7 @@ function saveStatus(jobId: string, patch: Partial<JobStatus>): JobStatus {
     writeJson(file, next);
     return next;
   } finally {
-    try { fs.unlinkSync(lockFile); } catch (_) {}
+    try { fs.unlinkSync(lockFile); } catch (e) { console.error(`[ccp] failed to release lock for ${jobId}: ${(e as Error).message}`); }
   }
 }
 

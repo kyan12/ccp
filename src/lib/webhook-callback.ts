@@ -55,6 +55,9 @@ function fireWebhookCallback(opts: WebhookCallbackOpts): string | null {
     const parsed = new URL(webhookUrl);
     const mod = parsed.protocol === 'https:' ? https : http;
     const whReq = mod.request(parsed, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(sig ? { 'X-Signature-256': sig } : {}) } });
+    whReq.on('error', (err: Error) => {
+      console.error(`[ccp] webhook callback network error for ${webhookUrl}: ${err.message}`);
+    });
     whReq.write(webhookPayload);
     whReq.end();
     return `webhook callback sent to ${webhookUrl} (status=${opts.status})`;
