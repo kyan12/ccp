@@ -13,6 +13,7 @@ const {
   resultPath,
   appendLog,
   sendDiscordMessage,
+  maybeSyncLinear,
 } = require('./jobs');
 const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
@@ -190,20 +191,15 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
         appendLog(jobId, `[${nowIso()}] pr-watcher: job state → done (PR merged)`);
       }
 
-      // Sync Linear ticket to Done
+      // Sync Linear ticket to Done via maybeSyncLinear (reads fresh state,
+      // updates integrations.linear status, and logs outcome)
       if (packet.ticket_id) {
         try {
-          const { syncJobToLinear } = require('./linear');
-          const updatedStatus = { ...status, state: 'done' };
-          const updatedResult = { ...result, state: 'done' };
-          syncJobToLinear({ packet, status: updatedStatus, result: updatedResult }).then((r: { ok: boolean }) => {
-            if (r.ok) appendLog(jobId, `[${nowIso()}] pr-watcher: Linear ${packet.ticket_id} → Done`);
-            else appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync returned ok=false`);
-          }).catch((err: Error) => {
-            appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync error: ${err.message}`);
-          });
+          const linearResult = await maybeSyncLinear(jobId);
+          if (linearResult.ok) appendLog(jobId, `[${nowIso()}] pr-watcher: Linear ${packet.ticket_id} → Done`);
+          else appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync returned ok=false`);
         } catch (err) {
-          appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync require error: ${(err as Error).message}`);
+          appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync error: ${(err as Error).message}`);
         }
       }
 

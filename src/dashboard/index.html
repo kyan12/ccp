@@ -270,12 +270,25 @@ tbody tr.clickable { cursor: pointer; }
 .toast.error { border-color: var(--red); }
 @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
+/* View toggle */
+.view-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 3px 4px; margin-left: auto;
+}
+.view-toggle button {
+  background: none; border: none; color: var(--text-muted); padding: 5px 10px;
+  font-size: 12px; font-weight: 500; border-radius: 4px; transition: all 0.15s; cursor: pointer;
+}
+.view-toggle button:hover { color: var(--text-secondary); }
+.view-toggle button.active { background: var(--bg-raised); color: var(--text); }
+
 /* Kanban board */
 .kanban-container { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 8px; min-height: 400px; }
 .kanban-column {
   flex: 1; min-width: 220px; max-width: 300px;
   background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
-  display: flex; flex-direction: column; max-height: calc(100vh - 180px);
+  display: flex; flex-direction: column; max-height: calc(100vh - 280px);
 }
 .kanban-column-header {
   padding: 12px 14px; border-bottom: 1px solid var(--border);
@@ -300,7 +313,7 @@ tbody tr.clickable { cursor: pointer; }
 .kanban-card-meta a { font-size: 11px; }
 .kanban-col-queued .kanban-column-title { color: var(--text-secondary); }
 .kanban-col-running .kanban-column-title { color: var(--blue); }
-.kanban-col-coded .kanban-column-title { color: var(--green); }
+.kanban-col-review .kanban-column-title { color: var(--green); }
 .kanban-col-done .kanban-column-title { color: var(--green); }
 .kanban-col-blocked .kanban-column-title { color: var(--red); }
 
@@ -319,11 +332,7 @@ tbody tr.clickable { cursor: pointer; }
 <aside class="sidebar">
   <div class="sidebar-logo"><span>&#9670;</span> Control Plane</div>
   <nav>
-    <div class="nav-item active" data-page="board">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="4" height="12" rx="1"/><rect x="6" y="2" width="4" height="8" rx="1"/><rect x="11" y="2" width="4" height="10" rx="1"/></svg>
-      Board
-    </div>
-    <div class="nav-item" data-page="jobs">
+    <div class="nav-item active" data-page="jobs">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 6h6M5 8.5h4M5 11h2"/></svg>
       Jobs
     </div>
@@ -356,40 +365,8 @@ tbody tr.clickable { cursor: pointer; }
     </div>
   </div>
 
-  <!-- BOARD PAGE (Kanban) -->
-  <div id="page-board" class="page active">
-    <div class="page-header">
-      <h1>Board</h1>
-      <p>Ticket workflow at a glance</p>
-    </div>
-    <div class="page-content">
-      <div class="kanban-container" id="kanbanBoard">
-        <div class="kanban-column kanban-col-queued">
-          <div class="kanban-column-header"><span class="kanban-column-title">Queued</span><span class="kanban-column-count" id="kanban-count-queued">0</span></div>
-          <div class="kanban-column-body" id="kanban-queued"></div>
-        </div>
-        <div class="kanban-column kanban-col-running">
-          <div class="kanban-column-header"><span class="kanban-column-title">Running</span><span class="kanban-column-count" id="kanban-count-running">0</span></div>
-          <div class="kanban-column-body" id="kanban-running"></div>
-        </div>
-        <div class="kanban-column kanban-col-coded">
-          <div class="kanban-column-header"><span class="kanban-column-title">Coded</span><span class="kanban-column-count" id="kanban-count-coded">0</span></div>
-          <div class="kanban-column-body" id="kanban-coded"></div>
-        </div>
-        <div class="kanban-column kanban-col-done">
-          <div class="kanban-column-header"><span class="kanban-column-title">Done</span><span class="kanban-column-count" id="kanban-count-done">0</span></div>
-          <div class="kanban-column-body" id="kanban-done"></div>
-        </div>
-        <div class="kanban-column kanban-col-blocked">
-          <div class="kanban-column-header"><span class="kanban-column-title">Blocked</span><span class="kanban-column-count" id="kanban-count-blocked">0</span></div>
-          <div class="kanban-column-body" id="kanban-blocked"></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- JOBS PAGE -->
-  <div id="page-jobs" class="page">
+  <div id="page-jobs" class="page active">
     <div class="page-header">
       <h1>Jobs</h1>
       <p>Pipeline overview and job tracking</p>
@@ -412,8 +389,13 @@ tbody tr.clickable { cursor: pointer; }
           <option value="blocked">Blocked</option>
           <option value="failed">Failed</option>
         </select>
+        <div class="view-toggle" id="viewToggle">
+          <button class="active" data-view="list">List</button>
+          <button data-view="board">Board</button>
+        </div>
       </div>
-      <div class="table-wrap">
+      <div class="kanban-container" id="kanbanBoard" style="display:none"></div>
+      <div class="table-wrap" id="listView">
         <table>
           <thead>
             <tr>
@@ -481,7 +463,6 @@ tbody tr.clickable { cursor: pointer; }
       pages.forEach(p => p.classList.remove('active'));
       item.classList.add('active');
       document.getElementById('page-' + target).classList.add('active');
-      if (target === 'board') renderKanban();
       if (target === 'repos') loadRepos();
       if (target === 'health') loadHealth();
       if (target === 'prs') loadPRs();
@@ -565,7 +546,7 @@ tbody tr.clickable { cursor: pointer; }
 
     allJobs = jobsData || [];
     renderJobs();
-    renderKanban();
+    if (currentView === 'board') renderKanban();
     document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
   }
 
@@ -647,49 +628,59 @@ tbody tr.clickable { cursor: pointer; }
     return '<div class="detail-field"><div class="detail-label">' + escapeHtml(label) + '</div><div class="detail-value' + (mono ? ' mono' : '') + '">' + value + '</div></div>';
   }
 
+  // ── View Toggle ──
+  let currentView = 'list';
+  document.getElementById('viewToggle').addEventListener('click', function(e) {
+    const btn = e.target.closest('button[data-view]');
+    if (!btn) return;
+    currentView = btn.dataset.view;
+    document.querySelectorAll('#viewToggle button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('listView').style.display = currentView === 'list' ? '' : 'none';
+    document.getElementById('kanbanBoard').style.display = currentView === 'board' ? 'flex' : 'none';
+    document.getElementById('jobFilter').style.display = currentView === 'list' ? '' : 'none';
+    if (currentView === 'board') renderKanban();
+  });
+
   // ── Kanban Board ──
   function renderKanban() {
-    const columns = {
-      queued: { states: ['queued', 'preflight'], jobs: [] },
-      running: { states: ['running'], jobs: [] },
-      coded: { states: ['coded'], jobs: [] },
-      done: { states: ['done', 'verified'], jobs: [] },
-      blocked: { states: ['blocked', 'failed'], jobs: [] },
-    };
+    const now = Date.now();
+    const dayAgo = now - 86400000;
+    const cols = [
+      { key: 'queued', title: 'Queued', css: 'kanban-col-queued', fn: function(j) { return j.state === 'queued' || j.state === 'preflight'; } },
+      { key: 'running', title: 'Running', css: 'kanban-col-running', fn: function(j) { return j.state === 'running'; } },
+      { key: 'review', title: 'In Review', css: 'kanban-col-review', fn: function(j) { return j.state === 'coded' && j.pr_url; } },
+      { key: 'done', title: 'Done', css: 'kanban-col-done', fn: function(j) { return j.state === 'done' && j.updated_at && new Date(j.updated_at).getTime() > dayAgo; } },
+      { key: 'blocked', title: 'Blocked', css: 'kanban-col-blocked', fn: function(j) { return j.state === 'blocked'; } },
+    ];
 
-    allJobs.forEach(job => {
-      for (const [col, def] of Object.entries(columns)) {
-        if (def.states.includes(job.state)) { def.jobs.push(job); break; }
-      }
-    });
-
-    for (const [col, def] of Object.entries(columns)) {
-      const body = document.getElementById('kanban-' + col);
-      const count = document.getElementById('kanban-count-' + col);
-      count.textContent = def.jobs.length;
-
-      if (def.jobs.length === 0) {
-        body.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:12px;">No tickets</div>';
-        continue;
-      }
-
-      body.innerHTML = def.jobs.map(job => {
-        const id = escapeHtml(job.ticket_id || job.job_id);
-        const repo = escapeHtml(repoShortName(job.repo));
-        const elapsed = formatDuration(job.elapsed_sec);
-        const prLink = job.pr_url
-          ? '<a href="' + escapeHtml(job.pr_url) + '" target="_blank" onclick="event.stopPropagation()">PR</a>'
-          : '';
-        return '<div class="kanban-card" data-job="' + escapeHtml(job.job_id) + '">' +
-          '<div class="kanban-card-id">' + id + '</div>' +
-          '<div class="kanban-card-repo">' + repo + '</div>' +
-          '<div class="kanban-card-meta">' +
-            '<span>' + elapsed + '</span>' +
-            prLink +
-          '</div>' +
-        '</div>';
-      }).join('');
-    }
+    var board = document.getElementById('kanbanBoard');
+    board.innerHTML = cols.map(function(col) {
+      var jobs = allJobs.filter(col.fn);
+      var cards = jobs.length === 0
+        ? '<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:12px;">No jobs</div>'
+        : jobs.map(function(job) {
+            var id = escapeHtml(job.ticket_id || job.job_id);
+            var repo = escapeHtml(repoShortName(job.repo));
+            var elapsed = formatDuration(job.elapsed_sec);
+            var prLink = job.pr_url
+              ? '<a href="' + escapeHtml(job.pr_url) + '" target="_blank" onclick="event.stopPropagation()">PR ' + escapeHtml(job.pr_url.split('/').pop()) + '</a>'
+              : '';
+            return '<div class="kanban-card">' +
+              '<div class="kanban-card-id">' + id + '</div>' +
+              '<div class="kanban-card-repo">' + repo + '</div>' +
+              '<div class="kanban-card-meta">' +
+                '<span>' + elapsed + '</span>' +
+                prLink +
+              '</div></div>';
+          }).join('');
+      return '<div class="kanban-column ' + col.css + '">' +
+        '<div class="kanban-column-header">' +
+          '<span class="kanban-column-title">' + col.title + '</span>' +
+          '<span class="kanban-column-count">' + allJobs.filter(col.fn).length + '</span>' +
+        '</div>' +
+        '<div class="kanban-column-body">' + cards + '</div></div>';
+    }).join('');
   }
 
   document.getElementById('jobFilter').addEventListener('change', renderJobs);
