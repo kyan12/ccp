@@ -144,10 +144,17 @@ function normalizeJobToLinearIssue(packet: JobPacket, orgKey?: string | null): R
   };
 }
 
+const LINEAR_STATE_DEFAULTS: Record<string, string> = {
+  in_progress: 'In Progress',
+  in_review: 'In Review',
+  done: 'Done',
+  blocked: 'Blocked',
+};
+
 function resolveStateName(kind: string, orgKey?: string | null): string {
   const cfg = linearConfig(orgKey);
-  const defaults = cfg.defaultStates || {};
-  return defaults[kind] || kind;
+  const overrides = cfg.defaultStates || {};
+  return overrides[kind] || LINEAR_STATE_DEFAULTS[kind] || kind;
 }
 
 function buildCommentBody(job: Partial<JobStatus>, result: Partial<JobResult>): string {
@@ -394,12 +401,12 @@ async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; 
   }
 
   const lifecycleMap: Record<string, string> = {
-    queued: 'ready',
-    preflight: 'ready',
-    running: 'running',
+    queued: 'in_progress',
+    preflight: 'in_progress',
+    running: 'in_progress',
     blocked: 'blocked',
     failed: 'blocked',
-    coded: 'review',
+    coded: 'in_review',
     done: 'done',
     verified: 'done',
   };
@@ -467,6 +474,33 @@ async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; 
   };
 }
 
+async function syncLinearIssueState(jobState: string, issueId: string, orgKey?: string | null): Promise<{ ok: boolean; state?: string; error?: string }> {
+  const lifecycleMap: Record<string, string> = {
+    queued: 'in_progress',
+    preflight: 'in_progress',
+    running: 'in_progress',
+    blocked: 'blocked',
+    failed: 'blocked',
+    coded: 'in_review',
+    done: 'done',
+    verified: 'done',
+  };
+
+  const mappedKey = lifecycleMap[jobState];
+  if (!mappedKey) {
+    return { ok: false, error: `unknown job state: ${jobState}` };
+  }
+
+  const stateName = resolveStateName(mappedKey, orgKey);
+
+  try {
+    await updateIssueState(issueId, stateName, orgKey);
+    return { ok: true, state: stateName };
+  } catch (error) {
+    return { ok: false, state: stateName, error: (error as Error).message };
+  }
+}
+
 module.exports = {
   linearConfig,
   linearApiKey,
@@ -476,6 +510,7 @@ module.exports = {
   saveJobLinearLink,
   getJobLinearLink,
   syncJobToLinear,
+  syncLinearIssueState,
   chooseProject,
   ensureLabels,
   createIssueFromJob,
@@ -495,6 +530,7 @@ export {
   saveJobLinearLink,
   getJobLinearLink,
   syncJobToLinear,
+  syncLinearIssueState,
   chooseProject,
   ensureLabels,
   createIssueFromJob,

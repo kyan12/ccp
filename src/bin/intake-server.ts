@@ -125,7 +125,14 @@ function handleGetJobs(url: URL, res: http.ServerResponse): void {
   const limit = Number(url.searchParams.get('limit')) || 200;
   let jobs = listJobs();
   if (state) jobs = jobs.filter((j: { state: string }) => j.state === state);
-  json(res, 200, jobs.slice(0, limit));
+  const enriched = jobs.slice(0, limit).map((job: Record<string, unknown>) => {
+    try {
+      const result = readJson(resultPath(job.job_id as string)) as Record<string, unknown>;
+      if (result?.pr_url) return { ...job, pr_url: result.pr_url };
+    } catch (_) {}
+    return job;
+  });
+  json(res, 200, enriched);
 }
 
 function handleGetJob(jobId: string, res: http.ServerResponse): void {
