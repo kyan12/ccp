@@ -1171,8 +1171,12 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
   // Build set of repos that already have a running job (for per-repo serial enforcement)
   const busyRepos = new Set<string>();
   for (const job of activeRunning) {
-    const packet = readJson(packetPath(job.job_id)) as unknown as JobPacket;
-    if (packet.repo) busyRepos.add(packet.repo);
+    try {
+      const packet = readJson(packetPath(job.job_id)) as unknown as JobPacket;
+      if (packet.repo) busyRepos.add(packet.repo);
+    } catch (err) {
+      console.error(`[ccp] failed to read packet for running job ${job.job_id}: ${(err as Error).message}`);
+    }
   }
 
   // Check peak-hour scheduling + outage state before dispatching new jobs
@@ -1205,7 +1209,14 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
         continue;
       }
       // Per-repo serial: skip if another job is already running on this repo
-      const packet = readJson(packetPath(job.job_id)) as unknown as JobPacket;
+      let packet: JobPacket;
+      try {
+        packet = readJson(packetPath(job.job_id)) as unknown as JobPacket;
+      } catch (err) {
+        console.error(`[ccp] failed to read packet for queued job ${job.job_id}: ${(err as Error).message}`);
+        summary.errors.push({ job_id: job.job_id, action: 'read_packet', error: (err as Error).message });
+        continue;
+      }
       if (packet.repo && busyRepos.has(packet.repo)) {
         summary.skipped.push({ job_id: job.job_id, reason: `repo busy: ${path.basename(packet.repo)}` });
         continue;

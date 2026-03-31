@@ -15,7 +15,12 @@ function ensureDir(): void {
 function readState(): DispatchState {
   ensureDir();
   if (!fs.existsSync(STATE_FILE)) return { dispatchedIssueIds: {}, updatedAt: null };
-  return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+  try {
+    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+  } catch (err) {
+    console.error(`[ccp] failed to parse ${STATE_FILE}: ${(err as Error).message}`);
+    return { dispatchedIssueIds: {}, updatedAt: null };
+  }
 }
 
 function writeState(state: DispatchState): void {

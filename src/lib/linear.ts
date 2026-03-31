@@ -46,7 +46,12 @@ function resolveLinearOrg(packet: JobPacket): string | null {
 function readLinks(): Record<string, LinearJobLink> {
   ensureLinearCacheDir();
   if (!fs.existsSync(LINEAR_LINKS_FILE)) return {};
-  return JSON.parse(fs.readFileSync(LINEAR_LINKS_FILE, 'utf8'));
+  try {
+    return JSON.parse(fs.readFileSync(LINEAR_LINKS_FILE, 'utf8'));
+  } catch (err) {
+    console.error(`[ccp] failed to parse ${LINEAR_LINKS_FILE}: ${(err as Error).message}`);
+    return {};
+  }
 }
 
 function writeLinks(data: Record<string, LinearJobLink>): void {
