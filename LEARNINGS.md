@@ -119,3 +119,40 @@ Two code health issues from the 2026-03-29 review were resolved:
   issues and the following review resolved them. The identify → fix → verify loop is working well.
 - **Graceful degradation** (52691ec): Corrupted JSON config files now return null and fall through
   to the next config source, rather than crashing. Good resilience pattern.
+
+## 2026-03-31 — Nightly Review
+
+### Bug Fixed: Unguarded JSON.parse in supervisor-critical paths
+
+The corrupted JSON fix from 52691ec (config.ts) was not applied to other state/cache files.
+Three locations used `JSON.parse(fs.readFileSync(...))` without error handling, meaning a
+single corrupted file would crash the entire supervisor process:
+
+1. **`linear.ts:readLinks()`** — Corrupted `job-links.json` crashes supervisor on any
+   Linear sync attempt. Fixed: returns `{}` on parse error (links are a cache, not source
+   of truth).
+
+2. **`linear-dispatch.ts:readState()`** — Corrupted `state.json` crashes Linear dispatch.
+   Fixed: returns default empty state on parse error (worst case: re-dispatches an already-
+   dispatched issue, which is idempotent).
+
+3. **`jobs.ts:runSupervisorCycle()`** — Two unprotected `readJson(packetPath(...))` calls
+   in the supervisor cycle. A single corrupted job packet crashes the entire cycle, preventing
+   all other jobs from being dispatched. Fixed: wrapped in try/catch so a corrupted job is
+   skipped with an error log, and remaining jobs continue processing.
+
+### Code Health Observations
+
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance.
+- **No tests for webhook callback** (`webhook-callback.ts`): Still no test file. Tests for
+  HMAC signing and nested metadata extraction would prevent regressions.
+- **Duplicated `lifecycleMap`** (`linear.ts`): The job-state-to-Linear-state mapping is
+  defined identically in both `syncJobToLinear` (line 403) and `syncLinearIssueState`
+  (line 478). Should be extracted to a module-level constant.
+
+### Patterns Worth Reinforcing
+
+- **Consistent error handling pattern**: `config.ts`, `outage.ts`, and `scheduling.ts` all
+  use try/catch with `console.error` + fallback return. This is now the established pattern
+  for all state file reads in CCP.
