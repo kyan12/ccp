@@ -156,3 +156,39 @@ single corrupted file would crash the entire supervisor process:
 - **Consistent error handling pattern**: `config.ts`, `outage.ts`, and `scheduling.ts` all
   use try/catch with `console.error` + fallback return. This is now the established pattern
   for all state file reads in CCP.
+
+## 2026-04-01 — Nightly Review
+
+### Refactor: Extract duplicated `lifecycleMap` to module-level constant
+
+The `lifecycleMap` object (maps CCP job states like `queued`/`running`/`coded` to Linear
+workflow state categories like `in_progress`/`in_review`/`done`) was defined identically in
+both `syncJobToLinear` (line ~408) and `syncLinearIssueState` (line ~483). If one copy were
+updated without the other, jobs would transition to incorrect Linear states silently.
+
+**Fix:** Extracted to a module-level `JOB_TO_LINEAR_STATE` constant. Both functions now
+reference the single source of truth.
+
+### Tests: webhook-callback.ts coverage
+
+Added `webhook-callback.test.ts` with 14 tests covering:
+- `extractWebhookMeta`: null metadata, top-level extraction, nested metadata extraction,
+  top-level precedence over nested
+- `fireWebhookCallback`: no-op when no webhook metadata, log message on successful send,
+  graceful handling of invalid URLs
+
+Updated `package.json` test script to run all three test files (`jobs`, `config`,
+`webhook-callback`).
+
+### Code Health Observations
+
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Five consecutive reviews have each identified issues and
+  resolved them in subsequent sessions. The identify → fix → verify loop continues.
+- **Test script should run all test files**: Previously only `jobs.test.js` was in the
+  test script; `config.test.js` was not being run by `npm test`. Now all test files are
+  included.
