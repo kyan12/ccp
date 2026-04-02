@@ -156,6 +156,21 @@ const LINEAR_STATE_DEFAULTS: Record<string, string> = {
   blocked: 'Blocked',
 };
 
+/**
+ * Maps CCP job lifecycle states to Linear workflow state categories.
+ * Used by both syncJobToLinear and syncLinearIssueState.
+ */
+const JOB_TO_LINEAR_STATE: Record<string, string> = {
+  queued: 'in_progress',
+  preflight: 'in_progress',
+  running: 'in_progress',
+  blocked: 'blocked',
+  failed: 'blocked',
+  coded: 'in_review',
+  done: 'done',
+  verified: 'done',
+};
+
 function resolveStateName(kind: string, orgKey?: string | null): string {
   const cfg = linearConfig(orgKey);
   const overrides = cfg.defaultStates || {};
@@ -405,18 +420,7 @@ async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; 
     return { ok: false, skipped: true, reason: `LINEAR API key missing for org=${orgKey || 'default'}` };
   }
 
-  const lifecycleMap: Record<string, string> = {
-    queued: 'in_progress',
-    preflight: 'in_progress',
-    running: 'in_progress',
-    blocked: 'blocked',
-    failed: 'blocked',
-    coded: 'in_review',
-    done: 'done',
-    verified: 'done',
-  };
-
-  const desiredStateName = resolveStateName(lifecycleMap[result?.state || status?.state || 'ready'] || 'ready');
+  const desiredStateName = resolveStateName(JOB_TO_LINEAR_STATE[result?.state || status?.state || 'ready'] || 'ready');
   const canonicalIssue = packet.ticket_id ? await findIssueByIdentifier(packet.ticket_id, orgKey).catch(() => null) : null;
   let link = getJobLinearLink(packet.job_id);
   let issue: LinearIssue | null = null;
@@ -480,18 +484,7 @@ async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; 
 }
 
 async function syncLinearIssueState(jobState: string, issueId: string, orgKey?: string | null): Promise<{ ok: boolean; state?: string; error?: string }> {
-  const lifecycleMap: Record<string, string> = {
-    queued: 'in_progress',
-    preflight: 'in_progress',
-    running: 'in_progress',
-    blocked: 'blocked',
-    failed: 'blocked',
-    coded: 'in_review',
-    done: 'done',
-    verified: 'done',
-  };
-
-  const mappedKey = lifecycleMap[jobState];
+  const mappedKey = JOB_TO_LINEAR_STATE[jobState];
   if (!mappedKey) {
     return { ok: false, error: `unknown job state: ${jobState}` };
   }
