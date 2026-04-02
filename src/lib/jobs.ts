@@ -23,8 +23,7 @@ const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(__dirname, '
 const JOBS_DIR: string = path.join(ROOT, 'jobs');
 const DISCORD_RUNS_CHANNEL: string = process.env.CCP_DISCORD_RUNS_CHANNEL || '';
 const DISCORD_ERRORS_CHANNEL: string = process.env.CCP_DISCORD_ERRORS_CHANNEL || '';
-const DISCORD_REVIEW_CHANNEL: string = process.env.CCP_DISCORD_REVIEW_CHANNEL || '';
-const DISCORD_HUMAN_TASKS_CHANNEL: string = process.env.CCP_DISCORD_HUMAN_TASKS_CHANNEL || '';
+const DISCORD_STATUS_CHANNEL: string = process.env.CCP_DISCORD_STATUS_CHANNEL || process.env.CCP_DISCORD_REVIEW_CHANNEL || '';
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -832,22 +831,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       runsMsg = parts.join(' | ');
     }
 
-    // Detect worker waiting for human input: exit code 0, no commits, question patterns in output
-    let humanInputRoute = false;
-    if (exitCode === 0 && !commitShort && DISCORD_HUMAN_TASKS_CHANNEL) {
-      const questionPatterns = [/waiting for/i, /need clarification/i, /\bwhich\b/i, /please specify/i, /please confirm/i];
-      if (questionPatterns.some(p => p.test(logText))) {
-        humanInputRoute = true;
-        const lines = logText.split('\n');
-        const matchedLines = lines.filter(l => questionPatterns.some(p => p.test(l)));
-        const questionExcerpt = matchedLines.slice(0, 5).join('\n').slice(0, 1000);
-        runsMsg = `🟡 NEEDS INPUT — ${ticket} | ${repoName}\n${questionExcerpt}`;
-      }
-    }
-
-    const target = humanInputRoute
-      ? DISCORD_HUMAN_TASKS_CHANNEL
-      : (exitCode === 0 && result.state !== 'blocked' && result.state !== 'failed' ? DISCORD_RUNS_CHANNEL : DISCORD_ERRORS_CHANNEL);
+    // Route: successes → status channel, all failures/blocked → errors channel
+    const isFailure = exitCode !== 0 || result.state === 'blocked' || result.state === 'failed';
+    const target = isFailure ? DISCORD_ERRORS_CHANNEL : DISCORD_STATUS_CHANNEL;
     const sentMain = sendDiscordMessage(target, runsMsg);
 
     if (result.pr_url && prReview.ok) {
@@ -860,27 +846,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       if (prReview.blockers?.length) reviewParts.push(`Blockers: ${prReview.blockers.join('; ')}`);
       if (result.verified && result.verified !== 'not yet') reviewParts.push(`Tests: ${result.verified}`);
       if (remediation.ok && !remediation.skipped) reviewParts.push(`Remediation: ${remediation.job_id}`);
-      sendDiscordMessage(DISCORD_REVIEW_CHANNEL, reviewParts.join('\n'));
-    }
-
-    // Detect human-actionable blockers and post to human-tasks channel
-    if (DISCORD_HUMAN_TASKS_CHANNEL && (result.state === 'blocked' || result.state === 'failed')) {
-      const blockerText = (result.blocker || '').toLowerCase();
-      const humanActionPatterns = [
-        /env\s*var|environment\s*variable|not\s*set|missing.*token|missing.*key|missing.*secret/i,
-        /redirect.*uri|callback.*url|oauth.*config|consent.*screen/i,
-        /api\s*key.*required|token.*required|credentials.*missing/i,
-        /permission.*denied|access.*denied|unauthorized|forbidden/i,
-        /rate.?limit|quota.*exceeded/i,
-        /dns|domain|ssl|certificate/i,
-        /billing|payment|subscription/i,
-      ];
-      const isHumanTask = humanActionPatterns.some(p => p.test(blockerText));
-      if (isHumanTask) {
-        const priority = '🔴'; // blocking by definition — the job failed
-        const humanMsg = `${priority} **${ticket} — ${repoName}**\n${result.blocker}`;
-        sendDiscordMessage(DISCORD_HUMAN_TASKS_CHANNEL, humanMsg);
-      }
+      sendDiscordMessage(DISCORD_STATUS_CHANNEL, reviewParts.join('\n'));
     }
 
     appendLog(jobId, `[${nowIso()}] FINAL notify: ${sentMain.ok ? 'ok' : (sentMain.stderr || 'failed')}`);

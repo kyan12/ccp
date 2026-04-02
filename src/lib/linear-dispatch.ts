@@ -325,10 +325,10 @@ async function dispatchLinearIssues(): Promise<DispatchResult[]> {
     if (!packet.repo || !packet.repoResolved) {
       out.push({ identifier: issue.identifier, skipped: true, reason: `repo unavailable: ${packet.repo || 'unmapped'}` });
       // Post to human-tasks channel so someone can add the Repo: tag
-      const humanChannel = process.env.CCP_DISCORD_HUMAN_TASKS_CHANNEL;
-      if (humanChannel) {
-        const { sendDiscordMessage } = require('./discord');
-        sendDiscordMessage(humanChannel,
+      const errorsChannel = process.env.CCP_DISCORD_ERRORS_CHANNEL;
+      if (errorsChannel) {
+        const { sendDiscordMessage } = require('./jobs');
+        sendDiscordMessage(errorsChannel,
           `🔴 **${issue.identifier} — missing repo tag**\nTicket "${issue.title}" can't be dispatched because no repo is specified.\nAdd \`**Repo:** owner/repo\` to the ticket description in Linear.`
         );
       }

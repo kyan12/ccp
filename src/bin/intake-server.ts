@@ -216,11 +216,85 @@ function handleGetStats(res: http.ServerResponse): void {
   try {
     const buckets = jobsByState();
     const counts = Object.fromEntries(Object.entries(buckets).map(([k, v]) => [k, (v as unknown[]).length]));
-    json(res, 200, { counts });
+    const allJobsList = listJobs();
+    const now = Date.now();
+    const oneDayAgo = now - 86400000;
+    const sevenDaysAgo = now - 7 * 86400000;
+
+    const recentDay = allJobsList.filter((j: { updated_at: string }) => new Date(j.updated_at).getTime() > oneDayAgo);
+    const recentWeek = allJobsList.filter((j: { updated_at: string }) => new Date(j.updated_at).getTime() > sevenDaysAgo);
+
+    const dailyDone = recentDay.filter((j: { state: string }) => ['coded', 'done', 'verified'].includes(j.state)).length;
+    const weeklyDone = recentWeek.filter((j: { state: string }) => ['coded', 'done', 'verified'].includes(j.state)).length;
+    const dailyTotal = recentDay.length;
+    const weeklyTotal = recentWeek.length;
+
+    // Merge rate: of coded/done/verified jobs, how many have merged (state=verified or done with prReview.merged)
+    const codedJobs = allJobsList.filter((j: { state: string }) => ['coded', 'done', 'verified'].includes(j.state));
+    const mergedJobs = allJobsList.filter((j: { state: string; integrations?: Record<string, unknown> }) =>
+      j.state === 'verified' || (j.state === 'done' && (j.integrations as Record<string, unknown>)?.prReview && ((j.integrations as Record<string, unknown>).prReview as Record<string, unknown>)?.merged)
+    );
+    const mergeRate = codedJobs.length > 0 ? Math.round((mergedJobs.length / codedJobs.length) * 100) : 0;
+    const blockedRate = allJobsList.length > 0 ? Math.round(((counts.blocked || 0) + (counts.failed || 0)) / allJobsList.length * 100) : 0;
+
+    // Avg duration of completed jobs (last 7 days)
+    const completedWithDuration = recentWeek.filter((j: { state: string; elapsed_sec?: number }) =>
+      ['coded', 'done', 'verified'].includes(j.state) && j.elapsed_sec && j.elapsed_sec > 0
+    );
+    const avgDuration = completedWithDuration.length > 0
+      ? Math.round(completedWithDuration.reduce((sum: number, j: { elapsed_sec: number }) => sum + j.elapsed_sec, 0) / completedWithDuration.length)
+      : 0;
+
+    json(res, 200, {
+      counts,
+      daily: { total: dailyTotal, completed: dailyDone },
+      weekly: { total: weeklyTotal, completed: weeklyDone },
+      mergeRate,
+      blockedRate,
+      avgDuration,
+      mergedCount: mergedJobs.length,
+      codedCount: codedJobs.length,
+    });
   } catch (err) {
     json(res, 500, { ok: false, error: (err as Error).message });
   }
 }
+
+// ── SSE: Server-Sent Events for real-time activity feed ──
+const sseClients: Set<http.ServerResponse> = new Set();
+let lastJobSnapshot: string = '';
+
+function broadcastSSE(event: string, data: unknown): void {
+  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of sseClients) {
+    try { client.write(msg); } catch { sseClients.delete(client); }
+  }
+}
+
+function handleSSE(res: http.ServerResponse): void {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    'connection': 'keep-alive',
+    'access-control-allow-origin': '*',
+  });
+  res.write(`event: connected\ndata: ${JSON.stringify({ time: new Date().toISOString() })}\n\n`);
+  sseClients.add(res);
+  res.on('close', () => sseClients.delete(res));
+}
+
+// Poll for job changes and broadcast to SSE clients
+setInterval(() => {
+  if (sseClients.size === 0) return;
+  try {
+    const jobs = listJobs().slice(0, 50);
+    const snapshot = JSON.stringify(jobs.map((j: { job_id: string; state: string; updated_at: string }) => `${j.job_id}:${j.state}:${j.updated_at}`));
+    if (snapshot !== lastJobSnapshot) {
+      lastJobSnapshot = snapshot;
+      broadcastSSE('jobs', jobs);
+    }
+  } catch { /* ignore */ }
+}, 5000);
 
 const server = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {
   // Handle CORS preflight
@@ -255,6 +329,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       if (url.pathname === '/api/stats') { handleGetStats(res); return; }
       if (url.pathname === '/api/repos') { handleGetRepos(res); return; }
       if (url.pathname === '/api/scheduling') { handleGetScheduling(res); return; }
+      if (url.pathname === '/api/events') { handleSSE(res); return; }
       const jobMatch = url.pathname.match(/^\/api\/jobs\/(.+)$/);
       if (jobMatch) { handleGetJob(decodeURIComponent(jobMatch[1]), res); return; }
     }
@@ -497,17 +572,25 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         const pr = payload.pull_request as Record<string, unknown>;
         const repo = (payload.repository as Record<string, unknown>)?.full_name as string || '';
         const prUrl = (pr.html_url as string) || '';
+        const mergedBy = ((pr.merged_by as Record<string, unknown>)?.login as string) || 'unknown';
         process.stdout.write(`[github-webhook] PR merged: ${repo}#${pr.number} ${pr.title}\n`);
 
+        let matchedTicket: string | null = null;
         try {
-          const { listJobs: lj, readJson: rj, resultPath: rp, saveStatus: ss } = require('../lib/jobs');
+          const { listJobs: lj, readJson: rj, resultPath: rp, saveStatus: ss, packetPath: pktPath } = require('../lib/jobs');
           const allJobs = lj();
           for (const job of allJobs) {
             try {
               const jobResult = rj(rp(job.job_id));
-              if (jobResult.pr_url === prUrl && job.state !== 'done' && job.state !== 'verified') {
-                ss(job.job_id, { state: 'verified' });
-                process.stdout.write(`[github-webhook] job ${job.job_id} → verified (PR merged)\n`);
+              if (jobResult.pr_url === prUrl) {
+                try {
+                  const pkt = rj(pktPath(job.job_id));
+                  matchedTicket = pkt.ticket_id || null;
+                } catch { /* best-effort */ }
+                if (job.state !== 'done' && job.state !== 'verified') {
+                  ss(job.job_id, { state: 'verified' });
+                  process.stdout.write(`[github-webhook] job ${job.job_id} → verified (PR merged)\n`);
+                }
                 break;
               }
             } catch { continue; }
@@ -515,6 +598,21 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         } catch (error) {
           process.stderr.write(`[github-webhook] error processing PR merge: ${(error as Error).message}\n`);
         }
+
+        // Post merge notification to Discord status channel
+        try {
+          const { sendDiscordMessage } = require('../lib/jobs');
+          const statusChannel = process.env.CCP_DISCORD_STATUS_CHANNEL || process.env.CCP_DISCORD_REVIEW_CHANNEL || '';
+          if (statusChannel) {
+            const ticketLabel = matchedTicket || 'untracked';
+            const repoName = repo.split('/').pop() || repo;
+            const mergeMsg = `🔀 MERGED — ${ticketLabel} | ${repoName} | PR #${pr.number}\nTitle: ${(pr.title as string) || ''}\nMerged by: ${mergedBy}`;
+            sendDiscordMessage(statusChannel, mergeMsg);
+          }
+        } catch (error) {
+          process.stderr.write(`[github-webhook] error sending merge notification: ${(error as Error).message}\n`);
+        }
+
         json(res, 200, { ok: true, action: 'pr-merged', pr: pr.number });
         return;
       }

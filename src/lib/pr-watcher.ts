@@ -14,6 +14,9 @@ const {
   appendLog,
   sendDiscordMessage,
 } = require('./jobs');
+
+const DISCORD_STATUS_CHANNEL: string = process.env.CCP_DISCORD_STATUS_CHANNEL || process.env.CCP_DISCORD_REVIEW_CHANNEL || '';
+const DISCORD_ERRORS_CHANNEL: string = process.env.CCP_DISCORD_ERRORS_CHANNEL || '';
 const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
 
@@ -213,6 +216,15 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
           packet, jobId, status: 'merged', prUrl: result.pr_url || null,
         });
         if (whLog) appendLog(jobId, `[${nowIso()}] pr-watcher: ${whLog}`);
+
+        // Post merge notification to status channel
+        if (DISCORD_STATUS_CHANNEL) {
+          try {
+            const repoName = packet.repo ? packet.repo.split('/').pop() : 'unknown';
+            const prNum = result.pr_url ? result.pr_url.split('/').pop() : '';
+            sendDiscordMessage(DISCORD_STATUS_CHANNEL, `🔀 MERGED — ${packet.ticket_id || jobId} | ${repoName} | PR #${prNum}`);
+          } catch { /* best-effort */ }
+        }
       }
     }
 
@@ -259,6 +271,12 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
                 sendDiscordMessage(currentForRebase.discord_thread_id, `🔄 Auto-rebased branch to resolve merge conflicts: ${rebaseResult.message}`);
               } catch { /* best-effort */ }
             }
+            if (DISCORD_STATUS_CHANNEL) {
+              try {
+                const repoName = packet.repo ? packet.repo.split('/').pop() : 'unknown';
+                sendDiscordMessage(DISCORD_STATUS_CHANNEL, `🔄 Auto-rebase — ${packet.ticket_id || jobId} | ${repoName} | ${rebaseResult.message}`);
+              } catch { /* best-effort */ }
+            }
             actions.push(entry);
             continue;
           } else {
@@ -275,6 +293,12 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
         entry.remediation = remResult;
         if (remResult.ok && !remResult.skipped) {
           entry.action = 'remediation-enqueued';
+          if (DISCORD_STATUS_CHANNEL) {
+            try {
+              const repoName = packet.repo ? packet.repo.split('/').pop() : 'unknown';
+              sendDiscordMessage(DISCORD_STATUS_CHANNEL, `🔄 Remediation spawned — ${packet.ticket_id || jobId} | ${repoName} | fix job: ${remResult.job_id}`);
+            } catch { /* best-effort */ }
+          }
         }
       } else if (remediationExists(jobId)) {
         entry.action = 'remediation-exists';
@@ -323,6 +347,25 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
         if (review.blockers?.length) parts.push(`Blockers: ${review.blockers.join('; ')}`);
         sendDiscordMessage(current.discord_thread_id, parts.join('\n'));
       } catch { /* thread message is best-effort */ }
+    }
+
+    // Post lifecycle updates to status channel
+    if (dispositionChanged && DISCORD_STATUS_CHANNEL) {
+      try {
+        const repoName = packet.repo ? packet.repo.split('/').pop() : 'unknown';
+        const ticket = packet.ticket_id || jobId;
+        const prRef = result.pr_url ? `PR ${result.pr_url.split('/').pop()}` : '';
+        if (review.disposition === 'approve') {
+          sendDiscordMessage(DISCORD_STATUS_CHANNEL, `✅ Checks passing — ${ticket} | ${repoName} | ${prRef}`);
+        } else if (review.disposition === 'block') {
+          const reason = (review.blockers || []).slice(0, 2).join('; ') || review.blockerType || 'unknown';
+          sendDiscordMessage(DISCORD_STATUS_CHANNEL, `❌ Checks failing — ${ticket} | ${repoName} | ${prRef}\n${reason}`);
+          // Also post blocked jobs to errors channel
+          if (DISCORD_ERRORS_CHANNEL) {
+            sendDiscordMessage(DISCORD_ERRORS_CHANNEL, `🔴 BLOCKED — ${ticket} | ${repoName} | ${prRef}\n${reason}`);
+          }
+        }
+      } catch { /* best-effort */ }
     }
 
     // Only sync Linear when the PR disposition actually changed
