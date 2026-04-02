@@ -177,8 +177,10 @@ function main(): void {
 
         const r = run('gh', ['api', `repos/${opts.repo}/hooks`, '--method', 'POST', '--input', '-'], { input: payload });
         if (r.status !== 0) throw new Error(`Webhook creation failed: ${r.stderr}`);
-        const id = JSON.parse(r.stdout).id;
-        return `Created webhook #${id} → ${webhookUrl}`;
+        try {
+          const id = JSON.parse(r.stdout).id;
+          return `Created webhook #${id} → ${webhookUrl}`;
+        } catch { return `Created webhook → ${webhookUrl} (could not parse response)`; }
       }
     });
   }

@@ -129,7 +129,7 @@ function handleGetJobs(url: URL, res: http.ServerResponse): void {
     try {
       const result = readJson(resultPath(job.job_id as string)) as Record<string, unknown>;
       if (result?.pr_url) return { ...job, pr_url: result.pr_url };
-    } catch (_) {}
+    } catch (e) { console.error(`[ccp] failed to read result for ${job.job_id}: ${(e as Error).message}`); }
     return job;
   });
   json(res, 200, enriched);
@@ -141,15 +141,15 @@ function handleGetJob(jobId: string, res: http.ServerResponse): void {
     let packet: unknown = null;
     let result: unknown = null;
     let logTail: string | null = null;
-    try { packet = readJson(packetPath(jobId)); } catch (_) {}
-    try { result = readJson(resultPath(jobId)); } catch (_) {}
+    try { packet = readJson(packetPath(jobId)); } catch (e) { console.error(`[ccp] failed to read packet for ${jobId}: ${(e as Error).message}`); }
+    try { result = readJson(resultPath(jobId)); } catch (e) { console.error(`[ccp] failed to read result for ${jobId}: ${(e as Error).message}`); }
     try {
       const logFile = path.join(jobDir(jobId), 'worker.log');
       if (fs.existsSync(logFile)) {
         const content = fs.readFileSync(logFile, 'utf8');
         logTail = content.slice(-2000);
       }
-    } catch (_) {}
+    } catch (e) { console.error(`[ccp] failed to read worker log for ${jobId}: ${(e as Error).message}`); }
     json(res, 200, { status, packet, result, logTail });
   } catch (err) {
     json(res, 404, { ok: false, error: 'job not found: ' + (err as Error).message });
