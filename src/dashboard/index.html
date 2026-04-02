@@ -304,6 +304,68 @@ tbody tr.clickable { cursor: pointer; }
 .kanban-col-done .kanban-column-title { color: var(--green); }
 .kanban-col-blocked .kanban-column-title { color: var(--red); }
 
+/* Activity feed */
+.activity-feed { display: flex; flex-direction: column; gap: 6px; max-height: calc(100vh - 200px); overflow-y: auto; }
+.activity-item {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 14px; display: flex; gap: 10px; align-items: flex-start; animation: fadeIn 0.2s ease;
+}
+.activity-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+.activity-body { flex: 1; min-width: 0; }
+.activity-title { font-size: 13px; font-weight: 500; }
+.activity-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; font-family: var(--mono); }
+.activity-sse-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); margin-right: 6px; animation: pulse 1.5s ease-in-out infinite; }
+.activity-sse-dot.disconnected { background: var(--red); animation: none; }
+
+/* Job detail modal */
+.job-modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6);
+  z-index: 200; display: flex; align-items: center; justify-content: center; animation: fadeIn 0.15s ease;
+}
+.job-modal {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  width: 640px; max-width: 90vw; max-height: 85vh; overflow-y: auto; padding: 24px;
+}
+.job-modal h2 { font-size: 16px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+.job-modal-close { margin-left: auto; background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; padding: 4px; }
+.job-modal-close:hover { color: var(--text); }
+.job-modal-section { margin-bottom: 16px; }
+.job-modal-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); margin-bottom: 8px; }
+
+/* Timeline */
+.timeline { position: relative; padding-left: 20px; }
+.timeline::before { content: ''; position: absolute; left: 7px; top: 4px; bottom: 4px; width: 2px; background: var(--border); }
+.timeline-item { position: relative; padding: 4px 0 12px 12px; font-size: 12px; }
+.timeline-item::before {
+  content: ''; position: absolute; left: -17px; top: 7px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--border); border: 2px solid var(--bg-surface);
+}
+.timeline-item.active::before { background: var(--blue); }
+.timeline-item.done::before { background: var(--green); }
+.timeline-item.error::before { background: var(--red); }
+.timeline-label { color: var(--text-secondary); }
+.timeline-time { color: var(--text-muted); font-family: var(--mono); font-size: 11px; margin-left: 8px; }
+
+/* Merge status badges on kanban */
+.merge-badge {
+  display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px;
+  border-radius: 100px; font-size: 10px; font-weight: 600; letter-spacing: 0.2px;
+}
+.merge-badge-open { background: var(--amber-dim); color: var(--amber); }
+.merge-badge-passing { background: var(--green-dim); color: var(--green); }
+.merge-badge-failing { background: var(--red-dim); color: var(--red); }
+.merge-badge-merged { background: var(--blue-dim); color: var(--blue); }
+
+/* Stats grid */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.stat-card {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.stat-card .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
+.stat-card .stat-value { font-size: 24px; font-weight: 700; margin-top: 4px; font-family: var(--mono); letter-spacing: -0.5px; }
+.stat-card .stat-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
 /* Responsive */
 @media (max-width: 900px) {
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
@@ -334,6 +396,10 @@ tbody tr.clickable { cursor: pointer; }
     <div class="nav-item" data-page="prs">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="4" r="2"/><circle cx="11" cy="12" r="2"/><path d="M5 6v4c0 2 6 2 6 2"/></svg>
       PR Review
+    </div>
+    <div class="nav-item" data-page="activity">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h12M2 7h8M2 11h10M2 15h6"/></svg>
+      Activity
     </div>
     <div class="nav-item" data-page="health">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8h3l2-4 2 8 2-4h3"/></svg>
@@ -401,6 +467,7 @@ tbody tr.clickable { cursor: pointer; }
         <div class="summary-card"><div class="label">Failed (24h)</div><div class="value red" id="stat-failed">-</div></div>
         <div class="summary-card"><div class="label">Blocked</div><div class="value amber" id="stat-blocked">-</div></div>
       </div>
+      <div class="stats-grid" id="extendedStats"></div>
       <div class="toolbar">
         <select class="filter-select" id="jobFilter">
           <option value="all">All States</option>
@@ -454,6 +521,19 @@ tbody tr.clickable { cursor: pointer; }
     </div>
   </div>
 
+  <!-- ACTIVITY PAGE -->
+  <div id="page-activity" class="page">
+    <div class="page-header">
+      <h1>Activity</h1>
+      <p><span id="sseStatus" class="activity-sse-dot"></span>Real-time activity feed</p>
+    </div>
+    <div class="page-content">
+      <div class="activity-feed" id="activityFeed">
+        <div class="empty-state"><p>Connecting...</p></div>
+      </div>
+    </div>
+  </div>
+
   <!-- HEALTH PAGE -->
   <div id="page-health" class="page">
     <div class="page-header">
@@ -463,6 +543,14 @@ tbody tr.clickable { cursor: pointer; }
     <div class="page-content">
       <div class="health-grid" id="healthGrid"></div>
     </div>
+  </div>
+</div>
+
+<!-- Job Detail Modal -->
+<div id="jobModal" class="job-modal-overlay" style="display:none">
+  <div class="job-modal">
+    <h2><span id="modalTitle">Job Detail</span><button class="job-modal-close" id="modalClose">&times;</button></h2>
+    <div id="modalContent"></div>
   </div>
 </div>
 
@@ -485,12 +573,16 @@ tbody tr.clickable { cursor: pointer; }
       if (target === 'repos') loadRepos();
       if (target === 'health') loadHealth();
       if (target === 'prs') loadPRs();
+      if (target === 'activity') connectSSE();
     });
   });
 
   // ── State ──
   let expandedJob = null;
   let allJobs = [];
+  let lastStats = null;
+  let sseSource = null;
+  const activityItems = [];
 
   // ── Helpers ──
   function formatDuration(seconds) {
@@ -556,17 +648,37 @@ tbody tr.clickable { cursor: pointer; }
     if (stats) {
       const c = stats.counts || {};
       document.getElementById('stat-running').textContent = (c.running || 0) + (c.preflight || 0);
-      const twentyFourHoursAgo = Date.now() - 86400000;
-      const recent = (jobsData || []).filter(j => new Date(j.updated_at).getTime() > twentyFourHoursAgo);
-      document.getElementById('stat-completed').textContent = recent.filter(j => ['coded','done','verified'].includes(j.state)).length;
-      document.getElementById('stat-failed').textContent = recent.filter(j => j.state === 'failed').length;
+      document.getElementById('stat-completed').textContent = stats.daily ? stats.daily.completed : 0;
+      document.getElementById('stat-failed').textContent = (jobsData || []).filter(j => {
+        const dayAgo = Date.now() - 86400000;
+        return j.state === 'failed' && new Date(j.updated_at).getTime() > dayAgo;
+      }).length;
       document.getElementById('stat-blocked').textContent = c.blocked || 0;
+      lastStats = stats;
     }
 
     allJobs = jobsData || [];
     renderJobs();
     renderKanban();
+    renderExtendedStats();
     document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  }
+
+  function renderExtendedStats() {
+    const el = document.getElementById('extendedStats');
+    if (!el || !lastStats) { if (el) el.innerHTML = ''; return; }
+    const s = lastStats;
+    el.innerHTML =
+      statCard('Daily Jobs', s.daily ? s.daily.total : '-', s.daily ? s.daily.completed + ' completed' : '') +
+      statCard('Weekly Jobs', s.weekly ? s.weekly.total : '-', s.weekly ? s.weekly.completed + ' completed' : '') +
+      statCard('Merge Rate', s.mergeRate !== undefined ? s.mergeRate + '%' : '-', s.mergedCount + '/' + s.codedCount + ' merged') +
+      statCard('Blocked Rate', s.blockedRate !== undefined ? s.blockedRate + '%' : '-', '') +
+      statCard('Avg Duration', s.avgDuration ? formatDuration(s.avgDuration) : '-', 'completed jobs (7d)');
+  }
+
+  function statCard(label, value, sub) {
+    return '<div class="stat-card"><div class="stat-label">' + escapeHtml(label) + '</div><div class="stat-value">' + escapeHtml(String(value)) + '</div>' +
+      (sub ? '<div class="stat-sub">' + escapeHtml(sub) + '</div>' : '') + '</div>';
   }
 
   function renderJobs() {
@@ -648,6 +760,18 @@ tbody tr.clickable { cursor: pointer; }
   }
 
   // ── Kanban Board ──
+  function getMergeBadge(job) {
+    const pr = job.integrations && job.integrations.prReview;
+    if (!pr || pr.skipped) {
+      if (job.pr_url && ['coded', 'done'].includes(job.state)) return '<span class="merge-badge merge-badge-open">PR open</span>';
+      return '';
+    }
+    if (pr.merged || job.state === 'verified') return '<span class="merge-badge merge-badge-merged">merged</span>';
+    if (pr.disposition === 'approve') return '<span class="merge-badge merge-badge-passing">passing</span>';
+    if (pr.disposition === 'block') return '<span class="merge-badge merge-badge-failing">failing</span>';
+    return '<span class="merge-badge merge-badge-open">pending</span>';
+  }
+
   function renderKanban() {
     const columns = {
       queued: { states: ['queued', 'preflight'], jobs: [] },
@@ -680,8 +804,9 @@ tbody tr.clickable { cursor: pointer; }
         const prLink = job.pr_url
           ? '<a href="' + escapeHtml(job.pr_url) + '" target="_blank" onclick="event.stopPropagation()">PR</a>'
           : '';
-        return '<div class="kanban-card" data-job="' + escapeHtml(job.job_id) + '">' +
-          '<div class="kanban-card-id">' + id + '</div>' +
+        const badge = getMergeBadge(job);
+        return '<div class="kanban-card" data-job="' + escapeHtml(job.job_id) + '" style="cursor:pointer">' +
+          '<div class="kanban-card-id">' + id + ' ' + badge + '</div>' +
           '<div class="kanban-card-repo">' + repo + '</div>' +
           '<div class="kanban-card-meta">' +
             '<span>' + elapsed + '</span>' +
@@ -689,6 +814,11 @@ tbody tr.clickable { cursor: pointer; }
           '</div>' +
         '</div>';
       }).join('');
+
+      // Click handler for kanban cards → open detail modal
+      body.querySelectorAll('.kanban-card').forEach(card => {
+        card.addEventListener('click', () => openJobModal(card.dataset.job));
+      });
     }
   }
 
@@ -866,6 +996,153 @@ tbody tr.clickable { cursor: pointer; }
   function healthRow(label, value, cls) {
     return '<div class="health-row"><span class="health-label">' + escapeHtml(label) + '</span><span class="health-value ' + (cls || '') + '">' + escapeHtml(String(value)) + '</span></div>';
   }
+
+  // ── Job Detail Modal ──
+  const modal = document.getElementById('jobModal');
+  document.getElementById('modalClose').addEventListener('click', () => modal.style.display = 'none');
+  modal.addEventListener('click', e => { if (e.target === modal) modal.style.display = 'none'; });
+
+  async function openJobModal(jobId) {
+    modal.style.display = 'flex';
+    document.getElementById('modalTitle').textContent = 'Loading...';
+    document.getElementById('modalContent').innerHTML = '';
+
+    const data = await api('/api/jobs/' + encodeURIComponent(jobId));
+    if (!data) { document.getElementById('modalTitle').textContent = 'Error loading job'; return; }
+
+    const result = data.result || {};
+    const packet = data.packet || {};
+    const status = data.status || {};
+    const pr = status.integrations && status.integrations.prReview;
+
+    document.getElementById('modalTitle').textContent = escapeHtml(packet.ticket_id || jobId);
+
+    let html = '';
+
+    // Goal & description
+    html += '<div class="job-modal-section"><h3>Goal</h3><div style="font-size:13px">' + escapeHtml(packet.goal || '-') + '</div></div>';
+
+    // Acceptance criteria
+    if (packet.acceptance_criteria && packet.acceptance_criteria.length) {
+      html += '<div class="job-modal-section"><h3>Acceptance Criteria</h3><ul style="margin:0;padding-left:18px;font-size:12px;color:var(--text-secondary)">';
+      packet.acceptance_criteria.forEach(function(ac) { html += '<li>' + escapeHtml(ac) + '</li>'; });
+      html += '</ul></div>';
+    }
+
+    // Key fields
+    html += '<div class="job-modal-section"><h3>Details</h3><div class="job-detail-inner" style="margin:0">';
+    html += field('State', '<span class="' + badgeClass(status.state) + '">' + escapeHtml(status.state) + '</span>');
+    html += field('Branch', result.branch || '-', true);
+    html += field('Commit', result.commit || '-', true);
+    html += field('PR', result.pr_url ? '<a href="' + escapeHtml(result.pr_url) + '" target="_blank">' + escapeHtml(result.pr_url) + '</a>' : 'none');
+    if (pr) {
+      const mergeText = pr.merged ? 'Merged' : pr.autoMergeEnabled ? 'Auto-merge enabled' : pr.disposition || 'pending';
+      html += field('PR Status', mergeText);
+    }
+    if (result.blocker) html += field('Blocker', escapeHtml(result.blocker));
+    if (result.risk) html += field('Risk', result.risk);
+
+    const linearInfo = status.integrations && status.integrations.linear;
+    if (linearInfo && linearInfo.url) {
+      html += field('Linear', '<a href="' + escapeHtml(linearInfo.url) + '" target="_blank">' + escapeHtml(linearInfo.identifier || 'View') + '</a>');
+    }
+    html += '</div></div>';
+
+    // Timeline
+    html += '<div class="job-modal-section"><h3>Timeline</h3><div class="timeline">';
+    const steps = [
+      { label: 'Dispatched', time: packet.created_at, state: 'done' },
+      { label: 'Started', time: status.started_at, state: status.started_at ? 'done' : 'pending' },
+      { label: 'Coded', time: ['coded','done','verified'].includes(status.state) ? status.updated_at : null, state: ['coded','done','verified'].includes(status.state) ? 'done' : (status.state === 'running' ? 'active' : 'pending') },
+      { label: 'PR Opened', time: result.pr_url ? status.updated_at : null, state: result.pr_url ? 'done' : 'pending' },
+      { label: 'Checks', time: pr && pr.disposition ? pr.watchedAt : null, state: pr ? (pr.disposition === 'approve' ? 'done' : pr.disposition === 'block' ? 'error' : 'active') : 'pending' },
+      { label: 'Merged', time: (pr && pr.merged) || status.state === 'verified' ? status.updated_at : null, state: (pr && pr.merged) || status.state === 'verified' ? 'done' : 'pending' },
+    ];
+    if (status.state === 'blocked' || status.state === 'failed') {
+      steps.push({ label: 'Blocked/Failed', time: status.updated_at, state: 'error' });
+    }
+    steps.forEach(function(step) {
+      const cls = step.state === 'done' ? 'done' : step.state === 'active' ? 'active' : step.state === 'error' ? 'error' : '';
+      html += '<div class="timeline-item ' + cls + '"><span class="timeline-label">' + step.label + '</span>';
+      if (step.time) html += '<span class="timeline-time">' + timeAgo(step.time) + '</span>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+
+    // Log excerpt
+    if (data.logTail) {
+      html += '<div class="job-modal-section"><h3>Worker Log (tail)</h3><div class="log-preview">' + escapeHtml(data.logTail) + '</div></div>';
+    }
+
+    document.getElementById('modalContent').innerHTML = html;
+  }
+
+  // ── SSE Activity Feed ──
+  function connectSSE() {
+    if (sseSource) return;
+    const dot = document.getElementById('sseStatus');
+
+    sseSource = new EventSource('/api/events');
+    sseSource.addEventListener('connected', function() {
+      dot.classList.remove('disconnected');
+      addActivity('connected', 'Connected to live feed', '');
+    });
+    sseSource.addEventListener('jobs', function(e) {
+      try {
+        const jobs = JSON.parse(e.data);
+        // Diff against current state to find changes
+        const oldMap = {};
+        allJobs.forEach(function(j) { oldMap[j.job_id] = j.state; });
+        jobs.forEach(function(j) {
+          const prev = oldMap[j.job_id];
+          if (!prev) {
+            addActivity('new', j.ticket_id || j.job_id, repoShortName(j.repo) + ' — dispatched');
+          } else if (prev !== j.state) {
+            const icon = j.state === 'running' ? 'running' : j.state === 'coded' ? 'coded' : j.state === 'done' || j.state === 'verified' ? 'done' : j.state === 'blocked' || j.state === 'failed' ? 'error' : 'change';
+            addActivity(icon, j.ticket_id || j.job_id, repoShortName(j.repo) + ' — ' + prev + ' → ' + j.state);
+          }
+        });
+        // Update allJobs with SSE data and re-render
+        allJobs = jobs;
+        renderKanban();
+        renderJobs();
+      } catch (err) { console.error('SSE parse error:', err); }
+    });
+    sseSource.onerror = function() {
+      dot.classList.add('disconnected');
+      sseSource.close();
+      sseSource = null;
+      setTimeout(connectSSE, 5000);
+    };
+  }
+
+  function addActivity(type, title, meta) {
+    const icons = { connected: '🔗', new: '🟡', running: '🔵', coded: '🟢', done: '✅', error: '🔴', change: '🔄' };
+    activityItems.unshift({ type: type, title: title, meta: meta, time: new Date().toISOString() });
+    if (activityItems.length > 100) activityItems.length = 100;
+    renderActivityFeed();
+  }
+
+  function renderActivityFeed() {
+    const feed = document.getElementById('activityFeed');
+    if (!feed) return;
+    if (activityItems.length === 0) {
+      feed.innerHTML = '<div class="empty-state"><p>No activity yet</p></div>';
+      return;
+    }
+    feed.innerHTML = activityItems.map(function(item) {
+      const icons = { connected: '🔗', new: '🟡', running: '🔵', coded: '🟢', done: '✅', error: '🔴', change: '🔄' };
+      return '<div class="activity-item">' +
+        '<span class="activity-icon">' + (icons[item.type] || '📋') + '</span>' +
+        '<div class="activity-body">' +
+          '<div class="activity-title">' + escapeHtml(item.title) + '</div>' +
+          '<div class="activity-meta">' + escapeHtml(item.meta) + ' · ' + timeAgo(item.time) + '</div>' +
+        '</div></div>';
+    }).join('');
+  }
+
+  // Connect SSE on load for background updates
+  connectSSE();
 
   // ── Init ──
   loadJobs();
