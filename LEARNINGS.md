@@ -192,3 +192,36 @@ Updated `package.json` test script to run all three test files (`jobs`, `config`
 - **Test script should run all test files**: Previously only `jobs.test.js` was in the
   test script; `config.test.js` was not being run by `npm test`. Now all test files are
   included.
+
+## 2026-04-02 — Nightly Review
+
+### Bug Fixed: Silent catch blocks in intake-server.ts and unguarded JSON.parse in add-repo.ts
+
+1. **`intake-server.ts` silent catches** — Four `catch (_) {}` blocks in the dashboard API
+   handlers (`handleGetJobs`, `handleGetJob`) swallowed errors when reading job packets,
+   results, or worker logs. Dashboard would silently show incomplete data with no indication
+   of failure. Fixed: added `console.error` logging to all four, matching the pattern
+   established in `jobs.ts` (d352d3b).
+
+2. **`add-repo.ts` unguarded `JSON.parse`** — `JSON.parse(r.stdout).id` on line 180 parsed
+   the GitHub API response without error handling. If the response is malformed or truncated
+   (network issue, API change), the entire `add-repo` command crashes mid-execution. Fixed:
+   wrapped in try/catch with a degraded success message.
+
+### Code Health Observations
+
+- **Open PR #9** covers duplicated `lifecycleMap` extraction and webhook-callback tests —
+  two items flagged in previous reviews. Should be merged to close those items.
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance.
+- **`ensureLabels` in `linear.ts`**: Uses `Promise.race` with a timeout but doesn't catch
+  rejections from `ensureLabel()`. If the API call rejects, the unhandled rejection propagates.
+- **`attemptAutoRebase` in `pr-watcher.ts`**: Git operations don't clean up on partial failure,
+  potentially leaving the repo in an inconsistent state for subsequent jobs.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Five consecutive reviews have each identified and resolved issues.
+  The identify → fix → verify loop remains effective.
+- **Silent catch blocks**: All known silent catches in the codebase are now resolved. Future
+  code should always log in catch blocks, even for non-critical paths.
