@@ -225,3 +225,43 @@ Updated `package.json` test script to run all three test files (`jobs`, `config`
   The identify → fix → verify loop remains effective.
 - **Silent catch blocks**: All known silent catches in the codebase are now resolved. Future
   code should always log in catch blocks, even for non-critical paths.
+
+## 2026-04-03 — Nightly Review
+
+### Bug Fixed: Unhandled Promise.race rejection in ensureLabels
+
+`ensureLabels` in `linear.ts` called `Promise.race([ensureLabel(name, orgKey), timeout])`
+without catching rejections from `ensureLabel`. While `ensureLabel` has an internal try-catch,
+the `linearConfig(orgKey)` call at line 235 is **outside** that try-catch. If `loadConfig`
+throws (e.g., corrupted linear config file), the rejection propagates through `Promise.race`
+unhandled, crashing the entire `createIssueFromJob` flow. This means a single corrupted config
+file could prevent all Linear issue creation.
+
+**Fix:** Added `.catch(() => null)` to the `ensureLabel` call inside `Promise.race`, matching
+the function's existing graceful degradation pattern (return null on failure, skip that label).
+
+### Bug Fixed: Silent catch blocks in new notification code
+
+Commit b351eb7 (Discord lifecycle + SSE) introduced two new silent catch blocks that
+contradicted the project convention established in 58af809:
+
+1. **SSE polling interval** (`intake-server.ts:296`): `catch { /* ignore */ }` swallowed
+   errors from `listJobs()` during SSE broadcasting. Fixed: logs error to stderr.
+
+2. **PR merge ticket matching** (`intake-server.ts:589`): `catch { /* best-effort */ }`
+   swallowed errors when reading job packets for ticket matching. Fixed: logs error to stderr.
+
+### Code Health Observations
+
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance.
+- **`attemptAutoRebase` in `pr-watcher.ts`**: Reviewed — git operations properly clean up
+  on partial failure (rebase --abort, return to base branch). No action needed.
+
+### Patterns Worth Reinforcing
+
+- **New feature code should follow established conventions**: The Discord notification and SSE
+  code in b351eb7 was well-structured but introduced silent catches that had been systematically
+  eliminated in previous reviews. New code should follow the existing error logging pattern.
+- **Promise.race needs rejection handling**: When racing async operations against timeouts,
+  always add `.catch()` to the async operation to prevent unhandled rejections.
