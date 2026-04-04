@@ -265,3 +265,37 @@ contradicted the project convention established in 58af809:
   eliminated in previous reviews. New code should follow the existing error logging pattern.
 - **Promise.race needs rejection handling**: When racing async operations against timeouts,
   always add `.catch()` to the async operation to prevent unhandled rejections.
+
+## 2026-04-04 — Nightly Review
+
+### Bug Fixed: `attemptAutoRebase` unchecked git cleanup operations
+
+`attemptAutoRebase` in `pr-watcher.ts` ran several git operations (reset, rebase --abort,
+checkout) without checking their return codes. If any cleanup operation failed — especially
+`rebase --abort` or `checkout baseBranch` — the repo would be left in an inconsistent state
+(mid-rebase, detached HEAD, or on the wrong branch). Subsequent jobs dispatched to that repo
+would inherit the broken state and fail.
+
+**Fix:** Extracted `ensureOnBranch()` helper that verifies checkout succeeds with fallback
+strategies (abort lingering rebase, detached HEAD at origin). All error paths now use this
+helper. Added return-code check for `git reset --hard` and logged `rebase --abort` failures.
+
+### Code Health Observations
+
+- **Open PR #12** (`nightly/fix-silent-catches-and-promise-race`): Fixes Promise.race rejection
+  in `ensureLabels` and two silent catches introduced in b351eb7. Should be reviewed and merged.
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance.
+- **Silent catches in b351eb7**: Two new `catch { /* best-effort */ }` blocks added in
+  `pr-watcher.ts` (lines ~226, ~272, ~278, ~349, ~368) for Discord notifications. These are
+  genuinely best-effort (notification failures shouldn't block job processing), but for
+  consistency with project conventions, adding `console.error` would improve debuggability.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Eight consecutive reviews, each identifying and resolving issues.
+  The identify → fix → verify loop continues to work effectively.
+- **Git cleanup safety**: Any function that switches branches or modifies git state should
+  verify cleanup succeeds, especially in error paths. A helper like `ensureOnBranch` prevents
+  cascading failures across jobs sharing a repo checkout.
+
