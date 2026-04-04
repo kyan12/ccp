@@ -43,7 +43,7 @@ So the control-plane maps richer lifecycle states onto that simpler workflow.
 ## Smoke test
 
 ```bash
-node src/bin/linear-sync.js <job_id>
+node src/bin/linear-sync.ts <job_id>
 ```
 
 ## Current behavior

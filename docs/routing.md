@@ -48,6 +48,20 @@ Use source labels for how work entered the system:
 - `source:discord`
 - `source:cron`
 
+## Auto-onboarding
+
+When a fix request references a repo not yet in `configs/repos.json`, the `onboard-repo` module (`src/lib/onboard-repo.ts`) automatically onboards it:
+
+1. **Verify** — Checks the repo exists on GitHub via `gh api`
+2. **Clone** — Clones to `$CCP_REPOS_DIR/<name>` (or `~/repos/<name>` by default)
+3. **Register** — Adds the repo to `configs/repos.json` with defaults: `autoMerge: true`, `mergeMethod: "squash"`
+4. **GitHub settings** — Enables `allow_auto_merge` and `delete_branch_on_merge` on the repo
+5. **Webhook** — Creates a GitHub webhook pointing to `$CCP_FUNNEL_URL/webhook/github` for `check_run` and `pull_request` events (requires `CCP_FUNNEL_URL` to be set)
+
+If the repo is already onboarded, the module returns immediately with the existing config.
+
+Auto-onboarding is triggered by the `/api/intake` endpoint when it receives a request for an unknown repo. It can also be triggered via `src/bin/add-repo.ts`.
+
 ## Workflow mapping
 
 The YourOrg team currently uses:

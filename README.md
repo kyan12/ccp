@@ -29,12 +29,12 @@ Linear Ticket → CCP → Coding Agent → PR → CI → Auto-Merge → Deploy
 ┌──────────────────────────────────────────────────────────┐
 │                     Intake Layer                          │
 │  Sentry webhook ──┐                                      │
-│  Vercel webhook ──┼── intake-server.js ── normalize ──┐  │
+│  Vercel webhook ──┼── intake-server.ts ── normalize ──┐  │
 │  GitHub webhook ──┘                                   │  │
-│  Linear webhook ──── linear-dispatch.js ──────────────┤  │
-│  Discord message ── intake-text.js ───────────────────┤  │
+│  Linear webhook ──── linear-dispatch.ts ──────────────┤  │
+│  Discord message ── intake-text.ts ───────────────────┤  │
 │                                                       ▼  │
-│                     Job System (jobs.js)                  │
+│                     Job System (jobs.ts)                  │
 │                     ┌────────────────┐                    │
 │                     │ queued         │                    │
 │                     │ → preflight    │                    │
@@ -46,7 +46,7 @@ Linear Ticket → CCP → Coding Agent → PR → CI → Auto-Merge → Deploy
 │              ┌────────────┼────────────┐                 │
 │              ▼            ▼            ▼                 │
 │         PR Review    Linear Sync   Notifications         │
-│         (pr-review)  (linear.js)   (Discord)             │
+│         (pr-review)  (linear.ts)   (Discord)             │
 │              │                                           │
 │              ▼                                           │
 │         PR Watcher ── auto-merge / remediation           │
@@ -84,10 +84,10 @@ cp configs/linear.json.example configs/linear.json
 
 ```bash
 # Start the supervisor (monitors and runs jobs)
-node src/bin/supervisor.js --interval=15000 --max-concurrent=1
+node src/bin/supervisor.ts --interval=15000 --max-concurrent=1
 
 # Start the intake server (receives webhooks, serves dashboard)
-node src/bin/intake-server.js
+node src/bin/intake-server.ts
 
 # Dashboard at http://localhost:4318/dashboard
 ```
@@ -95,7 +95,7 @@ node src/bin/intake-server.js
 ### Create a Job Manually
 
 ```bash
-node src/bin/intake-text.js \
+node src/bin/intake-text.ts \
   --title "Fix login page timeout" \
   --repo my-app \
   --dispatch
@@ -105,7 +105,7 @@ node src/bin/intake-text.js \
 
 ```bash
 # Generate and install launchd plists
-node src/bin/install-launchd.js
+node src/bin/install-launchd.ts
 ```
 
 ## Configuration
@@ -199,14 +199,14 @@ CCP's killer feature is the closed remediation loop:
 
 | Command | Description |
 |---------|-------------|
-| `node src/bin/supervisor.js` | Main supervisor loop |
-| `node src/bin/intake-server.js` | HTTP server for webhooks + dashboard |
-| `node src/bin/intake-text.js` | Create jobs from text descriptions |
-| `node src/bin/jobs.js list` | List all jobs and their states |
-| `node src/bin/jobs.js inspect <id>` | Inspect a specific job |
-| `node src/bin/pr-watcher.js --once` | Run one PR review cycle |
-| `node src/bin/linear-dispatch.js` | Dispatch pending Linear tickets |
-| `node src/bin/linear-sync.js <id>` | Sync a job's state to Linear |
+| `node src/bin/supervisor.ts` | Main supervisor loop |
+| `node src/bin/intake-server.ts` | HTTP server for webhooks + dashboard |
+| `node src/bin/intake-text.ts` | Create jobs from text descriptions |
+| `node src/bin/jobs.ts list` | List all jobs and their states |
+| `node src/bin/jobs.ts inspect <id>` | Inspect a specific job |
+| `node src/bin/pr-watcher.ts --once` | Run one PR review cycle |
+| `node src/bin/linear-dispatch.ts` | Dispatch pending Linear tickets |
+| `node src/bin/linear-sync.ts <id>` | Sync a job's state to Linear |
 
 ## Environment Variables
 

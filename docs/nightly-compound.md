@@ -8,7 +8,7 @@ Nightly compound runs review recent work across repos, extract learnings, and im
 
 ```
 OpenClaw cron (10:30 PM ET daily)
-  → nightly-compound.js reads repos.json (nightly.enabled=true)
+  → nightly-compound.ts reads repos.json (nightly.enabled=true)
     → creates a CCP job per repo
       → supervisor queues and runs them sequentially (max-concurrent=1)
         → tmux worker runs Claude Code
@@ -46,16 +46,16 @@ Edit `configs/repos.json` and toggle `nightly.enabled`.
 
 ```bash
 # List nightly-eligible repos
-node src/bin/nightly-compound.js --list
+node src/bin/nightly-compound.ts --list
 
 # Dry run (show what would be dispatched)
-node src/bin/nightly-compound.js --dry-run
+node src/bin/nightly-compound.ts --dry-run
 
 # Dispatch all enabled repos now
-node src/bin/nightly-compound.js
+node src/bin/nightly-compound.ts
 
 # Dispatch a single repo
-node src/bin/nightly-compound.js --repo papyrx
+node src/bin/nightly-compound.ts --repo papyrx
 ```
 
 ## Cron Schedule
@@ -68,7 +68,7 @@ The supervisor handles execution order. Jobs are queued and run one at a time.
 
 ## Job Lifecycle
 
-1. **Dispatch** — `nightly-compound.js` creates jobs with IDs like `nightly_papyrx_2026-03-14`
+1. **Dispatch** — `nightly-compound.ts` creates jobs with IDs like `nightly_papyrx_2026-03-14`
 2. **Queue** — supervisor picks them up in order
 3. **Run** — tmux worker runs Claude Code with the compound prompt
 4. **Notify** — Discord notifications on start and completion
@@ -92,11 +92,11 @@ Jobs are named with the date (`nightly_<repo>_<YYYY-MM-DD>`). If a job for today
 Check results:
 ```bash
 # List nightly results
-node src/bin/jobs.js list --source nightly
+node src/bin/jobs.ts list --source nightly
 
 # Check a specific run
-node src/bin/jobs.js show nightly_papyrx_2026-03-14
-node src/bin/jobs.js result nightly_papyrx_2026-03-14
+node src/bin/jobs.ts show nightly_papyrx_2026-03-14
+node src/bin/jobs.ts result nightly_papyrx_2026-03-14
 ```
 
 Or check the `#coding-runs` Discord channel for notifications.
