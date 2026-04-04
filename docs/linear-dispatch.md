@@ -13,7 +13,7 @@ This layer watches selected YourOrg Linear issues and turns them into queued cod
 ## Run manually
 
 ```bash
-node src/bin/linear-dispatch.js
+node src/bin/linear-dispatch.ts
 ```
 
 ## Persistent behavior

@@ -6,21 +6,21 @@ The control plane can now do two different things with normalized incident intak
 Create a routed Linear issue without queueing code work:
 
 ```bash
-node src/bin/intake-linear.js sentry sample-sentry.json
+node src/bin/intake-linear.ts sentry sample-sentry.json
 ```
 
 ## 2. File + enqueue job
 Create the Linear issue and immediately enqueue a coding job linked to the new ticket:
 
 ```bash
-node src/bin/intake-dispatch.js sentry sample-sentry.json --enqueue-job
+node src/bin/intake-dispatch.ts sentry sample-sentry.json --enqueue-job
 ```
 
 ## 3. Job only
 Queue a coding job from a normalized incident payload without creating Linear first:
 
 ```bash
-node src/bin/intake-job.js sentry sample-sentry.json
+node src/bin/intake-job.ts sentry sample-sentry.json
 ```
 
 ## Recommended policy
