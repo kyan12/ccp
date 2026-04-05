@@ -266,6 +266,7 @@ contradicted the project convention established in 58af809:
 - **Promise.race needs rejection handling**: When racing async operations against timeouts,
   always add `.catch()` to the async operation to prevent unhandled rejections.
 
+<<<<<<< HEAD
 ## 2026-04-04 — Nightly Review
 
 ### Bug Fixed: `attemptAutoRebase` unchecked git cleanup operations
@@ -298,4 +299,42 @@ helper. Added return-code check for `git reset --hard` and logged `rebase --abor
 - **Git cleanup safety**: Any function that switches branches or modifies git state should
   verify cleanup succeeds, especially in error paths. A helper like `ensureOnBranch` prevents
   cascading failures across jobs sharing a repo checkout.
+
+## 2026-04-05 — Nightly Review
+
+### Bug Fixed: Supervisor cycle overlap — concurrent cycles cause race conditions
+
+`supervisor.ts` used `setInterval` to schedule supervisor cycles, firing every `intervalMs`
+(default 15s) regardless of whether the previous cycle had completed. If a cycle took
+longer than `intervalMs` (e.g. during network-slow Linear dispatch, multiple PR reviews,
+or outage probing), a second cycle would start concurrently.
+
+**Impact:** Two concurrent cycles could both see the same running job's tmux session as
+dead and both call `finalizeJob()`, leading to:
+- Double notification sends (duplicate Discord messages)
+- Double Linear sync attempts (race condition on issue state)
+- Double PR reviews and potential double remediation job creation
+- Status file corruption from concurrent read-modify-write in `saveStatus`
+
+Two cycles could also both see the same queued job and both call `startJob()`, launching
+two tmux workers for the same job on the same repo.
+
+**Fix:** Replaced `setInterval` with a sequential `setTimeout` loop where the next cycle
+is only scheduled after the current cycle completes. Total period becomes
+`cycle_duration + intervalMs`, which is slightly longer but eliminates all overlap risk.
+Error handling preserved: first-cycle errors still exit the process; subsequent cycle
+errors are logged to stderr and the loop continues.
+
+### Code Health Observations
+
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+- **Open PRs #12 and #13**: Address `ensureLabels` Promise.race rejection and
+  `attemptAutoRebase` git cleanup. Should be reviewed and merged.
+
+### Patterns Worth Reinforcing
+
+- **Sequential scheduling for daemon loops**: `setInterval` is dangerous for async work
+  because it fires at fixed intervals regardless of execution time. Always use sequential
+  `setTimeout` scheduling (schedule-after-completion) for daemon-style loops.
 

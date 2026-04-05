@@ -35,15 +35,20 @@ async function cycle(): Promise<SupervisorCycleSummary> {
   return result;
 }
 
-cycle().catch((error: Error) => {
+cycle().then(() => {
+  if (!once) scheduleNext();
+}).catch((error: Error) => {
   process.stderr.write(`${error.stack || error.message}\n`);
   process.exit(1);
 });
 
-if (!once) {
-  setInterval(() => {
-    cycle().catch((error: Error) => {
+function scheduleNext(): void {
+  setTimeout(() => {
+    cycle().then(() => {
+      scheduleNext();
+    }).catch((error: Error) => {
       process.stderr.write(`${error.stack || error.message}\n`);
+      scheduleNext();
     });
   }, intervalMs);
 }
