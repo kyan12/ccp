@@ -278,7 +278,7 @@ async function ensureLabels(names: string[] = [], orgKey?: string | null): Promi
   const ids: string[] = [];
   for (const name of names) {
     const id = await Promise.race([
-      ensureLabel(name, orgKey),
+      ensureLabel(name, orgKey).catch(() => null),
       new Promise<string | null>((resolve) => setTimeout(() => resolve(null), 1500)),
     ]);
     if (id) ids.push(id);

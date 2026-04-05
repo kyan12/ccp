@@ -293,7 +293,7 @@ setInterval(() => {
       lastJobSnapshot = snapshot;
       broadcastSSE('jobs', jobs);
     }
-  } catch { /* ignore */ }
+  } catch (e) { console.error(`[ccp] SSE polling error: ${(e as Error).message}`); }
 }, 5000);
 
 const server = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {
@@ -586,7 +586,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
                 try {
                   const pkt = rj(pktPath(job.job_id));
                   matchedTicket = pkt.ticket_id || null;
-                } catch { /* best-effort */ }
+                } catch (e) { console.error(`[ccp] failed to read packet for ticket match: ${(e as Error).message}`); }
                 if (job.state !== 'done' && job.state !== 'verified') {
                   ss(job.job_id, { state: 'verified' });
                   process.stdout.write(`[github-webhook] job ${job.job_id} → verified (PR merged)\n`);
