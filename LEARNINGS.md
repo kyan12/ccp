@@ -266,7 +266,6 @@ contradicted the project convention established in 58af809:
 - **Promise.race needs rejection handling**: When racing async operations against timeouts,
   always add `.catch()` to the async operation to prevent unhandled rejections.
 
-<<<<<<< HEAD
 ## 2026-04-04 — Nightly Review
 
 ### Bug Fixed: `attemptAutoRebase` unchecked git cleanup operations
@@ -283,14 +282,8 @@ helper. Added return-code check for `git reset --hard` and logged `rebase --abor
 
 ### Code Health Observations
 
-- **Open PR #12** (`nightly/fix-silent-catches-and-promise-race`): Fixes Promise.race rejection
-  in `ensureLabels` and two silent catches introduced in b351eb7. Should be reviewed and merged.
 - **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
   Lower priority since CCP typically runs single-instance.
-- **Silent catches in b351eb7**: Two new `catch { /* best-effort */ }` blocks added in
-  `pr-watcher.ts` (lines ~226, ~272, ~278, ~349, ~368) for Discord notifications. These are
-  genuinely best-effort (notification failures shouldn't block job processing), but for
-  consistency with project conventions, adding `console.error` would improve debuggability.
 
 ### Patterns Worth Reinforcing
 
@@ -329,9 +322,6 @@ errors are logged to stderr and the loop continues.
 
 - **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
   Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
-- **Open PRs #12 and #13**: Address `ensureLabels` Promise.race rejection and
-  `attemptAutoRebase` git cleanup. Should be reviewed and merged.
-
 ### Patterns Worth Reinforcing
 
 - **Sequential scheduling for daemon loops**: `setInterval` is dangerous for async work
