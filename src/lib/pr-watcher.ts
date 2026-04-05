@@ -70,6 +70,24 @@ function collectWatchableJobs(): Array<{ status: JobStatus; result: JobResult; p
 }
 
 /**
+ * Best-effort checkout to the target branch, with a hard-reset fallback.
+ * Ensures the repo is not left on a detached HEAD or mid-rebase state.
+ */
+function ensureOnBranch(git: (args: string[]) => RunResult, branch: string, jobId: string): void {
+  const co = git(['checkout', branch]);
+  if (co.status !== 0) {
+    // Checkout can fail if a rebase is still in progress; try aborting first
+    git(['rebase', '--abort']);
+    const retry = git(['checkout', branch]);
+    if (retry.status !== 0) {
+      // Last resort: detached HEAD on the remote branch tip
+      git(['checkout', `origin/${branch}`]);
+      appendLog(jobId, `[${nowIso()}] auto-rebase: could not checkout ${branch}, fell back to detached HEAD at origin/${branch}`);
+    }
+  }
+}
+
+/**
  * Attempt to auto-rebase a branch against its base to resolve merge conflicts.
  * Returns { ok, message } — ok=true if rebase succeeded and was force-pushed.
  */
@@ -107,27 +125,34 @@ function attemptAutoRebase(packet: JobPacket, review: PRReviewResult, jobId: str
   }
 
   // Pull latest for the branch
-  git(['reset', '--hard', `origin/${headBranch}`]);
+  const resetOut = git(['reset', '--hard', `origin/${headBranch}`]);
+  if (resetOut.status !== 0) {
+    appendLog(jobId, `[${nowIso()}] auto-rebase: reset --hard failed, returning to ${baseBranch}`);
+    ensureOnBranch(git, baseBranch, jobId);
+    return { ok: false, message: `reset --hard failed: ${(resetOut.stderr || '').slice(0, 200)}` };
+  }
 
   // Attempt rebase
   const rebaseOut = git(['rebase', `origin/${baseBranch}`]);
   if (rebaseOut.status !== 0) {
     // Rebase failed — conflicts too complex for auto-resolve
-    git(['rebase', '--abort']);
-    // Return to main so we don't leave the repo on a broken branch
-    git(['checkout', baseBranch]);
+    const abortOut = git(['rebase', '--abort']);
+    if (abortOut.status !== 0) {
+      appendLog(jobId, `[${nowIso()}] auto-rebase: rebase --abort failed: ${(abortOut.stderr || '').slice(0, 200)}`);
+    }
+    ensureOnBranch(git, baseBranch, jobId);
     return { ok: false, message: `rebase conflicts could not be auto-resolved: ${(rebaseOut.stderr || rebaseOut.stdout || '').slice(0, 300)}` };
   }
 
   // Force-push the rebased branch
   const pushOut = git(['push', 'origin', headBranch, '--force-with-lease']);
   if (pushOut.status !== 0) {
-    git(['checkout', baseBranch]);
+    ensureOnBranch(git, baseBranch, jobId);
     return { ok: false, message: `force-push failed: ${(pushOut.stderr || '').slice(0, 200)}` };
   }
 
   // Return to base branch
-  git(['checkout', baseBranch]);
+  ensureOnBranch(git, baseBranch, jobId);
 
   appendLog(jobId, `[${nowIso()}] auto-rebase: successfully rebased ${headBranch} onto ${baseBranch} and force-pushed`);
   return { ok: true, message: `rebased ${headBranch} onto origin/${baseBranch} and force-pushed` };
