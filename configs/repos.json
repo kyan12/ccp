@@ -1,0 +1,304 @@
+{
+  "mappings": [
+    {
+      "key": "proteusx-seo",
+      "ownerRepo": "ProteusX-Consulting/proteusx-seo",
+      "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-seo.git",
+      "localPath": "/Users/crab/repos/proteusx-seo",
+      "aliases": [
+        "proteusx seo",
+        "proteusx-seo",
+        "seo"
+      ],
+      "autoMerge": true,
+      "mergeMethod": "squash",
+      "nightly": {
+        "enabled": true,
+        "branch": "main",
+        "timeoutSec": 1200
+      }
+    },
+    {
+      "key": "coding-control-plane",
+      "ownerRepo": null,
+      "gitUrl": null,
+      "localPath": "/Users/crab/coding-control-plane",
+      "aliases": [
+        "control plane",
+        "coding-control-plane",
+        "ccp"
+      ],
+      "autoMerge": true
+    },
+    {
+      "key": "papyrx",
+      "ownerRepo": "kyan12/Papyrx",
+      "gitUrl": "git@github.com:kyan12/Papyrx.git",
+      "localPath": "/Users/crab/repos/Papyrx",
+      "aliases": [
+        "papyrx"
+      ],
+      "nightly": {
+        "enabled": true,
+        "branch": "main",
+        "timeoutSec": 900
+      },
+      "autoMerge": true
+    },
+    {
+      "key": "kjevents",
+      "ownerRepo": "kyan12/kjevents",
+      "gitUrl": "git@github.com:kyan12/kjevents.git",
+      "localPath": "/Users/crab/repos/kjevents",
+      "aliases": [
+        "kjevents",
+        "kira jia events",
+        "kira jia",
+        "kj events",
+        "wedding"
+      ],
+      "autoMerge": true
+    },
+    {
+      "key": "redwood",
+      "ownerRepo": "ProteusX-Consulting/redwood",
+      "gitUrl": "git@github.com:ProteusX-Consulting/redwood.git",
+      "localPath": "/Users/crab/repos/redwood",
+      "linearOrg": "smartadvocateai",
+      "aliases": [
+        "redwood",
+        "smart advocate",
+        "smartadvocate",
+        "sma",
+        "demand letter"
+      ],
+      "nightly": {
+        "enabled": false,
+        "branch": "main",
+        "timeoutSec": 900
+      },
+      "autoMerge": true
+    },
+    {
+      "key": "gslogistics",
+      "ownerRepo": "Global-Synergy-Logistics/GSLogistics",
+      "gitUrl": "git@github.com:Global-Synergy-Logistics/GSLogistics.git",
+      "localPath": "/Users/crab/repos/GSLogistics",
+      "aliases": [
+        "gslogistics",
+        "global synergy logistics",
+        "gsl"
+      ],
+      "nightly": {
+        "enabled": false,
+        "branch": "main",
+        "timeoutSec": 1200
+      },
+      "autoMerge": true,
+      "baseBranch": "main"
+    },
+    {
+      "key": "ccp",
+      "ownerRepo": "kyan12/ccp",
+      "gitUrl": "git@github.com:kyan12/ccp.git",
+      "localPath": "/Users/crab/coding-control-plane",
+      "aliases": [
+        "coding-control-plane",
+        "codeplane"
+      ],
+      "autoMerge": true,
+      "mergeMethod": "squash",
+      "nightly": {
+        "enabled": true,
+        "branch": "main",
+        "timeoutSec": 900
+      }
+    },
+    {
+      "key": "didanyc",
+      "ownerRepo": "kyan12/didanyc",
+      "gitUrl": "git@github.com:kyan12/didanyc.git",
+      "localPath": "/Users/crab/repos/didanyc",
+      "aliases": [
+        "dida",
+        "dida-nyc"
+      ],
+      "autoMerge": true,
+      "mergeMethod": "squash",
+      "nightly": {
+        "enabled": false
+      }
+    },
+    {
+      "key": "didahairstudio",
+      "aliases": [
+        "dida-hair",
+        "dida-studio",
+        "didahairstudio"
+      ],
+      "ownerRepo": "ProteusX-Consulting/didahairstudio",
+      "localPath": "/Users/crab/repos/didahairstudio",
+      "gitUrl": "git@github.com:ProteusX-Consulting/didahairstudio.git",
+      "linearOrg": "default",
+      "autoMerge": true,
+      "mergeMethod": "squash"
+    },
+    {
+      "key": "proteusx-labs",
+      "aliases": [
+        "labs",
+        "ptx-labs"
+      ],
+      "ownerRepo": "ProteusX-Consulting/proteusx-labs",
+      "localPath": "/Users/crab/repos/proteusx-labs",
+      "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-labs.git",
+      "linearOrg": "default",
+      "autoMerge": true,
+      "mergeMethod": "squash"
+    },
+    {
+      "key": "therapeuticcuts",
+      "ownerRepo": "ProteusX-Consulting/therapeuticcuts",
+      "gitUrl": "git@github.com:ProteusX-Consulting/therapeuticcuts.git",
+      "localPath": "/Users/crab/repos/therapeuticcuts",
+      "aliases": [
+        "therapeutic-cuts",
+        "tc"
+      ],
+      "autoMerge": true,
+      "mergeMethod": "squash"
+    },
+    {
+      "key": "koka-hvac",
+      "ownerRepo": "ProteusX-Consulting/koka-hvac",
+      "gitUrl": "git@github.com:ProteusX-Consulting/koka-hvac.git",
+      "localPath": "/Users/crab/repos/koka-hvac",
+      "aliases": [
+        "kokah",
+        "koka",
+        "kokahvac"
+      ],
+      "autoMerge": true,
+      "mergeMethod": "squash"
+    },
+    {
+      "key": "proteusx-arbs",
+      "ownerRepo": "ProteusX-Consulting/proteusx-arbs",
+      "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-arbs.git",
+      "localPath": "/Users/crab/repos/proteusx-arbs",
+      "aliases": [
+        "arbs",
+        "arbs-ai",
+        "arbitration"
+      ],
+      "autoMerge": true,
+      "mergeMethod": "squash"
+    },
+    {
+      "key": "licatesi-law",
+      "ownerRepo": "ProteusX-Consulting/licatesi-law",
+      "gitUrl": "git@github.com:ProteusX-Consulting/licatesi-law.git",
+      "localPath": "/Users/crab/repos/licatesi-law",
+      "aliases": [
+        "licatesi",
+        "licatesi-law"
+      ],
+      "autoMerge": true,
+      "mergeMethod": "squash"
+    },
+    {
+      "key": "av-chemist",
+      "ownerRepo": "ProteusX-Consulting/av-chemist",
+      "gitUrl": "git@github.com:ProteusX-Consulting/av-chemist.git",
+      "localPath": "/Users/crab/repos/av-chemist",
+      "aliases": [
+        "av-chemist",
+        "avchemist",
+        "av chemist"
+      ],
+      "autoMerge": true,
+      "mergeMethod": "squash"
+    },
+    {
+      "key": "deploy-dashboard",
+      "ownerRepo": "ProteusX-Consulting/deploy-dashboard",
+      "gitUrl": "git@github.com:ProteusX-Consulting/deploy-dashboard.git",
+      "localPath": "/Users/crab/repos/deploy-dashboard",
+      "aliases": [
+        "deploy-dashboard",
+        "deploy dashboard",
+        "deploy"
+      ],
+      "autoMerge": true
+    },
+    {
+      "key": "cookiesnails",
+      "ownerRepo": "ProteusX-Consulting/cookiesnails",
+      "gitUrl": "git@github.com:ProteusX-Consulting/cookiesnails.git",
+      "localPath": "/Users/crab/repos/cookiesnails",
+      "aliases": [
+        "cookiesnails",
+        "cookies nails",
+        "cookie nails"
+      ],
+      "autoMerge": true,
+      "mergeMethod": "squash",
+      "nightly": {
+        "enabled": false,
+        "branch": "main",
+        "timeoutSec": 1200
+      }
+    },
+    {
+      "key": "g8-nyc",
+      "ownerRepo": "ProteusX-Consulting/g8-nyc",
+      "gitUrl": "git@github.com:ProteusX-Consulting/g8-nyc.git",
+      "localPath": "/Users/crab/repos/g8-nyc",
+      "aliases": [
+        "g8-nyc",
+        "g8 nyc",
+        "g8"
+      ],
+      "autoMerge": true
+    },
+    {
+      "key": "auth-gateway",
+      "ownerRepo": "ProteusX-Consulting/auth-gateway",
+      "gitUrl": "git@github.com:ProteusX-Consulting/auth-gateway.git",
+      "localPath": "/Users/crab/repos/auth-gateway",
+      "aliases": [
+        "auth-gateway",
+        "auth gateway",
+        "oauth gateway",
+        "proteusx auth gateway",
+        "auth.proteusx.ai"
+      ],
+      "autoMerge": true
+    },
+    {
+      "key": "app-template",
+      "ownerRepo": "ProteusX-Consulting/app-template",
+      "gitUrl": "git@github.com:ProteusX-Consulting/app-template.git",
+      "localPath": "/Users/crab/repos/app-template",
+      "aliases": [
+        "app-template",
+        "app template",
+        "template"
+      ],
+      "autoMerge": true
+    },
+    {
+      "key": "webair-ai-studio-mvp",
+      "ownerRepo": "WebAir-AI/Webair-AI-Studio-MVP",
+      "gitUrl": "git@github.com:WebAir-AI/Webair-AI-Studio-MVP.git",
+      "localPath": "/Users/crab/repos/Webair-AI-Studio-MVP",
+      "aliases": [
+        "webair-ai-studio-mvp",
+        "webair ai studio mvp",
+        "webair studio",
+        "webair ai"
+      ],
+      "autoMerge": true
+    }
+  ]
+}
