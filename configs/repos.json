@@ -298,7 +298,8 @@
         "webair studio",
         "webair ai"
       ],
-      "autoMerge": true
+      "autoMerge": false,
+      "baseBranch": "ccp-staging"
     }
   ]
 }
