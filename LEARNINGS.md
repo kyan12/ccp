@@ -328,3 +328,49 @@ errors are logged to stderr and the loop continues.
   because it fires at fixed intervals regardless of execution time. Always use sequential
   `setTimeout` scheduling (schedule-after-completion) for daemon-style loops.
 
+## 2026-04-06 — Nightly Review
+
+### Bug Fixed: Unguarded JSON.parse in `ghJson()` (pr-review.ts)
+
+`ghJson()` called `JSON.parse(out.stdout || '{}')` without error handling. The `gh` CLI can
+return status 0 with non-JSON output in edge cases (API glitches, truncated responses,
+GitHub rate limit HTML pages). Since `ghJson` is the sole data source for `reviewPr()`,
+a parse failure crashes the entire PR review flow — propagating through `maybeReviewPr()` →
+`finalizeJob()` → `reconcileJob()`. While the supervisor cycle catches this, the job's
+finalization is aborted entirely rather than degrading gracefully.
+
+**Fix:** Wrapped `JSON.parse` in try-catch that rethrows with a descriptive error including
+the first 200 chars of output. The error message now tells the operator *what* `gh` returned
+instead of just "Unexpected token".
+
+### Bug Fixed: 8 silent catch blocks in `pr-watcher.ts`
+
+The PR watcher had 8 `catch { /* best-effort */ }` blocks that swallowed errors silently:
+- 2 in `collectWatchableJobs()`: corrupted result/packet files skipped without logging
+- 6 in `runPrWatcherCycle()`: Discord notification failures (merge, rebase, remediation,
+  thread updates, status channel) all invisible
+
+While each individual notification is indeed best-effort, systematic failures (e.g. invalid
+Discord webhook URL, network issues) would be completely invisible in logs. This contradicts
+the convention established in 58af809 and reinforced in every subsequent review.
+
+**Fix:** Added `console.error` with `[ccp] pr-watcher:` prefix to all 8 catch blocks.
+Behavior unchanged (errors don't propagate), but failures are now visible in logs.
+
+### Code Health Observations
+
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+- **Remaining silent catches**: `scheduling.ts` (lines 117, 129), `jobs.ts` healthCheck
+  (lines 1245, 1262, 1268), and `pr-policy.ts` (line 18) still have silent catches. These
+  are lower priority — scheduling catches are for optional module loading, healthCheck is
+  informational, and pr-policy gracefully degrades. Could be addressed in a future review.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Ten consecutive reviews, each identifying and resolving issues.
+  The identify → fix → verify loop continues.
+- **Error messages should include context**: The `ghJson` fix shows why wrapping exceptions
+  with context (`gh returned invalid JSON: <output>`) is more useful than bare parse errors.
+  When rethrowing, add the "what happened" context so operators can diagnose without reproducing.
+

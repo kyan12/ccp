@@ -52,7 +52,7 @@ function collectWatchableJobs(): Array<{ status: JobStatus; result: JobResult; p
     if (!fs.existsSync(rPath)) continue;
 
     let result: JobResult;
-    try { result = readJson(rPath); } catch { continue; }
+    try { result = readJson(rPath); } catch (e) { console.error(`[ccp] pr-watcher: failed to read result for ${status.job_id}: ${(e as Error).message}`); continue; }
     if (!result.pr_url) continue;
 
     // Skip jobs already finalized — PR merged AND job state is done/verified
@@ -61,7 +61,7 @@ function collectWatchableJobs(): Array<{ status: JobStatus; result: JobResult; p
         status.integrations?.prReview?.merged) continue;
 
     let packet: JobPacket;
-    try { packet = readJson(packetPath(status.job_id)); } catch { continue; }
+    try { packet = readJson(packetPath(status.job_id)); } catch (e) { console.error(`[ccp] pr-watcher: failed to read packet for ${status.job_id}: ${(e as Error).message}`); continue; }
 
     watchable.push({ status, result, packet });
   }
@@ -248,7 +248,7 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
             const repoName = packet.repo ? packet.repo.split('/').pop() : 'unknown';
             const prNum = result.pr_url ? result.pr_url.split('/').pop() : '';
             sendDiscordMessage(DISCORD_STATUS_CHANNEL, `🔀 MERGED — ${packet.ticket_id || jobId} | ${repoName} | PR #${prNum}`);
-          } catch { /* best-effort */ }
+          } catch (e) { console.error(`[ccp] pr-watcher: merge notify error: ${(e as Error).message}`); }
         }
       }
     }
@@ -294,13 +294,13 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
             if (currentForRebase.discord_thread_id) {
               try {
                 sendDiscordMessage(currentForRebase.discord_thread_id, `🔄 Auto-rebased branch to resolve merge conflicts: ${rebaseResult.message}`);
-              } catch { /* best-effort */ }
+              } catch (e) { console.error(`[ccp] pr-watcher: rebase thread notify error: ${(e as Error).message}`); }
             }
             if (DISCORD_STATUS_CHANNEL) {
               try {
                 const repoName = packet.repo ? packet.repo.split('/').pop() : 'unknown';
                 sendDiscordMessage(DISCORD_STATUS_CHANNEL, `🔄 Auto-rebase — ${packet.ticket_id || jobId} | ${repoName} | ${rebaseResult.message}`);
-              } catch { /* best-effort */ }
+              } catch (e) { console.error(`[ccp] pr-watcher: rebase status notify error: ${(e as Error).message}`); }
             }
             actions.push(entry);
             continue;
@@ -322,7 +322,7 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
             try {
               const repoName = packet.repo ? packet.repo.split('/').pop() : 'unknown';
               sendDiscordMessage(DISCORD_STATUS_CHANNEL, `🔄 Remediation spawned — ${packet.ticket_id || jobId} | ${repoName} | fix job: ${remResult.job_id}`);
-            } catch { /* best-effort */ }
+            } catch (e) { console.error(`[ccp] pr-watcher: remediation notify error: ${(e as Error).message}`); }
           }
         }
       } else if (remediationExists(jobId)) {
@@ -371,7 +371,7 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
         if (review.autoMergeEnabled) parts.push('Auto-merge enabled');
         if (review.blockers?.length) parts.push(`Blockers: ${review.blockers.join('; ')}`);
         sendDiscordMessage(current.discord_thread_id, parts.join('\n'));
-      } catch { /* thread message is best-effort */ }
+      } catch (e) { console.error(`[ccp] pr-watcher: thread notify error: ${(e as Error).message}`); }
     }
 
     // Post lifecycle updates to status channel
@@ -390,7 +390,7 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
             sendDiscordMessage(DISCORD_ERRORS_CHANNEL, `🔴 BLOCKED — ${ticket} | ${repoName} | ${prRef}\n${reason}`);
           }
         }
-      } catch { /* best-effort */ }
+      } catch (e) { console.error(`[ccp] pr-watcher: status channel notify error: ${(e as Error).message}`); }
     }
 
     // Only sync Linear when the PR disposition actually changed

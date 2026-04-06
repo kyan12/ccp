@@ -22,7 +22,11 @@ function ghJson(args: string[]): Record<string, unknown> {
   if (out.status !== 0) {
     throw new Error((out.stderr || out.stdout || 'gh command failed').trim());
   }
-  return JSON.parse(out.stdout || '{}');
+  try {
+    return JSON.parse(out.stdout || '{}');
+  } catch {
+    throw new Error(`gh returned invalid JSON: ${(out.stdout || '').slice(0, 200)}`);
+  }
 }
 
 interface StatusCheckItem {
