@@ -2,6 +2,7 @@
 import http = require('http');
 import fs = require('fs');
 import path = require('path');
+import { spawnSync } from 'child_process';
 import type { IntakeToLinearResult } from '../types';
 const { intakeToLinear } = require('../lib/intake-runner');
 const { loadConfig } = require('../lib/config');
@@ -105,6 +106,56 @@ function verifyVercel(req: http.IncomingMessage): boolean {
   if (!expected) return true;
   const provided = (req.headers['x-vercel-signature'] || req.headers['x-webhook-secret'] || '') as string;
   return provided === expected;
+}
+
+function ghApiJson(pathOrArgs: string | string[]): unknown {
+  const args = ['api', ...(Array.isArray(pathOrArgs) ? pathOrArgs : [pathOrArgs])];
+  const out = spawnSync('gh', args, { encoding: 'utf8' });
+  if (out.status !== 0) {
+    throw new Error((out.stderr || out.stdout || `gh ${args.join(' ')} failed`).trim());
+  }
+  return JSON.parse(out.stdout || 'null');
+}
+
+function collectPrReviewFeedback(repo: string, prNum: number): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  const push = (text: string | null | undefined): void => {
+    const normalized = String(text || '').trim();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    out.push(normalized);
+  };
+
+  const reviewComments = ghApiJson(`repos/${repo}/pulls/${prNum}/comments`) as Array<Record<string, unknown>>;
+  for (const comment of reviewComments || []) {
+    const body = String(comment?.body || '').trim();
+    if (!body) continue;
+    const author = String((comment?.user as Record<string, unknown> | undefined)?.login || 'unknown');
+    const path = String(comment?.path || '').trim();
+    const line = Number(comment?.line || comment?.original_line || 0) || null;
+    push(`review-comment ${path}${line ? `:${line}` : ''} by ${author}: ${body}`);
+  }
+
+  const reviews = ghApiJson(`repos/${repo}/pulls/${prNum}/reviews`) as Array<Record<string, unknown>>;
+  for (const review of reviews || []) {
+    const body = String(review?.body || '').trim();
+    if (!body) continue;
+    const author = String((review?.user as Record<string, unknown> | undefined)?.login || 'unknown');
+    const state = String(review?.state || '').toUpperCase();
+    push(`review ${state || 'COMMENTED'} by ${author}: ${body}`);
+  }
+
+  const issueComments = ghApiJson(`repos/${repo}/issues/${prNum}/comments`) as Array<Record<string, unknown>>;
+  for (const comment of issueComments || []) {
+    const body = String(comment?.body || '').trim();
+    if (!body) continue;
+    const author = String((comment?.user as Record<string, unknown> | undefined)?.login || 'unknown');
+    push(`issue-comment by ${author}: ${body}`);
+  }
+
+  return out;
 }
 
 // ── Dashboard & API routes ──
@@ -559,18 +610,20 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
           const { job, result: jobResult } = matchedJob;
           const packet = rj(pp(job.job_id));
           const blockerText = `${ghEvent}${reviewState ? ` ${reviewState}` : ''}${context ? ` ${context}` : ''}: ${body}`;
+          const blockers = collectPrReviewFeedback(repo, prNum);
+          if (blockers.length === 0) blockers.push(blockerText);
           const review = {
             ok: true,
             skipped: false,
             disposition: 'block',
             blockerType: 'review',
-            blockers: [blockerText],
+            blockers,
             failedChecks: [],
             merged: false,
             autoMergeEnabled: false,
           };
           const remResult = maybeEnqueueReviewRemediation(job.job_id, packet, jobResult, review);
-          process.stdout.write(`[github-webhook] review-comment remediation for ${job.job_id}: ${JSON.stringify(remResult)}\n`);
+          process.stdout.write(`[github-webhook] review-comment remediation for ${job.job_id} (${blockers.length} blockers): ${JSON.stringify(remResult)}\n`);
           json(res, 200, { ok: true, action: 'remediation-attempted', job_id: job.job_id, pr_url: prUrl, remediation: remResult });
           return;
         } catch (error) {

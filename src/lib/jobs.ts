@@ -459,13 +459,14 @@ function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result:
     base_branch: prReview.baseRefName || packet.base_branch || 'main',
     acceptance_criteria: [
       ...(packet.acceptance_criteria || []),
-      'Address the blocking PR review findings.',
+      'Address every blocking PR review finding individually, not just the first one.',
       'Push updates to the existing PR branch.',
       'Do not create a new PR.',
     ],
     verification_steps: [
       ...(packet.verification_steps || []),
       'Re-run failing checks or the closest local equivalent.',
+      'Explicitly verify each review comment is addressed in code or call out why it is not applicable.',
       'Leave the PR in a state that can pass reviewer re-check.',
     ],
     created_at: nowIso(),
