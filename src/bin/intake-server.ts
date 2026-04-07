@@ -617,6 +617,89 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         return;
       }
 
+      // ── PR review submitted → follow-up job with review feedback ──
+      if (ghEvent === 'pull_request_review' && action === 'submitted') {
+        const review = payload.review as Record<string, unknown>;
+        const pr = payload.pull_request as Record<string, unknown>;
+        const repo = (payload.repository as Record<string, unknown>)?.full_name as string || '';
+        const reviewState = (review.state as string || '').toLowerCase();
+        const reviewBody = (review.body as string) || '';
+        const prUrl = (pr.html_url as string) || '';
+        const prNum = pr.number as number;
+        const branch = (pr.head as Record<string, unknown>)?.ref as string || '';
+        const reviewer = (review.user as Record<string, unknown>)?.login as string || 'unknown';
+
+        process.stdout.write(`[github-webhook] PR review: ${reviewState} on ${repo}#${prNum} by ${reviewer}\n`);
+
+        // Only act on "changes_requested" reviews with a non-empty body
+        if (reviewState === 'changes_requested' && reviewBody.trim()) {
+          try {
+            const { listJobs: lj, readJson: rj, resultPath: rp, packetPath: pp, createJob, saveStatus: ss } = require('../lib/jobs');
+            const { findRepoMapping } = require('../lib/repos');
+            const allJobs = lj();
+
+            // Find the original job that created this PR
+            let matchedJob: { job: Record<string, unknown>; packet: Record<string, unknown> } | null = null;
+            for (const job of allJobs) {
+              try {
+                const jobResult = rj(rp(job.job_id));
+                if (jobResult.pr_url === prUrl) {
+                  const packet = rj(pp(job.job_id));
+                  matchedJob = { job, packet };
+                  break;
+                }
+              } catch { continue; }
+            }
+
+            const repoMapping = findRepoMapping({ repo });
+            if (matchedJob || repoMapping) {
+              const originalPacket = matchedJob?.packet as Record<string, unknown> | undefined;
+              const feedbackLines = reviewBody.split('\n').filter((l: string) => l.trim());
+
+              const reviewPacket = {
+                ticket_id: (originalPacket?.ticket_id as string) || `review-${repo.replace('/', '-')}-${prNum}`,
+                repo: (originalPacket?.repo as string) || repoMapping?.localPath || null,
+                repoKey: (originalPacket?.repoKey as string) || repoMapping?.key || null,
+                ownerRepo: (originalPacket?.ownerRepo as string) || repo,
+                goal: `Address PR review feedback on #${prNum}: ${feedbackLines[0] || reviewBody.slice(0, 100)}`,
+                source: 'github-review',
+                kind: 'review-feedback',
+                label: 'review',
+                review_feedback: feedbackLines,
+                working_branch: branch,
+                constraints: [
+                  `This is a follow-up to PR #${prNum} (${prUrl}).`,
+                  `Reviewer ${reviewer} requested changes.`,
+                  'Address ALL review comments. Do not close or recreate the PR — push fixes to the existing branch.',
+                ],
+                metadata: {
+                  prUrl,
+                  prNum,
+                  reviewer,
+                  reviewState,
+                  originalJobId: matchedJob?.job.job_id || null,
+                },
+              };
+
+              const jobId = createJob(reviewPacket);
+              process.stdout.write(`[github-webhook] created review-feedback job ${jobId} for ${repo}#${prNum}\n`);
+
+              if (autoStart) {
+                await runSupervisorCycle({ maxConcurrent });
+              }
+
+              json(res, 200, { ok: true, action: 'review-feedback-job-created', job_id: jobId, pr: prNum, reviewer });
+              return;
+            }
+          } catch (error) {
+            process.stderr.write(`[github-webhook] error processing PR review: ${(error as Error).message}\n`);
+          }
+        }
+
+        json(res, 200, { ok: true, action: 'ack', event: ghEvent, reviewState });
+        return;
+      }
+
       json(res, 200, { ok: true, action: 'ack', event: ghEvent });
       return;
     }

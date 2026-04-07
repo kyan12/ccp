@@ -12,6 +12,8 @@ const { reviewPr } = require('./pr-review');
 const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = require('./outage');
 const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
+const { scanRepoContext, formatContextForPrompt } = require('./repo-context');
+const { getOrCreateKnowledge, formatKnowledgeForPrompt } = require('./repo-knowledge');
 // Lazy-require to avoid circular dependency (pr-watcher imports from jobs)
 let _runPrWatcherCycle: (() => Promise<PrWatcherCycleResult>) | undefined;
 function getRunPrWatcherCycle(): () => Promise<PrWatcherCycleResult> {
@@ -331,6 +333,28 @@ function markBlocked(jobId: string, reason: string): void {
 
 function buildPrompt(packet: JobPacket): string {
   const bits: string[] = [];
+
+  // ── Repo context enrichment (CLAUDE.md, commands, knowledge) ──
+  if (packet.repo) {
+    try {
+      const ctx = scanRepoContext(packet.repo);
+      const ctxPrompt = formatContextForPrompt(ctx);
+      if (ctxPrompt) bits.push(ctxPrompt);
+
+      // Merge auto-detected commands into repo knowledge
+      const knowledge = getOrCreateKnowledge(
+        packet.repoKey || path.basename(packet.repo),
+        packet.ownerRepo || null,
+        { commands: ctx.commands, projectType: ctx.projectType, packageManager: ctx.packageManager },
+      );
+      const knowledgePrompt = formatKnowledgeForPrompt(knowledge);
+      if (knowledgePrompt) bits.push(knowledgePrompt);
+    } catch (err) {
+      appendLog(packet.job_id, `[${nowIso()}] repo-context scan failed: ${(err as Error).message}`);
+    }
+  }
+
+  // ── Task details ──
   bits.push(`Ticket: ${packet.ticket_id || 'UNTRACKED'}`);
   bits.push(`Goal: ${packet.goal || 'No goal provided'}`);
   if (packet.constraints?.length) bits.push(`Constraints:\n- ${packet.constraints.join('\n- ')}`);
@@ -341,6 +365,18 @@ function buildPrompt(packet: JobPacket): string {
     bits.push(`Verification steps (you MUST complete each step before reporting done):\n${packet.verification_steps.map((vs, i) => `${i + 1}. ${vs}`).join('\n')}`);
   }
   if (packet.review_feedback?.length) bits.push(`Review feedback to address:\n- ${packet.review_feedback.join('\n- ')}`);
+
+  // ── Coding best practices ──
+  bits.push(`## Coding Guidelines
+- Prefer minimal, focused edits. Keep changes scoped and small.
+- Follow existing conventions: mimic code style, use existing libraries, follow established patterns.
+- Before importing a library, verify it exists in package.json / requirements.txt / go.mod / Cargo.toml.
+- Place all imports at the top of files. Do not import inside functions or classes.
+- Never expose or log secrets/keys. Never commit credentials.
+- Run \`git diff\` before committing to review your changes.
+- If pre-commit hooks modify files on commit, review the changes and retry the commit once. Do not use --no-verify.`);
+
+  // ── Behavioral rules ──
   bits.push('Never ask clarifying questions. You are running non-interactively — no one will answer.');
   bits.push('If the ticket is ambiguous, investigate the codebase and make your best judgment.');
   bits.push('If truly blocked (missing credentials, broken build, etc.), exit with a clear blocker description — do not ask questions.');

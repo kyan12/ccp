@@ -9,6 +9,8 @@ import path = require('path');
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 const { loadConfig, saveConfig } = require('./config');
+const { scanRepoContext } = require('./repo-context');
+const { getOrCreateKnowledge } = require('./repo-knowledge');
 
 const execFileAsync = promisify(execFile);
 const REPOS_DIR = process.env.CCP_REPOS_DIR || path.join(process.env.HOME || '/tmp', 'repos');
@@ -101,7 +103,7 @@ export async function onboardRepo(ownerRepo: string): Promise<OnboardResult> {
     if (existingHook.stdout === '0') {
       const whResult = await run('gh', ['api', `repos/${ownerRepo}/hooks`, '--method', 'POST',
         '-f', 'name=web', '-F', 'active=true',
-        '-f', 'events[]=check_run', '-f', 'events[]=pull_request',
+        '-f', 'events[]=check_run', '-f', 'events[]=pull_request', '-f', 'events[]=pull_request_review',
         '-f', `config[url]=${webhookUrl}`, '-f', 'config[content_type]=json',
       ]);
       if (whResult.ok) {
@@ -115,6 +117,25 @@ export async function onboardRepo(ownerRepo: string): Promise<OnboardResult> {
     }
   } else {
     steps.push({ name: 'Webhook', result: 'Skipped (no CCP_FUNNEL_URL)', ok: false });
+  }
+
+  // 6. Scan repo context and bootstrap knowledge
+  try {
+    const ctx = scanRepoContext(localPath);
+    getOrCreateKnowledge(key, ownerRepo, {
+      commands: ctx.commands,
+      projectType: ctx.projectType,
+      packageManager: ctx.packageManager,
+    });
+    const detected: string[] = [];
+    if (ctx.projectType !== 'unknown') detected.push(`type=${ctx.projectType}`);
+    if (ctx.packageManager) detected.push(`pm=${ctx.packageManager}`);
+    if (ctx.commands.lint) detected.push(`lint=${ctx.commands.lint}`);
+    if (ctx.commands.test) detected.push(`test=${ctx.commands.test}`);
+    if (ctx.claudeMd) detected.push('CLAUDE.md=found');
+    steps.push({ name: 'Repo context', result: detected.length > 0 ? detected.join(', ') : 'No context detected', ok: true });
+  } catch (err) {
+    steps.push({ name: 'Repo context', result: `Failed: ${(err as Error).message.slice(0, 100)}`, ok: false });
   }
 
   console.log(`[onboard] ${ownerRepo}: ${steps.map(s => `${s.name}=${s.ok ? '✓' : '✗'}`).join(', ')}`);
