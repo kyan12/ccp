@@ -34,6 +34,8 @@ const DEFAULT_MAX_JOB_DURATION_SEC = 30 * 60;
 const DEFAULT_MAX_RETRIES = 1;
 /** Number of identical heartbeat excerpts before declaring a stuck loop */
 const STUCK_LOOP_THRESHOLD = 4;
+/** Metrics log file for tracking job outcomes */
+const METRICS_FILE: string = path.join(ROOT, 'supervisor', 'metrics.jsonl');
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -161,8 +163,49 @@ function saveStatus(jobId: string, patch: Partial<JobStatus>): JobStatus {
   }
 }
 
-function createJob(packet: JobPacket): { jobId: string; packet: JobPacket; status: JobStatus } {
+/**
+ * Check for an existing queued or running job that duplicates this packet.
+ * Matches on ticket_id or (ownerRepo + working_branch) combination.
+ * Returns the existing job's ID if found, null otherwise.
+ */
+function findDuplicateJob(packet: JobPacket): string | null {
+  const activeStates = new Set(['queued', 'preflight', 'running']);
+  const jobs = listJobs();
+  for (const job of jobs) {
+    if (!activeStates.has(job.state)) continue;
+    // Match by ticket_id (exact match, skip generic nightly tickets)
+    if (packet.ticket_id && job.ticket_id === packet.ticket_id && !packet.ticket_id.startsWith('NIGHTLY-')) {
+      return job.job_id;
+    }
+    // Match by ownerRepo + working_branch (same repo + same branch = same work)
+    if (packet.ownerRepo && packet.working_branch) {
+      try {
+        const existingPacket = readJson(packetPath(job.job_id)) as unknown as JobPacket;
+        if (existingPacket.ownerRepo === packet.ownerRepo && existingPacket.working_branch === packet.working_branch) {
+          return job.job_id;
+        }
+      } catch { /* skip unreadable packets */ }
+    }
+  }
+  return null;
+}
+
+function createJob(packet: JobPacket): { jobId: string; packet: JobPacket; status: JobStatus; deduplicated?: boolean } {
   ensureDir(JOBS_DIR);
+
+  // ── Deduplication guard ──
+  // Skip dedup for retry jobs (they have a deliberate _retryN suffix)
+  const isRetry = (packet.retryCount ?? 0) > 0;
+  if (!isRetry) {
+    const existingId = findDuplicateJob(packet);
+    if (existingId) {
+      const existingStatus = loadStatus(existingId);
+      const existingPacket = readJson(packetPath(existingId)) as unknown as JobPacket;
+      appendLog(existingId, `[${nowIso()}] duplicate job creation blocked (incoming ticket: ${packet.ticket_id || 'none'})`);
+      return { jobId: existingId, packet: existingPacket, status: existingStatus, deduplicated: true };
+    }
+  }
+
   const jobId = packet.job_id || makeJobId();
   const dir = jobDir(jobId);
   ensureDir(dir);
@@ -1027,7 +1070,111 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     }
   }
 
+  // ── Record job metrics ──
+  recordJobMetrics(jobId, packet, finalState, exitCode, elapsed);
+
   return { ok: true, state: finalState, exitCode, result, linear };
+}
+
+/**
+ * Append a structured metrics entry for a completed job.
+ * Written as newline-delimited JSON (JSONL) for easy aggregation.
+ */
+function recordJobMetrics(
+  jobId: string, packet: JobPacket, finalState: string, exitCode: number, elapsedSec: number,
+): void {
+  try {
+    ensureDir(path.dirname(METRICS_FILE));
+    const entry = {
+      job_id: jobId,
+      ticket_id: packet.ticket_id || null,
+      repo: packet.repoKey || (packet.repo ? path.basename(packet.repo) : null),
+      ownerRepo: packet.ownerRepo || null,
+      state: finalState,
+      exit_code: exitCode,
+      elapsed_sec: elapsedSec,
+      priority: packet.priority ?? 3,
+      kind: packet.kind || 'unknown',
+      source: packet.source || 'unknown',
+      is_retry: (packet.retryCount ?? 0) > 0,
+      retry_count: packet.retryCount ?? 0,
+      had_worktree: !!packet.repo,
+      timestamp: new Date().toISOString(),
+    };
+    fs.appendFileSync(METRICS_FILE, JSON.stringify(entry) + '\n');
+  } catch (err) {
+    // Metrics are best-effort — never fail a job over a metrics write error
+    console.error(`[ccp] metrics write failed for ${jobId}: ${(err as Error).message}`);
+  }
+}
+
+/**
+ * Read and aggregate job metrics from the JSONL file.
+ */
+function aggregateMetrics(options?: { sinceDays?: number }): Record<string, unknown> {
+  const sinceDays = options?.sinceDays ?? 7;
+  const cutoff = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString();
+  const entries: Array<Record<string, unknown>> = [];
+
+  try {
+    if (!fs.existsSync(METRICS_FILE)) return { entries: 0, period_days: sinceDays };
+    const lines = fs.readFileSync(METRICS_FILE, 'utf8').split('\n').filter(Boolean);
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.timestamp >= cutoff) entries.push(entry);
+      } catch { /* skip malformed lines */ }
+    }
+  } catch { return { entries: 0, period_days: sinceDays }; }
+
+  const total = entries.length;
+  if (total === 0) return { entries: 0, period_days: sinceDays };
+
+  const byState: Record<string, number> = {};
+  const byRepo: Record<string, { total: number; success: number; failed: number; avgDuration: number; durations: number[] }> = {};
+  let totalDuration = 0;
+  let successCount = 0;
+  let failedCount = 0;
+  let retryCount = 0;
+
+  for (const e of entries) {
+    const state = e.state as string;
+    const repo = (e.repo as string) || 'unknown';
+    const duration = (e.elapsed_sec as number) || 0;
+    const isSuccess = state === 'coded' || state === 'done' || state === 'verified';
+    const isFailed = state === 'blocked' || state === 'failed';
+
+    byState[state] = (byState[state] || 0) + 1;
+    totalDuration += duration;
+    if (isSuccess) successCount++;
+    if (isFailed) failedCount++;
+    if (e.is_retry) retryCount++;
+
+    if (!byRepo[repo]) byRepo[repo] = { total: 0, success: 0, failed: 0, avgDuration: 0, durations: [] };
+    byRepo[repo].total++;
+    byRepo[repo].durations.push(duration);
+    if (isSuccess) byRepo[repo].success++;
+    if (isFailed) byRepo[repo].failed++;
+  }
+
+  // Compute per-repo average durations
+  for (const repo of Object.keys(byRepo)) {
+    const d = byRepo[repo].durations;
+    byRepo[repo].avgDuration = Math.round(d.reduce((a, b) => a + b, 0) / d.length);
+    delete (byRepo[repo] as Record<string, unknown>).durations;
+  }
+
+  return {
+    period_days: sinceDays,
+    total_jobs: total,
+    success_count: successCount,
+    failed_count: failedCount,
+    retry_count: retryCount,
+    success_rate: total > 0 ? Math.round((successCount / total) * 100) : 0,
+    avg_duration_sec: total > 0 ? Math.round(totalDuration / total) : 0,
+    by_state: byState,
+    by_repo: byRepo,
+  };
 }
 
 /**
@@ -1600,6 +1747,65 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
 const TERMINAL_STATES = new Set(['done', 'verified', 'blocked', 'failed', 'coded']);
 const ARCHIVE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * Recover orphaned jobs — called on supervisor startup.
+ * Scans all jobs in 'running' state, checks if their tmux sessions are alive,
+ * and immediately finalizes any with dead sessions. Also cleans up orphaned worktrees.
+ */
+async function recoverOrphanedJobs(): Promise<string[]> {
+  const jobs = listJobs();
+  const running = jobs.filter(j => j.state === 'running');
+  const recovered: string[] = [];
+
+  for (const job of running) {
+    if (!tmuxSessionAlive(job.tmux_session)) {
+      appendLog(job.job_id, `[${nowIso()}] ORPHAN RECOVERY: tmux session dead on supervisor startup — finalizing`);
+      try {
+        await finalizeJob(job.job_id);
+        recovered.push(job.job_id);
+      } catch (err) {
+        appendLog(job.job_id, `[${nowIso()}] ORPHAN RECOVERY failed: ${(err as Error).message}`);
+        // Mark blocked so it doesn't stay stuck in 'running' forever
+        markBlocked(job.job_id, `orphan recovery failed: ${(err as Error).message}`);
+        recovered.push(job.job_id);
+      }
+    }
+  }
+
+  // Clean up any leftover worktree directories from /tmp/ccp-worktrees/
+  const worktreeBase = '/tmp/ccp-worktrees';
+  if (fs.existsSync(worktreeBase)) {
+    try {
+      for (const dir of fs.readdirSync(worktreeBase)) {
+        const worktreePath = path.join(worktreeBase, dir);
+        // If this worktree's job is not running, it's orphaned
+        const ownerJob = jobs.find(j => j.worktree_path === worktreePath && j.state === 'running');
+        if (!ownerJob) {
+          // Find the repo path for git worktree remove
+          try {
+            const gitDir = path.join(worktreePath, '.git');
+            if (fs.existsSync(gitDir)) {
+              const gitContent = fs.readFileSync(gitDir, 'utf8');
+              const mainWorktreeMatch = gitContent.match(/gitdir:\s*(.+)\/\.git\/worktrees\//);
+              if (mainWorktreeMatch) {
+                const repoPath = mainWorktreeMatch[1];
+                removeJobWorktree(repoPath, worktreePath);
+                continue;
+              }
+            }
+          } catch { /* fall through to rm */ }
+          // Fallback: just remove the directory
+          fs.rmSync(worktreePath, { recursive: true, force: true });
+        }
+      }
+    } catch (err) {
+      console.error(`[ccp] orphan worktree cleanup error: ${(err as Error).message}`);
+    }
+  }
+
+  return recovered;
+}
+
 function archiveOldJobs(): string[] {
   ensureDir(JOBS_DIR);
   const archiveDir = path.join(JOBS_DIR, 'archived');
@@ -1697,6 +1903,8 @@ module.exports = {
   createDiscordThread,
   sendToThread,
   removeJobWorktree,
+  recoverOrphanedJobs,
+  aggregateMetrics,
 };
 
 export {
@@ -1730,4 +1938,6 @@ export {
   createDiscordThread,
   sendToThread,
   removeJobWorktree,
+  recoverOrphanedJobs,
+  aggregateMetrics,
 };

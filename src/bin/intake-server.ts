@@ -6,7 +6,7 @@ import type { IntakeToLinearResult } from '../types';
 const { intakeToLinear } = require('../lib/intake-runner');
 const { loadConfig } = require('../lib/config');
 const { getSecret } = require('../lib/secrets');
-const { listJobs, jobsByState, loadStatus, readJson, healthCheck, packetPath, resultPath, jobDir } = require('../lib/jobs');
+const { listJobs, jobsByState, loadStatus, readJson, healthCheck, packetPath, resultPath, jobDir, aggregateMetrics } = require('../lib/jobs');
 
 const port: number = Number(process.env.CCP_INTAKE_PORT || 4318);
 const vercelCfg = loadConfig('vercel', {});
@@ -212,6 +212,15 @@ function handleGetHealth(res: http.ServerResponse): void {
   }
 }
 
+function handleGetMetrics(url: URL, res: http.ServerResponse): void {
+  try {
+    const sinceDays = Number(url.searchParams.get('days') || 7);
+    json(res, 200, aggregateMetrics({ sinceDays }));
+  } catch (err) {
+    json(res, 500, { ok: false, error: (err as Error).message });
+  }
+}
+
 function handleGetStats(res: http.ServerResponse): void {
   try {
     const buckets = jobsByState();
@@ -327,6 +336,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       if (url.pathname === '/api/jobs') { handleGetJobs(url, res); return; }
       if (url.pathname === '/api/health') { handleGetHealth(res); return; }
       if (url.pathname === '/api/stats') { handleGetStats(res); return; }
+      if (url.pathname === '/api/metrics') { handleGetMetrics(url, res); return; }
       if (url.pathname === '/api/repos') { handleGetRepos(res); return; }
       if (url.pathname === '/api/scheduling') { handleGetScheduling(res); return; }
       if (url.pathname === '/api/events') { handleSSE(res); return; }
