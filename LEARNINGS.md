@@ -328,3 +328,40 @@ errors are logged to stderr and the loop continues.
   because it fires at fixed intervals regardless of execution time. Always use sequential
   `setTimeout` scheduling (schedule-after-completion) for daemon-style loops.
 
+## 2026-04-07 — Nightly Review
+
+### Bug Fixed: Silent catch blocks in linear-dispatch.ts and linear.ts, unguarded JSON.parse in nightly-compound.ts
+
+Three issues found and fixed:
+
+1. **`linear-dispatch.ts:92` silent catch** — `listDispatchCandidates()` iterated over Linear
+   orgs and swallowed all errors with `catch (_err) { // skip orgs that fail }`. If a Linear
+   org's API was misconfigured or returning errors, the failure was completely invisible. Fixed:
+   logs error to stderr with the org key, matching the project convention from 58af809.
+
+2. **`linear.ts:272` silent catch** — `ensureLabel()` swallowed label creation failures with
+   `catch (_error) { return null; }`. If the Linear API was down or permissions changed, label
+   creation would silently fail with no trace in logs. Fixed: logs error to stderr with the
+   label name.
+
+3. **`nightly-compound.ts:14` unguarded `JSON.parse`** — `loadRepos()` parsed `repos.json`
+   without error handling. A corrupted or partially-written repos file would crash the entire
+   nightly dispatch process, preventing all nightly jobs from running. Fixed: returns
+   `{ mappings: [] }` on parse error with a log message, matching the resilience pattern from
+   config.ts (52691ec).
+
+### Code Health Observations
+
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+- **Open PRs**: PR #18 (harden ghJson + pr-watcher silent catches), PR #19 (repo context
+  enrichment), PR #21 (worktree isolation + priority queue) are all open and mergeable.
+  Consider merging #18 first as it's a small bug fix.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Ten consecutive reviews, each identifying and resolving issues.
+  The identify → fix → verify loop continues to work effectively.
+- **Silent catch elimination is ongoing**: New code (notifications, Linear dispatch) continues
+  to introduce silent catches. Every review should scan for `catch` blocks without logging.
+

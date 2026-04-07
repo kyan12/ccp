@@ -269,7 +269,8 @@ async function ensureLabel(name: string, orgKey?: string | null): Promise<string
       orgKey,
     ) as Record<string, unknown>;
     return ((created?.issueLabelCreate as Record<string, unknown>)?.issueLabel as Record<string, unknown>)?.id as string || null;
-  } catch (_error) {
+  } catch (error) {
+    console.error(`[ccp] linear: failed to ensure label "${name}":`, error);
     return null;
   }
 }
