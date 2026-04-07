@@ -340,6 +340,10 @@ async function dispatchLinearIssues(): Promise<DispatchResult[]> {
       continue;
     }
     const created = createJob(packet);
+    if (created.deduplicated) {
+      out.push({ identifier: issue.identifier, job_id: created.jobId, skipped: true, reason: 'deduplicated — active job already exists' });
+      continue;
+    }
     state.dispatchedIssueIds[issue.id] = {
       identifier: issue.identifier,
       job_id: created.jobId,
