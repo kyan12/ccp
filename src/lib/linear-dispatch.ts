@@ -89,8 +89,8 @@ async function listDispatchCandidates(): Promise<LinearDispatchIssue[]> {
         issue._orgKey = orgKey;
       }
       allIssues.push(...issues);
-    } catch (_err) {
-      // skip orgs that fail
+    } catch (err) {
+      console.error(`[ccp] linear-dispatch: failed to list issues for org "${orgKey}":`, err);
     }
   }
   return allIssues;

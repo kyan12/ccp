@@ -11,7 +11,12 @@ const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(__dirname, '
 const REPOS_FILE: string = path.join(ROOT, 'configs', 'repos.json');
 
 function loadRepos(): { mappings: RepoMapping[] } {
-  return JSON.parse(fs.readFileSync(REPOS_FILE, 'utf8'));
+  try {
+    return JSON.parse(fs.readFileSync(REPOS_FILE, 'utf8'));
+  } catch (err) {
+    console.error(`[ccp] nightly-compound: failed to read/parse ${REPOS_FILE}:`, err);
+    return { mappings: [] };
+  }
 }
 
 function buildCompoundPrompt(repo: RepoMapping): string {
