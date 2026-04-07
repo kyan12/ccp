@@ -13,8 +13,7 @@ const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = re
 const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
 const { scanRepoContext, formatContextForPrompt } = require('./repo-context');
-const { getOrCreateKnowledge, formatKnowledgeForPrompt, addKnownIssue, addNote, loadKnowledge, saveKnowledge } = require('./repo-knowledge');
-import type { RepoKnowledge } from './repo-knowledge';
+const { getOrCreateKnowledge, formatKnowledgeForPrompt, loadKnowledge, saveKnowledge } = require('./repo-knowledge');
 const { findRepoByPath } = require('./repos');
 // Lazy-require to avoid circular dependency (pr-watcher imports from jobs)
 let _runPrWatcherCycle: (() => Promise<PrWatcherCycleResult>) | undefined;
@@ -1015,11 +1014,11 @@ function extractAndPersistKnowledge(repoKey: string, logText: string, finalState
   if (!knowledge) return;
 
   // 1. Detect command corrections — worker found a different command than what we auto-detected
-  const commandCorrections: Array<{ key: string; pattern: RegExp; extract: RegExp }> = [
-    { key: 'lint', pattern: /(?:lint command|linting)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i, extract: /([a-z]+ (?:run )?[a-z:_-]+)/i },
-    { key: 'typecheck', pattern: /(?:typecheck|type.?check)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i, extract: /([a-z]+ (?:run )?[a-z:_-]+)/i },
-    { key: 'test', pattern: /(?:running tests|test command)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i, extract: /([a-z]+ (?:run )?[a-z:_-]+)/i },
-    { key: 'build', pattern: /(?:build command|building)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i, extract: /([a-z]+ (?:run )?[a-z:_-]+)/i },
+  const commandCorrections: Array<{ key: string; pattern: RegExp }> = [
+    { key: 'lint', pattern: /(?:lint command|linting)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i },
+    { key: 'typecheck', pattern: /(?:typecheck|type.?check)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i },
+    { key: 'test', pattern: /(?:running tests|test command)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i },
+    { key: 'build', pattern: /(?:build command|building)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i },
   ];
 
   // Only look at the last portion of the log to avoid false positives from prompts
