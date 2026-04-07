@@ -788,9 +788,11 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   }, proof);
   const finalState = inferredBlocker ? 'blocked' : provisionalState;
 
-  // If the job is blocked due to dirty repo state, clean it up immediately so
-  // subsequent jobs don't inherit dirty working tree (e.g. from API 500 mid-run)
-  if (finalState === 'blocked' && proof.dirty && proofPath) {
+  // If the job is blocked due to dirty repo state, clean it up.
+  // For worktree jobs, skip cleanRepoIfDirty (it tries `git checkout main` which fails in worktrees)
+  // — the worktree will be deleted entirely in the cleanup step below.
+  // For shared-clone jobs, clean up so subsequent jobs don't inherit dirty state.
+  if (finalState === 'blocked' && proof.dirty && proofPath && !status.worktree_path) {
     const cleanResult = cleanRepoIfDirty(proofPath, proof);
     appendLog(jobId, `[${nowIso()}] repo cleanup: ${cleanResult}`);
   }
@@ -1499,17 +1501,20 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
   const activeRunning = refreshed.filter((job) => job.state === 'running');
   const capacity = Math.max(0, maxConcurrent - activeRunning.length);
   // Sort queued jobs by priority (lower number = higher priority) then by timestamp (FIFO within same priority)
-  const queued = refreshed
-    .filter((job) => job.state === 'queued')
-    .sort((a, b) => {
-      // Read packet to get priority; default to 3 (normal)
-      let aPri = 3;
-      let bPri = 3;
-      try { aPri = (readJson(packetPath(a.job_id)) as unknown as JobPacket).priority ?? 3; } catch { /* default */ }
-      try { bPri = (readJson(packetPath(b.job_id)) as unknown as JobPacket).priority ?? 3; } catch { /* default */ }
-      if (aPri !== bPri) return aPri - bPri;
-      return a.updated_at > b.updated_at ? 1 : -1;
-    });
+  const queued = refreshed.filter((job) => job.state === 'queued');
+  // Pre-compute priorities in a single O(n) pass to avoid redundant disk reads inside the comparator
+  const priorityMap = new Map<string, number>();
+  for (const job of queued) {
+    let pri = 3;
+    try { pri = (readJson(packetPath(job.job_id)) as unknown as JobPacket).priority ?? 3; } catch { /* default */ }
+    priorityMap.set(job.job_id, pri);
+  }
+  queued.sort((a, b) => {
+    const aPri = priorityMap.get(a.job_id) ?? 3;
+    const bPri = priorityMap.get(b.job_id) ?? 3;
+    if (aPri !== bPri) return aPri - bPri;
+    return a.updated_at > b.updated_at ? 1 : -1;
+  });
 
   // Build set of repos that already have a running job (for per-repo serial enforcement)
   const busyRepos = new Set<string>();
