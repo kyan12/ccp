@@ -2,7 +2,7 @@ import fs = require('fs');
 import path = require('path');
 import { spawnSync } from 'child_process';
 import type { JobStatus, JobResult, JobPacket, PRReviewResult, PrWatcherCycleResult, RunResult } from '../types';
-const { reviewPr } = require('./pr-review');
+const { reviewPr, fetchPrComments, formatPrCommentsForPrompt } = require('./pr-review');
 const {
   JOBS_DIR,
   listJobs,
@@ -313,8 +313,22 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
       }
 
       if (remediationEnabled() && !remediationExists(jobId)) {
+        // Fetch actual review comments to include in remediation job
+        let reviewCommentsFeedback: string[] = [];
+        if (review.blockerType === 'review' && result.pr_url) {
+          try {
+            const commentsSummary = fetchPrComments(result.pr_url);
+            if (commentsSummary.ok && commentsSummary.comments.length) {
+              const formatted = formatPrCommentsForPrompt(commentsSummary.comments);
+              if (formatted) reviewCommentsFeedback = formatted.split('\n');
+              appendLog(jobId, `[${nowIso()}] pr-watcher: fetched ${commentsSummary.comments.length} review comments for remediation`);
+            }
+          } catch (err) {
+            appendLog(jobId, `[${nowIso()}] pr-watcher: failed to fetch review comments: ${(err as Error).message}`);
+          }
+        }
         const { maybeEnqueueReviewRemediation } = require('./jobs');
-        const remResult = maybeEnqueueReviewRemediation(jobId, packet, result, review);
+        const remResult = maybeEnqueueReviewRemediation(jobId, packet, result, review, reviewCommentsFeedback);
         entry.remediation = remResult;
         if (remResult.ok && !remResult.skipped) {
           entry.action = 'remediation-enqueued';

@@ -682,6 +682,20 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
               const originalPacket = matchedJob?.packet as Record<string, unknown> | undefined;
               const feedbackLines = reviewBody.split('\n').filter((l: string) => l.trim());
 
+              // Fetch inline code comments for richer context
+              let inlineCommentLines: string[] = [];
+              try {
+                const { fetchPrComments, formatPrCommentsForPrompt } = require('../lib/pr-review');
+                const commentsSummary = fetchPrComments(prUrl);
+                if (commentsSummary.ok && commentsSummary.comments.length) {
+                  const formatted = formatPrCommentsForPrompt(commentsSummary.comments);
+                  if (formatted) inlineCommentLines = formatted.split('\n');
+                  process.stdout.write(`[github-webhook] fetched ${commentsSummary.comments.length} PR comments for review-feedback job\n`);
+                }
+              } catch (commentErr) {
+                process.stdout.write(`[github-webhook] failed to fetch PR comments: ${(commentErr as Error).message}\n`);
+              }
+
               const reviewPacket = {
                 ticket_id: (originalPacket?.ticket_id as string) || `review-${repo.replace('/', '-')}-${prNum}`,
                 repo: (originalPacket?.repo as string) || repoMapping?.localPath || null,
@@ -692,7 +706,10 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
                 kind: 'review-feedback',
                 label: 'review',
                 priority: 2, // Review feedback is high priority
-                review_feedback: feedbackLines,
+                review_feedback: [
+                  ...feedbackLines,
+                  ...(inlineCommentLines.length ? ['', '--- All PR Comments (with file/line context) ---', ...inlineCommentLines] : []),
+                ],
                 working_branch: branch,
                 constraints: [
                   `This is a follow-up to PR #${prNum} (${prUrl}).`,
