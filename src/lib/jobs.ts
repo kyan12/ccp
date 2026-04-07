@@ -1784,13 +1784,16 @@ async function recoverOrphanedJobs(): Promise<string[]> {
   }
 
   // Clean up any leftover worktree directories from /tmp/ccp-worktrees/
+  // Re-read jobs from disk since recovery loop may have changed states
+  const recoveredSet = new Set(recovered);
+  const freshJobs = listJobs();
   const worktreeBase = '/tmp/ccp-worktrees';
   if (fs.existsSync(worktreeBase)) {
     try {
       for (const dir of fs.readdirSync(worktreeBase)) {
         const worktreePath = path.join(worktreeBase, dir);
-        // If this worktree's job is not running, it's orphaned
-        const ownerJob = jobs.find(j => j.worktree_path === worktreePath && j.state === 'running');
+        // If this worktree's job is not running (or was just recovered), it's orphaned
+        const ownerJob = freshJobs.find(j => j.worktree_path === worktreePath && j.state === 'running' && !recoveredSet.has(j.job_id));
         if (!ownerJob) {
           // Find the repo path for git worktree remove
           try {
