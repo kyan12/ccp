@@ -582,7 +582,9 @@ function parseSummary(logText: string): Record<string, string> {
   const fields: Record<string, string> = {};
 
   // Prefer structured sentinel block if present — much more reliable than scanning the full log
-  const sentinelMatch = logText.match(/CCP_SUMMARY_BEGIN\s*\n([\s\S]*?)\nCCP_SUMMARY_END/);
+  // Use matchAll + take last match to preserve 'last match wins' behavior if worker outputs multiple blocks
+  const allSentinelMatches = [...logText.matchAll(/CCP_SUMMARY_BEGIN\s*\n([\s\S]*?)\nCCP_SUMMARY_END/g)];
+  const sentinelMatch = allSentinelMatches.length ? allSentinelMatches[allSentinelMatches.length - 1] : null;
   const searchText = sentinelMatch ? sentinelMatch[1] : logText;
 
   for (const key of ['State', 'Commit', 'Prod', 'Verified', 'Blocker', 'Risk', 'Summary']) {
@@ -1259,7 +1261,8 @@ function createJobWorktree(jobId: string, repoPath: string, branch: string | nul
       if (wt.status !== 0) return null;
       // Create a local tracking branch inside the worktree
       const gitWt = (args: string[]) => run('git', ['-C', worktreePath, ...args]);
-      gitWt(['checkout', '-B', branch, `origin/${branch}`]);
+      const checkoutResult = gitWt(['checkout', '-B', branch, `origin/${branch}`]);
+      if (checkoutResult.status !== 0) return null;
     } else {
       // For new jobs, create worktree from origin/main in detached HEAD.
       // We intentionally leave it detached — checking out 'main' would fail because
