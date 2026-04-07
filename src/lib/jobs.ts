@@ -1262,7 +1262,11 @@ function createJobWorktree(jobId: string, repoPath: string, branch: string | nul
       // Create a local tracking branch inside the worktree
       const gitWt = (args: string[]) => run('git', ['-C', worktreePath, ...args]);
       const checkoutResult = gitWt(['checkout', '-B', branch, `origin/${branch}`]);
-      if (checkoutResult.status !== 0) return null;
+      if (checkoutResult.status !== 0) {
+        // Clean up the worktree we just created before returning null
+        try { run('git', ['-C', repoPath, 'worktree', 'remove', '--force', worktreePath]); } catch { /* best-effort */ }
+        return null;
+      }
     } else {
       // For new jobs, create worktree from origin/main in detached HEAD.
       // We intentionally leave it detached — checking out 'main' would fail because
