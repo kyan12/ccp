@@ -554,6 +554,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
                 repoKey: repoMapping.key,
                 kind: 'ci-failure',
                 label: 'deploy',
+                priority: 2, // CI failures are high priority
                 metadata: { checkName, branch, sha, prUrl, detailsUrl, prNum },
               }, { autoDispatch, autoStart, maxConcurrent });
               json(res, 200, { ok: true, action: 'incident-created', ...incidentResult });
@@ -665,6 +666,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
                 source: 'github-review',
                 kind: 'review-feedback',
                 label: 'review',
+                priority: 2, // Review feedback is high priority
                 review_feedback: feedbackLines,
                 working_branch: branch,
                 constraints: [
