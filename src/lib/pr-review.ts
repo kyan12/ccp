@@ -318,7 +318,8 @@ function formatPrCommentsForPrompt(comments: PrReviewComment[], maxChars: number
       parts.push(`\n**${filePath}**`);
       for (const c of fileComments) {
         const loc = c.line ? `:${c.line}` : '';
-        parts.push(`- [${c.author}] at \`${filePath}${loc}\`: ${c.body}`);
+        const bodyOneLine = c.body.replace(/\n+/g, ' ').trim();
+        parts.push(`- [${c.author}] at \`${filePath}${loc}\`: ${bodyOneLine}`);
       }
     }
   }
@@ -332,7 +333,8 @@ function formatPrCommentsForPrompt(comments: PrReviewComment[], maxChars: number
     parts.push('### General Review Comments');
     for (const c of actionableGeneral) {
       const stateTag = c.state ? ` (${c.state})` : '';
-      parts.push(`- [${c.author}${stateTag}]: ${c.body}`);
+      const bodyOneLine = c.body.replace(/\n+/g, ' ').trim();
+      parts.push(`- [${c.author}${stateTag}]: ${bodyOneLine}`);
     }
   }
 
