@@ -171,7 +171,7 @@ function main(): void {
 
         const payload = JSON.stringify({
           name: 'web', active: true,
-          events: ['check_run', 'pull_request'],
+          events: ['check_run', 'pull_request', 'pull_request_review', 'pull_request_review_comment', 'issue_comment'],
           config: { url: webhookUrl, content_type: 'json' }
         });
 

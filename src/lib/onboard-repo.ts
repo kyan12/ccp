@@ -102,6 +102,8 @@ export async function onboardRepo(ownerRepo: string): Promise<OnboardResult> {
       const whResult = await run('gh', ['api', `repos/${ownerRepo}/hooks`, '--method', 'POST',
         '-f', 'name=web', '-F', 'active=true',
         '-f', 'events[]=check_run', '-f', 'events[]=pull_request',
+        '-f', 'events[]=pull_request_review', '-f', 'events[]=pull_request_review_comment',
+        '-f', 'events[]=issue_comment',
         '-f', `config[url]=${webhookUrl}`, '-f', 'config[content_type]=json',
       ]);
       if (whResult.ok) {

@@ -496,6 +496,90 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       const ghEvent = (req.headers['x-github-event'] || '') as string;
       const action = (payload.action || '') as string;
 
+      if (
+        (ghEvent === 'pull_request_review_comment' && action === 'created') ||
+        (ghEvent === 'pull_request_review' && action === 'submitted') ||
+        (ghEvent === 'issue_comment' && action === 'created')
+      ) {
+        try {
+          const repo = (payload.repository as Record<string, unknown>)?.full_name as string || '';
+
+          let prNum: number | null = null;
+          let body = '';
+          let context = '';
+          let reviewState = '';
+
+          if (ghEvent === 'pull_request_review_comment') {
+            const comment = payload.comment as Record<string, unknown>;
+            const pr = payload.pull_request as Record<string, unknown>;
+            prNum = Number(pr?.number || 0) || null;
+            body = String(comment?.body || '').trim();
+            const path = String(comment?.path || '').trim();
+            const line = Number(comment?.line || comment?.original_line || 0) || null;
+            context = `${path}${line ? `:${line}` : ''}`;
+          } else if (ghEvent === 'pull_request_review') {
+            const review = payload.review as Record<string, unknown>;
+            const pr = payload.pull_request as Record<string, unknown>;
+            prNum = Number(pr?.number || 0) || null;
+            body = String(review?.body || '').trim();
+            reviewState = String(review?.state || '').toUpperCase();
+          } else if (ghEvent === 'issue_comment') {
+            const issue = payload.issue as Record<string, unknown>;
+            const comment = payload.comment as Record<string, unknown>;
+            if (issue?.pull_request) {
+              prNum = Number(issue?.number || 0) || null;
+              body = String(comment?.body || '').trim();
+            }
+          }
+
+          if (!repo || !prNum || !body) {
+            json(res, 200, { ok: true, action: 'ack', event: ghEvent, reason: 'missing-pr-or-body' });
+            return;
+          }
+
+          const prUrl = `https://github.com/${repo}/pull/${prNum}`;
+          process.stdout.write(`[github-webhook] ${ghEvent}:${action} on ${prUrl}${context ? ` (${context})` : ''}\n`);
+
+          const { listJobs: lj, readJson: rj, resultPath: rp, packetPath: pp, maybeEnqueueReviewRemediation } = require('../lib/jobs');
+          const allJobs = lj();
+
+          let matchedJob: { job: Record<string, unknown>; result: Record<string, unknown> } | null = null;
+          for (const job of allJobs) {
+            try {
+              const jobResult = rj(rp(job.job_id));
+              if (jobResult.pr_url === prUrl) { matchedJob = { job, result: jobResult }; break; }
+            } catch { continue; }
+          }
+
+          if (!matchedJob) {
+            json(res, 200, { ok: true, action: 'ack', event: ghEvent, pr_url: prUrl, tracked: false });
+            return;
+          }
+
+          const { job, result: jobResult } = matchedJob;
+          const packet = rj(pp(job.job_id));
+          const blockerText = `${ghEvent}${reviewState ? ` ${reviewState}` : ''}${context ? ` ${context}` : ''}: ${body}`;
+          const review = {
+            ok: true,
+            skipped: false,
+            disposition: 'block',
+            blockerType: 'review',
+            blockers: [blockerText],
+            failedChecks: [],
+            merged: false,
+            autoMergeEnabled: false,
+          };
+          const remResult = maybeEnqueueReviewRemediation(job.job_id, packet, jobResult, review);
+          process.stdout.write(`[github-webhook] review-comment remediation for ${job.job_id}: ${JSON.stringify(remResult)}\n`);
+          json(res, 200, { ok: true, action: 'remediation-attempted', job_id: job.job_id, pr_url: prUrl, remediation: remResult });
+          return;
+        } catch (error) {
+          process.stderr.write(`[github-webhook] error processing ${ghEvent}: ${(error as Error).message}\n`);
+          json(res, 200, { ok: false, action: 'ack', event: ghEvent, error: (error as Error).message });
+          return;
+        }
+      }
+
       if (ghEvent === 'check_run' && action === 'completed' && (payload.check_run as Record<string, unknown>)?.conclusion === 'failure') {
         const cr = payload.check_run as Record<string, unknown>;
         const repo = (payload.repository as Record<string, unknown>)?.full_name as string || '';
