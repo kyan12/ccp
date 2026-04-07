@@ -426,7 +426,19 @@ function buildPrompt(packet: JobPacket): string {
   if (packet.verification_steps?.length) {
     bits.push(`Verification steps (you MUST complete each step before reporting done):\n${packet.verification_steps.map((vs, i) => `${i + 1}. ${vs}`).join('\n')}`);
   }
-  if (packet.review_feedback?.length) bits.push(`Review feedback to address:\n- ${packet.review_feedback.join('\n- ')}`);
+  if (packet.review_feedback?.length) {
+    bits.push(`Review feedback to address:\n- ${packet.review_feedback.join('\n- ')}`);
+    // Add review-specific instructions for review-feedback/remediation jobs
+    if (packet.kind === 'review-feedback' || packet.kind === 'bug') {
+      bits.push(`## Addressing Review Comments
+- Read EVERY review comment carefully, especially inline comments with file/line references.
+- For each inline comment, navigate to the exact file and line mentioned, understand the concern, and fix it.
+- After fixing all comments, run the project's lint/test/build commands to verify nothing is broken.
+- Use \`gh pr view <number> --repo <owner/repo> --comments\` to read the latest PR comments if you need more context.
+- Push all fixes to the existing PR branch. Do NOT create a new PR.
+- If a comment is a question rather than a change request, address it in your commit message or as a code comment.`);
+    }
+  }
 
   // ── Coding best practices ──
   bits.push(`## Coding Guidelines
@@ -527,7 +539,7 @@ function maybeReviewPr(jobId: string, result: JobResult): PRReviewResult & { ski
   }
 }
 
-function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result: JobResult, prReview: PRReviewResult & { skipped?: boolean }): RemediationResult {
+function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result: JobResult, prReview: PRReviewResult & { skipped?: boolean }, reviewComments: string[] = []): RemediationResult {
   const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
   if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
   if (/__deployfix|__reviewfix/.test(jobId)) return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
@@ -548,6 +560,8 @@ function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result:
     prReview.blockerType === 'deploy'
       ? 'Investigate the deployment/platform failure, fix anything code-side that can resolve it, and push updates to the same branch. If the issue is definitely external/platform-only, leave a precise blocker note with the exact failing service and URL.'
       : 'Fix the blocking PR issues on the existing branch, push updates to the same branch, and do not create a new PR.',
+    // Include actual review comments fetched from GitHub (if available)
+    ...(reviewComments.length ? ['', '--- Reviewer Comments ---', ...reviewComments] : []),
   ];
   const remediationPacket: JobPacket = {
     ...packet,

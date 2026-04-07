@@ -173,10 +173,184 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }: { prUrl:
   return result;
 }
 
+// ── PR review comment types ──
+
+interface PrReviewComment {
+  author: string;
+  body: string;
+  path: string | null;
+  line: number | null;
+  side: string | null;
+  createdAt: string;
+  state: string | null;
+}
+
+interface PrCommentsSummary {
+  ok: boolean;
+  comments: PrReviewComment[];
+  error?: string;
+}
+
+/**
+ * Fetch all review comments on a PR (inline code comments + top-level review bodies).
+ * Uses `gh api` to get both review-level bodies and inline file comments.
+ * Returns structured data with file/line context for inline comments.
+ */
+function fetchPrComments(prUrl: string): PrCommentsSummary {
+  const ref = parsePrUrl(prUrl);
+  if (!ref) return { ok: false, comments: [], error: 'invalid PR URL' };
+
+  const gh = commandExists('gh') || 'gh';
+  const comments: PrReviewComment[] = [];
+
+  // 1. Fetch top-level review bodies (the summary comment when submitting a review)
+  try {
+    const reviewsOut = run(gh, [
+      'api', `repos/${ref.ownerRepo}/pulls/${ref.number}/reviews`,
+      '--paginate', '--jq',
+      '.[] | {author: .user.login, body: .body, state: .state, createdAt: .submitted_at}',
+    ]);
+    if (reviewsOut.status === 0 && reviewsOut.stdout.trim()) {
+      for (const line of reviewsOut.stdout.trim().split('\n')) {
+        try {
+          const r = JSON.parse(line);
+          if (r.body && r.body.trim()) {
+            comments.push({
+              author: r.author || 'unknown',
+              body: r.body.trim(),
+              path: null,
+              line: null,
+              side: null,
+              createdAt: r.createdAt || '',
+              state: r.state || null,
+            });
+          }
+        } catch { /* skip malformed JSON lines */ }
+      }
+    }
+  } catch { /* best-effort */ }
+
+  // 2. Fetch inline review comments (file-level comments with line context)
+  try {
+    const inlineOut = run(gh, [
+      'api', `repos/${ref.ownerRepo}/pulls/${ref.number}/comments`,
+      '--paginate', '--jq',
+      '.[] | {author: .user.login, body: .body, path: .path, line: .line, side: .side, createdAt: .created_at, in_reply_to_id: .in_reply_to_id}',
+    ]);
+    if (inlineOut.status === 0 && inlineOut.stdout.trim()) {
+      for (const line of inlineOut.stdout.trim().split('\n')) {
+        try {
+          const c = JSON.parse(line);
+          if (c.body && c.body.trim()) {
+            comments.push({
+              author: c.author || 'unknown',
+              body: c.body.trim(),
+              path: c.path || null,
+              line: typeof c.line === 'number' ? c.line : null,
+              side: c.side || null,
+              createdAt: c.createdAt || '',
+              state: null,
+            });
+          }
+        } catch { /* skip malformed JSON lines */ }
+      }
+    }
+  } catch { /* best-effort */ }
+
+  // 3. Fetch general issue-style comments (non-review PR conversation comments)
+  try {
+    const issueCommentsOut = run(gh, [
+      'api', `repos/${ref.ownerRepo}/issues/${ref.number}/comments`,
+      '--paginate', '--jq',
+      '.[] | {author: .user.login, body: .body, createdAt: .created_at}',
+    ]);
+    if (issueCommentsOut.status === 0 && issueCommentsOut.stdout.trim()) {
+      for (const line of issueCommentsOut.stdout.trim().split('\n')) {
+        try {
+          const c = JSON.parse(line);
+          if (c.body && c.body.trim()) {
+            comments.push({
+              author: c.author || 'unknown',
+              body: c.body.trim(),
+              path: null,
+              line: null,
+              side: null,
+              createdAt: c.createdAt || '',
+              state: null,
+            });
+          }
+        } catch { /* skip malformed JSON lines */ }
+      }
+    }
+  } catch { /* best-effort */ }
+
+  // Sort by creation time (oldest first)
+  comments.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+
+  return { ok: true, comments };
+}
+
+/**
+ * Format PR review comments into structured text for inclusion in a worker prompt.
+ * Groups inline comments by file and includes line numbers for precise context.
+ * Caps output at maxChars to avoid prompt bloat.
+ */
+function formatPrCommentsForPrompt(comments: PrReviewComment[], maxChars: number = 8000): string {
+  if (!comments.length) return '';
+
+  const parts: string[] = ['## PR Review Comments'];
+
+  // Separate inline (file-specific) from general comments
+  const inlineComments = comments.filter(c => c.path);
+  const generalComments = comments.filter(c => !c.path);
+
+  // Group inline comments by file
+  if (inlineComments.length) {
+    const byFile = new Map<string, PrReviewComment[]>();
+    for (const c of inlineComments) {
+      const key = c.path!;
+      if (!byFile.has(key)) byFile.set(key, []);
+      byFile.get(key)!.push(c);
+    }
+
+    parts.push('### Inline Comments (by file)');
+    for (const [filePath, fileComments] of byFile) {
+      parts.push(`\n**${filePath}**`);
+      for (const c of fileComments) {
+        const loc = c.line ? `:${c.line}` : '';
+        const bodyOneLine = c.body.replace(/\n+/g, ' ').trim();
+        parts.push(`- [${c.author}] at \`${filePath}${loc}\`: ${bodyOneLine}`);
+      }
+    }
+  }
+
+  // General review comments (top-level review bodies + conversation)
+  const actionableGeneral = generalComments.filter(c =>
+    // Skip bot comments and approved-without-comment reviews
+    !c.author.includes('[bot]') && c.body.length > 5
+  );
+  if (actionableGeneral.length) {
+    parts.push('### General Review Comments');
+    for (const c of actionableGeneral) {
+      const stateTag = c.state ? ` (${c.state})` : '';
+      const bodyOneLine = c.body.replace(/\n+/g, ' ').trim();
+      parts.push(`- [${c.author}${stateTag}]: ${bodyOneLine}`);
+    }
+  }
+
+  let result = parts.join('\n');
+  if (result.length > maxChars) {
+    result = result.slice(0, maxChars - 50) + '\n\n... (truncated, see PR for full comments)';
+  }
+  return result;
+}
+
 module.exports = {
   parsePrUrl,
   reviewPr,
   classifyPr,
+  fetchPrComments,
+  formatPrCommentsForPrompt,
 };
 
-export { parsePrUrl, reviewPr, classifyPr };
+export { parsePrUrl, reviewPr, classifyPr, fetchPrComments, formatPrCommentsForPrompt };
