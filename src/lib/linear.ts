@@ -421,7 +421,10 @@ async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; 
     return { ok: false, skipped: true, reason: `LINEAR API key missing for org=${orgKey || 'default'}` };
   }
 
-  const desiredStateName = resolveStateName(JOB_TO_LINEAR_STATE[result?.state || status?.state || 'ready'] || 'ready');
+  // Prefer persisted job lifecycle status over worker result state.
+  // After PR merge, status becomes `done` while result.json often remains `coded`.
+  // Using result first reverts Linear tickets from Done back to In Review on later syncs.
+  const desiredStateName = resolveStateName(JOB_TO_LINEAR_STATE[status?.state || result?.state || 'ready'] || 'ready');
   const canonicalIssue = packet.ticket_id ? await findIssueByIdentifier(packet.ticket_id, orgKey).catch(() => null) : null;
   let link = getJobLinearLink(packet.job_id);
   let issue: LinearIssue | null = null;
