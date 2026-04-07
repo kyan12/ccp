@@ -1141,6 +1141,10 @@ async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string
     notifyStart(jobId);
 
     // ── Job timeout detection ──
+    // If exceeded, kill the tmux session and let the normal dead-session path
+    // trigger finalizeJob on the next reconcile cycle. This ensures all
+    // post-processing (webhooks, Linear sync, auto-retry, knowledge extraction)
+    // still runs.
     if (status.started_at) {
       const elapsedSec = Math.round((Date.now() - new Date(status.started_at).getTime()) / 1000);
       let packet: JobPacket | null = null;
@@ -1150,11 +1154,16 @@ async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string
       if (elapsedSec > maxDuration) {
         const durationMin = Math.round(elapsedSec / 60);
         const limitMin = Math.round(maxDuration / 60);
-        appendLog(jobId, `[${nowIso()}] TIMEOUT: job running ${durationMin}min exceeds limit of ${limitMin}min — auto-interrupting`);
+        appendLog(jobId, `[${nowIso()}] TIMEOUT: job running ${durationMin}min exceeds limit of ${limitMin}min — killing tmux session`);
         sendDiscordMessage(DISCORD_ERRORS_CHANNEL,
           `⏰ TIMEOUT — job \`${jobId}\` auto-interrupted after ${durationMin}min (limit: ${limitMin}min)`);
-        interruptJob(jobId, `auto-interrupted: exceeded ${limitMin}min timeout`);
-        return { ok: true, state: 'blocked', live: false };
+        // Kill tmux only — don't call interruptJob so finalizeJob runs next cycle
+        if (status.tmux_session) {
+          const tmuxBin = commandExists('tmux') || 'tmux';
+          run(tmuxBin, ['kill-session', '-t', status.tmux_session]);
+        }
+        saveStatus(jobId, { last_output_excerpt: `timeout: exceeded ${limitMin}min limit` });
+        return { ok: true, state: 'running', live: false };
       }
     }
 
@@ -1169,12 +1178,16 @@ async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string
       });
 
       // ── Stuck-loop detection ──
+      // Kill tmux only — finalizeJob will handle cleanup on next cycle
       if (detectStuckLoop(jobId, excerpt)) {
-        appendLog(jobId, `[${nowIso()}] STUCK LOOP: identical output repeated ${STUCK_LOOP_THRESHOLD}+ times — auto-interrupting`);
+        appendLog(jobId, `[${nowIso()}] STUCK LOOP: identical output repeated ${STUCK_LOOP_THRESHOLD}+ times — killing tmux session`);
         sendDiscordMessage(DISCORD_ERRORS_CHANNEL,
           `🔄 STUCK LOOP — job \`${jobId}\` appears stuck (same output ${STUCK_LOOP_THRESHOLD}x) — auto-interrupting`);
-        interruptJob(jobId, `auto-interrupted: stuck loop detected (same output repeated ${STUCK_LOOP_THRESHOLD}+ heartbeats)`);
-        return { ok: true, state: 'blocked', live: false };
+        if (status.tmux_session) {
+          run(tmux, ['kill-session', '-t', status.tmux_session]);
+        }
+        saveStatus(jobId, { last_output_excerpt: `stuck loop: same output repeated ${STUCK_LOOP_THRESHOLD}+ heartbeats` });
+        return { ok: true, state: 'running', live: false };
       }
     }
     return { ok: true, state: 'running', live: true };
