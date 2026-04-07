@@ -1012,6 +1012,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
 function extractAndPersistKnowledge(repoKey: string, logText: string, finalState: string): void {
   const knowledge = loadKnowledge(repoKey);
   if (!knowledge) return;
+  let changed = false;
 
   // 1. Detect command corrections — worker found a different command than what we auto-detected
   const commandCorrections: Array<{ key: string; pattern: RegExp }> = [
@@ -1032,6 +1033,7 @@ function extractAndPersistKnowledge(repoKey: string, logText: string, finalState
       // Only update if we don't already have a value or the worker used something different
       if (!knowledge.commands[cmdKey] && discovered.length > 3 && discovered.length < 60) {
         knowledge.commands[cmdKey] = discovered;
+        changed = true;
       }
     }
   }
@@ -1058,6 +1060,7 @@ function extractAndPersistKnowledge(repoKey: string, logText: string, finalState
             fix,
             addedAt: new Date().toISOString(),
           });
+          changed = true;
         }
       }
     }
@@ -1074,11 +1077,14 @@ function extractAndPersistKnowledge(repoKey: string, logText: string, finalState
           fix: `Job ${finalState} — may need manual investigation`,
           addedAt: new Date().toISOString(),
         });
+        changed = true;
       }
     }
   }
 
-  saveKnowledge(knowledge);
+  if (changed) {
+    saveKnowledge(knowledge);
+  }
 }
 
 /**
@@ -1162,7 +1168,7 @@ async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string
           const tmuxBin = commandExists('tmux') || 'tmux';
           run(tmuxBin, ['kill-session', '-t', status.tmux_session]);
         }
-        saveStatus(jobId, { last_output_excerpt: `timeout: exceeded ${limitMin}min limit` });
+        saveStatus(jobId, { exit_code: 124, last_output_excerpt: `timeout: exceeded ${limitMin}min limit` });
         return { ok: true, state: 'running', live: false };
       }
     }
@@ -1186,7 +1192,7 @@ async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string
         if (status.tmux_session) {
           run(tmux, ['kill-session', '-t', status.tmux_session]);
         }
-        saveStatus(jobId, { last_output_excerpt: `stuck loop: same output repeated ${STUCK_LOOP_THRESHOLD}+ heartbeats` });
+        saveStatus(jobId, { exit_code: 124, last_output_excerpt: `stuck loop: same output repeated ${STUCK_LOOP_THRESHOLD}+ heartbeats` });
         return { ok: true, state: 'running', live: false };
       }
     }
