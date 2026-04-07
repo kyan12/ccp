@@ -74,7 +74,7 @@ async function cycle(): Promise<SupervisorCycleSummary> {
 }
 
 // ── Startup: recover orphaned jobs from previous unclean shutdown ──
-function startupRecovery(): void {
+async function startupRecovery(): Promise<void> {
   // Check for shutdown marker from previous run
   if (fs.existsSync(shutdownFile)) {
     try {
@@ -87,7 +87,7 @@ function startupRecovery(): void {
 
   // Sweep all running jobs and finalize any with dead tmux sessions
   try {
-    const recovered = recoverOrphanedJobs();
+    const recovered = await recoverOrphanedJobs();
     if (recovered.length > 0) {
       process.stdout.write(`[supervisor] startup recovery: finalized ${recovered.length} orphaned job(s): ${recovered.join(', ')}\n`);
     }
@@ -96,16 +96,19 @@ function startupRecovery(): void {
   }
 }
 
-startupRecovery();
-
-cycle().then(() => {
-  if (shuttingDown) {
-    process.stdout.write('[supervisor] shutdown complete after cycle\n');
-    process.exit(0);
-  }
-  if (!once) scheduleNext();
+startupRecovery().then(() => {
+  cycle().then(() => {
+    if (shuttingDown) {
+      process.stdout.write('[supervisor] shutdown complete after cycle\n');
+      process.exit(0);
+    }
+    if (!once) scheduleNext();
+  }).catch((error: Error) => {
+    process.stderr.write(`${error.stack || error.message}\n`);
+    process.exit(1);
+  });
 }).catch((error: Error) => {
-  process.stderr.write(`${error.stack || error.message}\n`);
+  process.stderr.write(`[supervisor] startup recovery failed: ${error.stack || error.message}\n`);
   process.exit(1);
 });
 

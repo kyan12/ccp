@@ -664,6 +664,21 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 
             const repoMapping = findRepoMapping({ repo });
             if (matchedJob || repoMapping) {
+              // ── Depth limit: max 3 review-feedback jobs per PR ──
+              const MAX_REVIEW_FEEDBACK_DEPTH = 3;
+              const existingFeedbackJobs = allJobs.filter((j: Record<string, unknown>) => {
+                if (j.state === 'archived') return false;
+                try {
+                  const p = rj(pp(j.job_id));
+                  return p.kind === 'review-feedback' && p.metadata?.prUrl === prUrl;
+                } catch { return false; }
+              });
+              if (existingFeedbackJobs.length >= MAX_REVIEW_FEEDBACK_DEPTH) {
+                process.stdout.write(`[github-webhook] review-feedback depth limit (${MAX_REVIEW_FEEDBACK_DEPTH}) reached for ${repo}#${prNum} — skipping\n`);
+                json(res, 200, { ok: true, action: 'review-feedback-depth-limit', pr: prNum, existing: existingFeedbackJobs.length });
+                return;
+              }
+
               const originalPacket = matchedJob?.packet as Record<string, unknown> | undefined;
               const feedbackLines = reviewBody.split('\n').filter((l: string) => l.trim());
 
