@@ -19,3 +19,4 @@ configs/routing.json
 configs/linear-smartadvocateai.json
 dist/
 configs/scheduling.json
+configs/repo-knowledge/*.json
