@@ -95,7 +95,7 @@ function extractNodeCommands(repoPath: string, pm: string): Partial<RepoCommands
   }
 
   const scripts = (pkg.scripts || {}) as Record<string, string>;
-  const run = pm === 'npm' ? 'npm run' : pm;
+  const run = pm === 'npm' || pm === 'bun' ? `${pm} run` : pm;
 
   // Lint: try lint, then eslint
   if (scripts.lint) commands.lint = `${run} lint`;

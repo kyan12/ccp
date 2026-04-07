@@ -22,6 +22,8 @@ export interface RepoMapping {
   nightly?: NightlyConfig;
   /** Max job duration in seconds before auto-interrupt (default: 1800 = 30 min) */
   maxJobDurationSec?: number;
+  /** Max conversation turns for the worker (default: 200 = Claude CLI default) */
+  maxTurns?: number;
 }
 
 export interface NightlyConfig {
@@ -61,6 +63,8 @@ export interface JobPacket {
   retryCount?: number;
   /** Max retries allowed for transient failures (default: 1) */
   maxRetries?: number;
+  /** Job priority: 1=urgent, 2=high, 3=normal (default), 4=low */
+  priority?: number;
 }
 
 // ── Job status ──
@@ -115,6 +119,8 @@ export interface JobStatus {
   notifications?: JobNotifications;
   integrations?: JobIntegrations;
   discord_thread_id?: string | null;
+  /** Path to git worktree used by this job (cleaned up on finalize) */
+  worktree_path?: string | null;
 }
 
 // ── Job result ──
@@ -230,6 +236,8 @@ export interface IntakePayload {
   message?: string;
   data?: Record<string, unknown>;
   action?: string;
+  /** Job priority override: 1=urgent, 2=high, 3=normal, 4=low */
+  priority?: number;
   issue?: Record<string, unknown>;
   culprit?: string;
   issueTitle?: string;

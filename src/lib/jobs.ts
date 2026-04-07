@@ -390,14 +390,18 @@ function buildPrompt(packet: JobPacket): string {
   bits.push('If truly blocked (missing credentials, broken build, etc.), exit with a clear blocker description — do not ask questions.');
   bits.push('Make only the minimum necessary changes for this task.');
   bits.push('Before reporting State: coded/done/verified, you MUST describe what you did to verify your changes work. If you cannot verify, report State: blocked with Blocker: unable to verify.');
-  bits.push('At the end, output a final compact summary with these exact labels on separate lines:');
-  bits.push('State: <coded/deployed/verified/blocked>');
-  bits.push('Commit: <hash or none>');
-  bits.push('Prod: <yes/no>');
-  bits.push('Verified: <exact test or not yet>');
-  bits.push('Blocker: <reason or none>');
-  bits.push('Risk: <low/medium/high>');
-  bits.push('Summary: <1-3 sentence description of what you did>');
+  bits.push(`At the end, output a final compact summary bracketed by sentinel markers.
+Output it EXACTLY in this format (the markers must be on their own lines):
+
+CCP_SUMMARY_BEGIN
+State: <coded/deployed/verified/blocked>
+Commit: <hash or none>
+Prod: <yes/no>
+Verified: <exact test or not yet>
+Blocker: <reason or none>
+Risk: <low/medium/high>
+Summary: <1-3 sentence description of what you did>
+CCP_SUMMARY_END`);
   bits.push('Do not claim pushed or deployed unless it actually happened. A local commit on main is not the same as pushed.');
   bits.push('If you make code changes, you MUST create a feature branch FROM main (e.g. `git checkout -b feat/my-branch main`), push it to origin, and create a pull request via `gh pr create --base main`. Never push directly to main. Never branch from another feature branch. Do not stop at a local-only commit.');
   return bits.join('\n\n');
@@ -576,15 +580,23 @@ function notifyStart(jobId: string): void {
 
 function parseSummary(logText: string): Record<string, string> {
   const fields: Record<string, string> = {};
+
+  // Prefer structured sentinel block if present — much more reliable than scanning the full log
+  // Use matchAll + take last match to preserve 'last match wins' behavior if worker outputs multiple blocks
+  const allSentinelMatches = [...logText.matchAll(/CCP_SUMMARY_BEGIN\s*\n([\s\S]*?)\nCCP_SUMMARY_END/g)];
+  const sentinelMatch = allSentinelMatches.length ? allSentinelMatches[allSentinelMatches.length - 1] : null;
+  const searchText = sentinelMatch ? sentinelMatch[1] : logText;
+
   for (const key of ['State', 'Commit', 'Prod', 'Verified', 'Blocker', 'Risk', 'Summary']) {
     const re = new RegExp(`^${key}:\\s*(.+)$`, 'gmi');
-    const matches = [...logText.matchAll(re)];
+    const matches = [...searchText.matchAll(re)];
     if (matches.length) fields[key.toLowerCase()] = matches[matches.length - 1][1].trim();
   }
   // Extract PR URL — try multiple patterns workers use:
   // 1. "PR created: <url>"
   // 2. "PR: <url>"  
   // 3. Any github.com pull request URL in the log
+  // Always search full log for PR URLs since they may appear outside the sentinel block
   const prPatterns = [
     /PR created:\s*(https:\/\/github\.com\/\S+\/pull\/\d+)/gmi,
     /^PR:\s*(https:\/\/github\.com\/\S+\/pull\/\d+)/gmi,
@@ -766,7 +778,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const exitCodeMatch = logText.match(/WORKER_EXIT_CODE:\s*(\d+)/);
   const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : (status.exit_code ?? 0);
   const provisionalState = exitCode === 0 ? (summary.state || 'coded') : (summary.state || 'failed');
-  const proof = inspectRepoProof(packet.repo, summary.commit || 'none');
+  // Use worktree path for proof inspection (branch/dirty/pushed are per-working-tree)
+  const proofPath = status.worktree_path || packet.repo;
+  const proof = inspectRepoProof(proofPath, summary.commit || 'none');
   const inferredBlocker = inferBlockedReason(logText, {
     state: provisionalState,
     commit: summary.commit || 'none',
@@ -776,10 +790,12 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   }, proof);
   const finalState = inferredBlocker ? 'blocked' : provisionalState;
 
-  // If the job is blocked due to dirty repo state, clean it up immediately so
-  // subsequent jobs don't inherit dirty working tree (e.g. from API 500 mid-run)
-  if (finalState === 'blocked' && proof.dirty && packet.repo) {
-    const cleanResult = cleanRepoIfDirty(packet.repo, proof);
+  // If the job is blocked due to dirty repo state, clean it up.
+  // For worktree jobs, skip cleanRepoIfDirty (it tries `git checkout main` which fails in worktrees)
+  // — the worktree will be deleted entirely in the cleanup step below.
+  // For shared-clone jobs, clean up so subsequent jobs don't inherit dirty state.
+  if (finalState === 'blocked' && proof.dirty && proofPath && !status.worktree_path) {
+    const cleanResult = cleanRepoIfDirty(proofPath, proof);
     appendLog(jobId, `[${nowIso()}] repo cleanup: ${cleanResult}`);
   }
 
@@ -999,6 +1015,18 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     }
   }
 
+  // ── Worktree cleanup ──
+  // Remove the isolated git worktree created for this job (if any)
+  if (status.worktree_path && packet.repo) {
+    try {
+      removeJobWorktree(packet.repo, status.worktree_path);
+      appendLog(jobId, `[${nowIso()}] worktree removed: ${status.worktree_path}`);
+      saveStatus(jobId, { worktree_path: null });
+    } catch (err) {
+      appendLog(jobId, `[${nowIso()}] worktree cleanup failed: ${(err as Error).message}`);
+    }
+  }
+
   return { ok: true, state: finalState, exitCode, result, linear };
 }
 
@@ -1201,7 +1229,71 @@ async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string
   return { ok: true, state: status.state, live: false };
 }
 
-function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult): string {
+/**
+ * Resolve max conversation turns for the worker.
+ * Checks per-repo config first, then global default.
+ */
+function resolveMaxTurns(packet: JobPacket): number | null {
+  const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
+  if (mapping?.maxTurns) return mapping.maxTurns;
+  const envVal = process.env.CCP_DEFAULT_MAX_TURNS;
+  if (envVal && Number.isFinite(Number(envVal))) return Number(envVal);
+  return null; // null = use Claude CLI default
+}
+
+/**
+ * Create an isolated git worktree for the job so workers don't interfere with
+ * each other or leave the shared clone in a dirty state.
+ * Returns the worktree path on success, or null if worktree creation fails
+ * (caller falls back to the shared clone).
+ */
+function createJobWorktree(jobId: string, repoPath: string, branch: string | null): string | null {
+  const worktreeBase = path.join('/tmp', 'ccp-worktrees');
+  const worktreePath = path.join(worktreeBase, jobId);
+  try {
+    fs.mkdirSync(worktreeBase, { recursive: true });
+    const git = (args: string[]) => run('git', ['-C', repoPath, ...args]);
+    // Fetch latest before creating worktree
+    git(['fetch', 'origin', '--quiet']);
+    if (branch) {
+      // For working_branch jobs, create worktree on that branch
+      const wt = git(['worktree', 'add', worktreePath, `origin/${branch}`, '--detach']);
+      if (wt.status !== 0) return null;
+      // Create a local tracking branch inside the worktree
+      const gitWt = (args: string[]) => run('git', ['-C', worktreePath, ...args]);
+      const checkoutResult = gitWt(['checkout', '-B', branch, `origin/${branch}`]);
+      if (checkoutResult.status !== 0) {
+        // Clean up the worktree we just created before returning null
+        try { run('git', ['-C', repoPath, 'worktree', 'remove', '--force', worktreePath]); } catch { /* best-effort */ }
+        return null;
+      }
+    } else {
+      // For new jobs, create worktree from origin/main in detached HEAD.
+      // We intentionally leave it detached — checking out 'main' would fail because
+      // it's already checked out in the shared clone. The worker will create its own
+      // feature branch from this starting point.
+      const wt = git(['worktree', 'add', worktreePath, 'origin/main', '--detach']);
+      if (wt.status !== 0) return null;
+    }
+    return worktreePath;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove a git worktree created for a job.
+ */
+function removeJobWorktree(repoPath: string, worktreePath: string): void {
+  const result = run('git', ['-C', repoPath, 'worktree', 'remove', '--force', worktreePath]);
+  if (result.status !== 0) {
+    // Best-effort cleanup; if git worktree remove fails, try rm
+    try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { run('git', ['-C', repoPath, 'worktree', 'prune']); } catch { /* ignore */ }
+  }
+}
+
+function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult): { session: string; worktreePath: string | null } {
   const session = `ccp_${jobId}`.replace(/[^a-zA-Z0-9_]/g, '_');
   run(pf.tmux, ['kill-session', '-t', session]);
 
@@ -1209,7 +1301,18 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
   const promptFile = path.join(jobDir(jobId), 'prompt.txt');
   fs.writeFileSync(promptFile, buildPrompt(packet));
 
-  const workerCmd = `${shellQuote(pf.claude)} --print --permission-mode bypassPermissions -p ${shellQuote(fs.readFileSync(promptFile, 'utf8'))}`;
+  // Build worker command with optional --max-turns
+  const maxTurns = resolveMaxTurns(packet);
+  const turnFlag = maxTurns ? ` --max-turns ${maxTurns}` : '';
+  const workerCmd = `${shellQuote(pf.claude)} --print --permission-mode bypassPermissions${turnFlag} -p ${shellQuote(fs.readFileSync(promptFile, 'utf8'))}`;
+
+  // Try to create an isolated worktree for this job
+  const worktreePath = packet.repo ? createJobWorktree(jobId, packet.repo, packet.working_branch || null) : null;
+  const workDir = worktreePath || packet.repo!;
+  if (worktreePath) {
+    appendLog(jobId, `[${nowIso()}] using git worktree: ${worktreePath}`);
+  }
+
   const gitUser = gitIdentity();
   const shellScript = [
     'set -euo pipefail',
@@ -1217,14 +1320,16 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
     `export GIT_AUTHOR_EMAIL=${shellQuote(gitUser.email)}`,
     `export GIT_COMMITTER_NAME=${shellQuote(gitUser.name)}`,
     `export GIT_COMMITTER_EMAIL=${shellQuote(gitUser.email)}`,
-    `cd ${shellQuote(packet.repo!)}`,
-    // Ensure repo is on main with latest code before worker starts
-    // (prevents stale branch issues and accidental branching from feature branches)
-    packet.working_branch ? null : 'git checkout main 2>/dev/null || true',
-    packet.working_branch ? null : 'git fetch origin main --quiet',
-    packet.working_branch ? null : 'git reset --hard origin/main',
-    packet.working_branch ? `git checkout ${shellQuote(packet.working_branch)}` : null,
-    packet.working_branch ? `git pull --ff-only origin ${shellQuote(packet.working_branch)} || true` : null,
+    `cd ${shellQuote(workDir)}`,
+    // When using a worktree, the branch is already set up by createJobWorktree.
+    // When falling back to shared clone, do the old checkout dance.
+    ...(!worktreePath ? [
+      packet.working_branch ? null : 'git checkout main 2>/dev/null || true',
+      packet.working_branch ? null : 'git fetch origin main --quiet',
+      packet.working_branch ? null : 'git reset --hard origin/main',
+      packet.working_branch ? `git checkout ${shellQuote(packet.working_branch)}` : null,
+      packet.working_branch ? `git pull --ff-only origin ${shellQuote(packet.working_branch)} || true` : null,
+    ] : []).filter(Boolean),
     `echo "[${nowIso()}] worker start" >> ${shellQuote(logFile)}`,
     `{ ${workerCmd}; } 2>&1 | tee -a ${shellQuote(logFile)}`,
     'exit_code=${PIPESTATUS[0]}',
@@ -1234,9 +1339,11 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
 
   const out = run(pf.tmux, ['new-session', '-d', '-s', session, 'bash', '-lc', shellScript]);
   if (out.status !== 0) {
+    // Clean up worktree on failure
+    if (worktreePath && packet.repo) removeJobWorktree(packet.repo, worktreePath);
     throw new Error((out.stderr || out.stdout || 'tmux new-session failed').trim());
   }
-  return session;
+  return { session, worktreePath };
 }
 
 function interruptJob(jobId: string, reason: string = 'interrupted by operator'): { ok: boolean; job_id: string; state: string; interrupted: boolean } {
@@ -1247,11 +1354,22 @@ function interruptJob(jobId: string, reason: string = 'interrupted by operator')
     const out = run(tmux, ['kill-session', '-t', status.tmux_session]);
     appendLog(jobId, `[${nowIso()}] tmux kill-session: ${out.status === 0 ? 'ok' : (out.stderr || out.stdout || 'failed').trim()}`);
   }
+  // Clean up worktree before marking as blocked (prevents orphaned worktrees)
+  if (status.worktree_path) {
+    try {
+      const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
+      if (packet.repo) {
+        removeJobWorktree(packet.repo, status.worktree_path);
+        appendLog(jobId, `[${nowIso()}] worktree removed on interrupt: ${status.worktree_path}`);
+      }
+    } catch { /* best-effort */ }
+  }
   saveStatus(jobId, {
     state: 'blocked',
     exit_code: 130,
     last_heartbeat_at: nowIso(),
     last_output_excerpt: reason,
+    worktree_path: null,
   });
   writeJson(resultPath(jobId), {
     job_id: jobId,
@@ -1319,11 +1437,12 @@ function startJob(jobId: string): Record<string, unknown> {
   }
 
   try {
-    const session = startTmuxWorker(jobId, packet, pf);
-    appendLog(jobId, `[${nowIso()}] tmux session started: ${session}`);
+    const worker = startTmuxWorker(jobId, packet, pf);
+    appendLog(jobId, `[${nowIso()}] tmux session started: ${worker.session}`);
     saveStatus(jobId, {
       state: 'running',
-      tmux_session: session,
+      tmux_session: worker.session,
+      worktree_path: worker.worktreePath,
       last_heartbeat_at: nowIso(),
       last_output_excerpt: 'tmux worker started',
       exit_code: null,
@@ -1339,11 +1458,11 @@ function startJob(jobId: string): Record<string, unknown> {
         branch: (pf.environment?.git_status as Record<string, unknown>)?.ok ? (run(commandExists('git') || 'git', ['-C', packet.repo!, 'rev-parse', '--abbrev-ref', 'HEAD']).stdout || '').trim() || null : null,
         pushed: null,
       },
-      tmux_session: session,
+      tmux_session: worker.session,
       updated_at: nowIso(),
     });
     notifyStart(jobId);
-    return { ok: true, session, packet, environment: pf.environment };
+    return { ok: true, session: worker.session, worktreePath: worker.worktreePath, packet, environment: pf.environment };
   } catch (error) {
     const reason = `worker start failed: ${(error as Error).message}`;
     markBlocked(jobId, reason);
@@ -1388,9 +1507,21 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
   const refreshed = listJobs();
   const activeRunning = refreshed.filter((job) => job.state === 'running');
   const capacity = Math.max(0, maxConcurrent - activeRunning.length);
-  const queued = refreshed
-    .filter((job) => job.state === 'queued')
-    .sort((a, b) => (a.updated_at > b.updated_at ? 1 : -1));
+  // Sort queued jobs by priority (lower number = higher priority) then by timestamp (FIFO within same priority)
+  const queued = refreshed.filter((job) => job.state === 'queued');
+  // Pre-compute priorities in a single O(n) pass to avoid redundant disk reads inside the comparator
+  const priorityMap = new Map<string, number>();
+  for (const job of queued) {
+    let pri = 3;
+    try { pri = (readJson(packetPath(job.job_id)) as unknown as JobPacket).priority ?? 3; } catch { /* default */ }
+    priorityMap.set(job.job_id, pri);
+  }
+  queued.sort((a, b) => {
+    const aPri = priorityMap.get(a.job_id) ?? 3;
+    const bPri = priorityMap.get(b.job_id) ?? 3;
+    if (aPri !== bPri) return aPri - bPri;
+    return a.updated_at > b.updated_at ? 1 : -1;
+  });
 
   // Build set of repos that already have a running job (for per-repo serial enforcement)
   const busyRepos = new Set<string>();
@@ -1565,6 +1696,7 @@ module.exports = {
   sendDiscordMessage,
   createDiscordThread,
   sendToThread,
+  removeJobWorktree,
 };
 
 export {
@@ -1597,4 +1729,5 @@ export {
   sendDiscordMessage,
   createDiscordThread,
   sendToThread,
+  removeJobWorktree,
 };

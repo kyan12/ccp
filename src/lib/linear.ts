@@ -337,6 +337,8 @@ async function createIssueFromJob(packet: JobPacket): Promise<LinearIssue | null
         description: normalized.description,
         projectId: normalized.projectId || undefined,
         ...(labelIds.length ? { labelIds } : {}),
+        // Propagate CCP priority to Linear issue so round-trip dispatch preserves it
+        ...(packet.priority != null ? { priority: packet.priority } : {}),
       },
     },
     orgKey,

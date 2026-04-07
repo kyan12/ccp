@@ -53,6 +53,8 @@ interface LinearDispatchIssue {
   state: { name: string };
   project: { id: string; name: string } | null;
   labels: { nodes: Array<{ id: string; name: string }> };
+  /** Linear priority: 0=none, 1=urgent, 2=high, 3=medium, 4=low */
+  priority: number;
   _orgKey?: string | null;
 }
 
@@ -76,6 +78,7 @@ async function listDispatchCandidates(): Promise<LinearDispatchIssue[]> {
                 state { name }
                 project { id name }
                 labels { nodes { id name } }
+                priority
                 relations { nodes { type relatedIssue { identifier state { name } } } }
               }
             }
@@ -266,6 +269,8 @@ function issueToPacket(issue: LinearDispatchIssue): JobPacket {
     acceptance_criteria,
     constraints,
     verification_steps,
+    // Map Linear priority to CCP priority: Linear 1=urgent→1, 2=high→2, 3=medium→3, 4=low→4, 0=none→3
+    priority: issue.priority === 0 ? 3 : issue.priority,
   };
 }
 
