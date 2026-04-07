@@ -776,7 +776,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const exitCodeMatch = logText.match(/WORKER_EXIT_CODE:\s*(\d+)/);
   const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : (status.exit_code ?? 0);
   const provisionalState = exitCode === 0 ? (summary.state || 'coded') : (summary.state || 'failed');
-  const proof = inspectRepoProof(packet.repo, summary.commit || 'none');
+  // Use worktree path for proof inspection (branch/dirty/pushed are per-working-tree)
+  const proofPath = status.worktree_path || packet.repo;
+  const proof = inspectRepoProof(proofPath, summary.commit || 'none');
   const inferredBlocker = inferBlockedReason(logText, {
     state: provisionalState,
     commit: summary.commit || 'none',
@@ -788,8 +790,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
 
   // If the job is blocked due to dirty repo state, clean it up immediately so
   // subsequent jobs don't inherit dirty working tree (e.g. from API 500 mid-run)
-  if (finalState === 'blocked' && proof.dirty && packet.repo) {
-    const cleanResult = cleanRepoIfDirty(packet.repo, proof);
+  if (finalState === 'blocked' && proof.dirty && proofPath) {
+    const cleanResult = cleanRepoIfDirty(proofPath, proof);
     appendLog(jobId, `[${nowIso()}] repo cleanup: ${cleanResult}`);
   }
 
@@ -1274,9 +1276,8 @@ function createJobWorktree(jobId: string, repoPath: string, branch: string | nul
  * Remove a git worktree created for a job.
  */
 function removeJobWorktree(repoPath: string, worktreePath: string): void {
-  try {
-    run('git', ['-C', repoPath, 'worktree', 'remove', '--force', worktreePath]);
-  } catch {
+  const result = run('git', ['-C', repoPath, 'worktree', 'remove', '--force', worktreePath]);
+  if (result.status !== 0) {
     // Best-effort cleanup; if git worktree remove fails, try rm
     try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch { /* ignore */ }
     try { run('git', ['-C', repoPath, 'worktree', 'prune']); } catch { /* ignore */ }
@@ -1344,11 +1345,22 @@ function interruptJob(jobId: string, reason: string = 'interrupted by operator')
     const out = run(tmux, ['kill-session', '-t', status.tmux_session]);
     appendLog(jobId, `[${nowIso()}] tmux kill-session: ${out.status === 0 ? 'ok' : (out.stderr || out.stdout || 'failed').trim()}`);
   }
+  // Clean up worktree before marking as blocked (prevents orphaned worktrees)
+  if (status.worktree_path) {
+    try {
+      const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
+      if (packet.repo) {
+        removeJobWorktree(packet.repo, status.worktree_path);
+        appendLog(jobId, `[${nowIso()}] worktree removed on interrupt: ${status.worktree_path}`);
+      }
+    } catch { /* best-effort */ }
+  }
   saveStatus(jobId, {
     state: 'blocked',
     exit_code: 130,
     last_heartbeat_at: nowIso(),
     last_output_excerpt: reason,
+    worktree_path: null,
   });
   writeJson(resultPath(jobId), {
     job_id: jobId,
