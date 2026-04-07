@@ -170,18 +170,29 @@ function saveStatus(jobId: string, patch: Partial<JobStatus>): JobStatus {
  */
 function findDuplicateJob(packet: JobPacket): string | null {
   const activeStates = new Set(['queued', 'preflight', 'running']);
+  const incomingKind = packet.kind || 'unknown';
   const jobs = listJobs();
   for (const job of jobs) {
     if (!activeStates.has(job.state)) continue;
     // Match by ticket_id (exact match, skip generic nightly tickets)
+    // Also require same kind to avoid cross-kind false matches (e.g. remediation vs review-feedback)
     if (packet.ticket_id && job.ticket_id === packet.ticket_id && !packet.ticket_id.startsWith('NIGHTLY-')) {
-      return job.job_id;
+      try {
+        const existingPacket = readJson(packetPath(job.job_id)) as unknown as JobPacket;
+        if ((existingPacket.kind || 'unknown') === incomingKind) {
+          return job.job_id;
+        }
+      } catch { /* skip unreadable packets — fall through to branch match */ }
     }
-    // Match by ownerRepo + working_branch (same repo + same branch = same work)
+    // Match by ownerRepo + working_branch + kind (same repo + same branch + same kind = same work)
     if (packet.ownerRepo && packet.working_branch) {
       try {
         const existingPacket = readJson(packetPath(job.job_id)) as unknown as JobPacket;
-        if (existingPacket.ownerRepo === packet.ownerRepo && existingPacket.working_branch === packet.working_branch) {
+        if (
+          existingPacket.ownerRepo === packet.ownerRepo &&
+          existingPacket.working_branch === packet.working_branch &&
+          (existingPacket.kind || 'unknown') === incomingKind
+        ) {
           return job.job_id;
         }
       } catch { /* skip unreadable packets */ }
