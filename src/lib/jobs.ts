@@ -1153,10 +1153,7 @@ async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string
         appendLog(jobId, `[${nowIso()}] TIMEOUT: job running ${durationMin}min exceeds limit of ${limitMin}min — auto-interrupting`);
         sendDiscordMessage(DISCORD_ERRORS_CHANNEL,
           `⏰ TIMEOUT — job \`${jobId}\` auto-interrupted after ${durationMin}min (limit: ${limitMin}min)`);
-        interruptJob(jobId);
-        saveStatus(jobId, {
-          last_output_excerpt: `auto-interrupted: exceeded ${limitMin}min timeout`,
-        });
+        interruptJob(jobId, `auto-interrupted: exceeded ${limitMin}min timeout`);
         return { ok: true, state: 'blocked', live: false };
       }
     }
@@ -1176,10 +1173,7 @@ async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string
         appendLog(jobId, `[${nowIso()}] STUCK LOOP: identical output repeated ${STUCK_LOOP_THRESHOLD}+ times — auto-interrupting`);
         sendDiscordMessage(DISCORD_ERRORS_CHANNEL,
           `🔄 STUCK LOOP — job \`${jobId}\` appears stuck (same output ${STUCK_LOOP_THRESHOLD}x) — auto-interrupting`);
-        interruptJob(jobId);
-        saveStatus(jobId, {
-          last_output_excerpt: `auto-interrupted: stuck loop detected (same output repeated ${STUCK_LOOP_THRESHOLD}+ heartbeats)`,
-        });
+        interruptJob(jobId, `auto-interrupted: stuck loop detected (same output repeated ${STUCK_LOOP_THRESHOLD}+ heartbeats)`);
         return { ok: true, state: 'blocked', live: false };
       }
     }
@@ -1226,9 +1220,9 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
   return session;
 }
 
-function interruptJob(jobId: string): { ok: boolean; job_id: string; state: string; interrupted: boolean } {
+function interruptJob(jobId: string, reason: string = 'interrupted by operator'): { ok: boolean; job_id: string; state: string; interrupted: boolean } {
   const status = loadStatus(jobId);
-  appendLog(jobId, `[${nowIso()}] interrupt requested`);
+  appendLog(jobId, `[${nowIso()}] interrupt requested: ${reason}`);
   if (status.tmux_session && tmuxSessionAlive(status.tmux_session)) {
     const tmux = commandExists('tmux') || 'tmux';
     const out = run(tmux, ['kill-session', '-t', status.tmux_session]);
@@ -1238,7 +1232,7 @@ function interruptJob(jobId: string): { ok: boolean; job_id: string; state: stri
     state: 'blocked',
     exit_code: 130,
     last_heartbeat_at: nowIso(),
-    last_output_excerpt: 'interrupted by operator',
+    last_output_excerpt: reason,
   });
   writeJson(resultPath(jobId), {
     job_id: jobId,
@@ -1246,7 +1240,7 @@ function interruptJob(jobId: string): { ok: boolean; job_id: string; state: stri
     commit: 'none',
     prod: 'no',
     verified: 'not yet',
-    blocker: 'interrupted by operator',
+    blocker: reason,
     tmux_session: status.tmux_session,
     worker_exit_code: 130,
     updated_at: nowIso(),
