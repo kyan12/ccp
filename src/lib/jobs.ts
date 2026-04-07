@@ -1070,6 +1070,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   }
 
   // ── Worktree cleanup ──
+  // Capture before cleanup clears it (used for metrics)
+  const hadWorktree = !!status.worktree_path;
   // Remove the isolated git worktree created for this job (if any)
   if (status.worktree_path && packet.repo) {
     try {
@@ -1082,7 +1084,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   }
 
   // ── Record job metrics ──
-  recordJobMetrics(jobId, packet, finalState, exitCode, elapsed);
+  recordJobMetrics(jobId, packet, finalState, exitCode, elapsed, hadWorktree);
 
   return { ok: true, state: finalState, exitCode, result, linear };
 }
@@ -1092,7 +1094,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
  * Written as newline-delimited JSON (JSONL) for easy aggregation.
  */
 function recordJobMetrics(
-  jobId: string, packet: JobPacket, finalState: string, exitCode: number, elapsedSec: number,
+  jobId: string, packet: JobPacket, finalState: string, exitCode: number, elapsedSec: number, hadWorktree: boolean,
 ): void {
   try {
     ensureDir(path.dirname(METRICS_FILE));
@@ -1109,7 +1111,7 @@ function recordJobMetrics(
       source: packet.source || 'unknown',
       is_retry: (packet.retryCount ?? 0) > 0,
       retry_count: packet.retryCount ?? 0,
-      had_worktree: !!packet.repo,
+      had_worktree: hadWorktree,
       timestamp: new Date().toISOString(),
     };
     fs.appendFileSync(METRICS_FILE, JSON.stringify(entry) + '\n');
