@@ -709,6 +709,11 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
               };
 
               const created = createJob(reviewPacket);
+              if (created.deduplicated) {
+                process.stdout.write(`[github-webhook] review-feedback job deduplicated for ${repo}#${prNum} (existing: ${created.jobId})\n`);
+                json(res, 200, { ok: true, action: 'review-feedback-deduplicated', job_id: created.jobId, pr: prNum });
+                return;
+              }
               process.stdout.write(`[github-webhook] created review-feedback job ${created.jobId} for ${repo}#${prNum}\n`);
 
               if (autoStart) {

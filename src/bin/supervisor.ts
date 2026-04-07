@@ -66,11 +66,14 @@ function writeHeartbeat(payload: SupervisorCycleSummary): void {
 
 async function cycle(): Promise<SupervisorCycleSummary> {
   cycleInProgress = true;
-  const result: SupervisorCycleSummary = await runSupervisorCycle({ maxConcurrent });
-  writeHeartbeat(result);
-  process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-  cycleInProgress = false;
-  return result;
+  try {
+    const result: SupervisorCycleSummary = await runSupervisorCycle({ maxConcurrent });
+    writeHeartbeat(result);
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    return result;
+  } finally {
+    cycleInProgress = false;
+  }
 }
 
 // ── Startup: recover orphaned jobs from previous unclean shutdown ──
