@@ -13,7 +13,9 @@ const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = re
 const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
 const { scanRepoContext, formatContextForPrompt } = require('./repo-context');
-const { getOrCreateKnowledge, formatKnowledgeForPrompt } = require('./repo-knowledge');
+const { getOrCreateKnowledge, formatKnowledgeForPrompt, addKnownIssue, addNote, loadKnowledge, saveKnowledge } = require('./repo-knowledge');
+import type { RepoKnowledge } from './repo-knowledge';
+const { findRepoByPath } = require('./repos');
 // Lazy-require to avoid circular dependency (pr-watcher imports from jobs)
 let _runPrWatcherCycle: (() => Promise<PrWatcherCycleResult>) | undefined;
 function getRunPrWatcherCycle(): () => Promise<PrWatcherCycleResult> {
@@ -26,6 +28,13 @@ const JOBS_DIR: string = path.join(ROOT, 'jobs');
 const DISCORD_RUNS_CHANNEL: string = process.env.CCP_DISCORD_RUNS_CHANNEL || '';
 const DISCORD_ERRORS_CHANNEL: string = process.env.CCP_DISCORD_ERRORS_CHANNEL || '';
 const DISCORD_STATUS_CHANNEL: string = process.env.CCP_DISCORD_STATUS_CHANNEL || process.env.CCP_DISCORD_REVIEW_CHANNEL || '';
+
+/** Default max job duration (30 min). Overridable per-repo via repos.json maxJobDurationSec. */
+const DEFAULT_MAX_JOB_DURATION_SEC = 30 * 60;
+/** Max automatic retries for transient API failures */
+const DEFAULT_MAX_RETRIES = 1;
+/** Number of identical heartbeat excerpts before declaring a stuck loop */
+const STUCK_LOOP_THRESHOLD = 4;
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -956,7 +965,172 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     appendLog(jobId, `[${nowIso()}] rate limit detected — pausing until ${rateLimit.resetAt}`);
   }
 
+  // ── Automatic retry for transient API failures ──
+  // If the job failed due to a transient API error and hasn't exhausted retries,
+  // automatically queue a new attempt instead of leaving it as permanently failed.
+  if (wasApiFailure && !rateLimit) {
+    const retryCount = (packet.retryCount ?? 0);
+    const maxRetries = (packet.maxRetries ?? DEFAULT_MAX_RETRIES);
+    if (retryCount < maxRetries) {
+      const retryPacket: JobPacket = {
+        ...packet,
+        job_id: `${packet.job_id}_retry${retryCount + 1}`,
+        retryCount: retryCount + 1,
+        constraints: [
+          ...(packet.constraints || []),
+          `This is automatic retry #${retryCount + 1} after a transient API failure. The previous attempt (${jobId}) failed with: ${extractWorkerFailureContext(logText, 200)}`,
+        ],
+      };
+      const retryCreated = createJob(retryPacket);
+      appendLog(jobId, `[${nowIso()}] auto-retry queued: ${retryCreated.jobId} (attempt ${retryCount + 1}/${maxRetries})`);
+      sendDiscordMessage(DISCORD_ERRORS_CHANNEL,
+        `🔁 AUTO-RETRY — job \`${jobId}\` failed with transient API error, queued retry \`${retryCreated.jobId}\` (${retryCount + 1}/${maxRetries})`);
+    } else {
+      appendLog(jobId, `[${nowIso()}] max retries exhausted (${retryCount}/${maxRetries}) — not retrying`);
+    }
+  }
+
+  // ── Post-job knowledge extraction ──
+  // Parse the worker log for discoverable patterns and enrich repo knowledge
+  if (packet.repo && packet.repoKey) {
+    try {
+      extractAndPersistKnowledge(packet.repoKey, logText, finalState);
+    } catch (err) {
+      appendLog(jobId, `[${nowIso()}] knowledge extraction failed: ${(err as Error).message}`);
+    }
+  }
+
   return { ok: true, state: finalState, exitCode, result, linear };
+}
+
+/**
+ * Parse worker log output to extract learnings and persist them to repo knowledge.
+ * Looks for:
+ * - Command corrections (worker used different command than what we suggested)
+ * - Error patterns and their fixes
+ * - Useful notes about the repo
+ */
+function extractAndPersistKnowledge(repoKey: string, logText: string, finalState: string): void {
+  const knowledge = loadKnowledge(repoKey);
+  if (!knowledge) return;
+
+  // 1. Detect command corrections — worker found a different command than what we auto-detected
+  const commandCorrections: Array<{ key: string; pattern: RegExp; extract: RegExp }> = [
+    { key: 'lint', pattern: /(?:lint command|linting)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i, extract: /([a-z]+ (?:run )?[a-z:_-]+)/i },
+    { key: 'typecheck', pattern: /(?:typecheck|type.?check)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i, extract: /([a-z]+ (?:run )?[a-z:_-]+)/i },
+    { key: 'test', pattern: /(?:running tests|test command)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i, extract: /([a-z]+ (?:run )?[a-z:_-]+)/i },
+    { key: 'build', pattern: /(?:build command|building)[:\s]*[`"]?([a-z]+ (?:run )?[a-z:_-]+)[`"]?/i, extract: /([a-z]+ (?:run )?[a-z:_-]+)/i },
+  ];
+
+  // Only look at the last portion of the log to avoid false positives from prompts
+  const logTail = logText.slice(-5000);
+
+  for (const { key, pattern } of commandCorrections) {
+    const cmdKey = key as keyof typeof knowledge.commands;
+    const match = logTail.match(pattern);
+    if (match && match[1]) {
+      const discovered = match[1].trim();
+      // Only update if we don't already have a value or the worker used something different
+      if (!knowledge.commands[cmdKey] && discovered.length > 3 && discovered.length < 60) {
+        knowledge.commands[cmdKey] = discovered;
+      }
+    }
+  }
+
+  // 2. Extract error patterns and fixes from worker's problem-solving
+  const errorFixPatterns = [
+    // Worker explicitly says how they fixed something
+    /(?:fixed by|resolved by|solution was|workaround:)\s*(.{10,200})/gi,
+    // "error X was caused by Y" patterns
+    /(?:the error|this error|the issue)\s+(?:was caused by|is because|happens because)\s*(.{10,200})/gi,
+  ];
+
+  for (const pat of errorFixPatterns) {
+    const matches = logTail.matchAll(pat);
+    for (const m of matches) {
+      const fix = m[1].trim();
+      if (fix.length > 10 && fix.length < 200) {
+        // Use a shortened version as the pattern key
+        const patternKey = fix.slice(0, 80);
+        const existing = knowledge.knownIssues.find((ki: { pattern: string }) => ki.pattern === patternKey);
+        if (!existing && knowledge.knownIssues.length < 20) {
+          knowledge.knownIssues.push({
+            pattern: patternKey,
+            fix,
+            addedAt: new Date().toISOString(),
+          });
+        }
+      }
+    }
+  }
+
+  // 3. If the job failed or blocked, record the failure pattern for future reference
+  if ((finalState === 'blocked' || finalState === 'failed') && knowledge.knownIssues.length < 20) {
+    const failureContext = extractWorkerFailureContext(logText, 150);
+    if (failureContext && failureContext !== 'no diagnostic output captured') {
+      const existing = knowledge.knownIssues.find((ki: { pattern: string }) => ki.pattern === failureContext);
+      if (!existing) {
+        knowledge.knownIssues.push({
+          pattern: failureContext,
+          fix: `Job ${finalState} — may need manual investigation`,
+          addedAt: new Date().toISOString(),
+        });
+      }
+    }
+  }
+
+  saveKnowledge(knowledge);
+}
+
+/**
+ * Resolve the max duration for a job. Checks repo-level override in repos.json,
+ * then falls back to the global default (30 min).
+ */
+function resolveMaxJobDuration(packet: JobPacket): number {
+  if (packet.repo) {
+    const mapping = findRepoByPath(packet.repo);
+    if (mapping?.maxJobDurationSec && mapping.maxJobDurationSec > 0) {
+      return mapping.maxJobDurationSec;
+    }
+  }
+  return DEFAULT_MAX_JOB_DURATION_SEC;
+}
+
+/**
+ * Detect if a worker is stuck in a loop by comparing recent heartbeat excerpts.
+ * Reads the last N heartbeat files or compares against current status excerpts.
+ */
+function detectStuckLoop(jobId: string, currentExcerpt: string): boolean {
+  const historyFile = path.join(jobDir(jobId), 'heartbeat-history.json');
+  let history: string[] = [];
+  try {
+    if (fs.existsSync(historyFile)) {
+      history = JSON.parse(fs.readFileSync(historyFile, 'utf8'));
+    }
+  } catch { /* start fresh */ }
+
+  // Normalize: trim whitespace and collapse runs of whitespace
+  const normalized = currentExcerpt.trim().replace(/\s+/g, ' ');
+  if (normalized.length < 10) {
+    // Too short to be meaningful — skip loop detection
+    return false;
+  }
+
+  history.push(normalized);
+  // Keep only the last N entries
+  if (history.length > STUCK_LOOP_THRESHOLD + 2) {
+    history = history.slice(-STUCK_LOOP_THRESHOLD - 2);
+  }
+  fs.writeFileSync(historyFile, JSON.stringify(history));
+
+  // Check if the last N entries are identical
+  if (history.length >= STUCK_LOOP_THRESHOLD) {
+    const recent = history.slice(-STUCK_LOOP_THRESHOLD);
+    if (recent.every(h => h === recent[0])) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string; live?: boolean; exitCode?: number; result?: JobResult; linear?: LinearSyncResult }> {
@@ -966,13 +1140,49 @@ async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string
   }
   if (status.state === 'running') {
     notifyStart(jobId);
+
+    // ── Job timeout detection ──
+    if (status.started_at) {
+      const elapsedSec = Math.round((Date.now() - new Date(status.started_at).getTime()) / 1000);
+      let packet: JobPacket | null = null;
+      try { packet = readJson(packetPath(jobId)) as unknown as JobPacket; } catch { /* ignore */ }
+      const maxDuration = packet ? resolveMaxJobDuration(packet) : DEFAULT_MAX_JOB_DURATION_SEC;
+
+      if (elapsedSec > maxDuration) {
+        const durationMin = Math.round(elapsedSec / 60);
+        const limitMin = Math.round(maxDuration / 60);
+        appendLog(jobId, `[${nowIso()}] TIMEOUT: job running ${durationMin}min exceeds limit of ${limitMin}min — auto-interrupting`);
+        sendDiscordMessage(DISCORD_ERRORS_CHANNEL,
+          `⏰ TIMEOUT — job \`${jobId}\` auto-interrupted after ${durationMin}min (limit: ${limitMin}min)`);
+        interruptJob(jobId);
+        saveStatus(jobId, {
+          last_output_excerpt: `auto-interrupted: exceeded ${limitMin}min timeout`,
+        });
+        return { ok: true, state: 'blocked', live: false };
+      }
+    }
+
+    // ── Heartbeat capture ──
     const tmux = commandExists('tmux') || 'tmux';
     const capture = run(tmux, ['capture-pane', '-pt', status.tmux_session!]);
     if (capture.status === 0) {
+      const excerpt = safeExcerpt(capture.stdout || '');
       saveStatus(jobId, {
         last_heartbeat_at: nowIso(),
-        last_output_excerpt: safeExcerpt(capture.stdout || ''),
+        last_output_excerpt: excerpt,
       });
+
+      // ── Stuck-loop detection ──
+      if (detectStuckLoop(jobId, excerpt)) {
+        appendLog(jobId, `[${nowIso()}] STUCK LOOP: identical output repeated ${STUCK_LOOP_THRESHOLD}+ times — auto-interrupting`);
+        sendDiscordMessage(DISCORD_ERRORS_CHANNEL,
+          `🔄 STUCK LOOP — job \`${jobId}\` appears stuck (same output ${STUCK_LOOP_THRESHOLD}x) — auto-interrupting`);
+        interruptJob(jobId);
+        saveStatus(jobId, {
+          last_output_excerpt: `auto-interrupted: stuck loop detected (same output repeated ${STUCK_LOOP_THRESHOLD}+ heartbeats)`,
+        });
+        return { ok: true, state: 'blocked', live: false };
+      }
     }
     return { ok: true, state: 'running', live: true };
   }

@@ -20,6 +20,8 @@ export interface RepoMapping {
   mergeMethod?: 'squash' | 'merge' | 'rebase';
   linearOrg?: string;
   nightly?: NightlyConfig;
+  /** Max job duration in seconds before auto-interrupt (default: 1800 = 30 min) */
+  maxJobDurationSec?: number;
 }
 
 export interface NightlyConfig {
@@ -55,6 +57,10 @@ export interface JobPacket {
   metadata?: Record<string, unknown>;
   created_at?: string;
   nightly?: NightlyConfig;
+  /** How many times this job has been retried (0 = original run) */
+  retryCount?: number;
+  /** Max retries allowed for transient failures (default: 1) */
+  maxRetries?: number;
 }
 
 // ── Job status ──
