@@ -119,25 +119,29 @@ export function getOrCreateKnowledge(
   }
 
   // Merge auto-detected values (only fill in nulls — manual overrides persist)
+  let changed = isNew;
   if (autoDetected) {
     if (autoDetected.commands) {
       for (const [key, value] of Object.entries(autoDetected.commands)) {
         const cmdKey = key as keyof RepoKnowledge['commands'];
         if (value && !knowledge.commands[cmdKey]) {
           knowledge.commands[cmdKey] = value;
+          changed = true;
         }
       }
     }
     if (autoDetected.projectType && !knowledge.projectType) {
       knowledge.projectType = autoDetected.projectType;
+      changed = true;
     }
     if (autoDetected.packageManager && !knowledge.packageManager) {
       knowledge.packageManager = autoDetected.packageManager;
+      changed = true;
     }
   }
 
-  // Persist if new or updated
-  if (isNew || autoDetected) {
+  // Only write to disk if something actually changed
+  if (changed) {
     saveKnowledge(knowledge);
   }
 
