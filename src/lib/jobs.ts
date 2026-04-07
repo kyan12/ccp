@@ -847,7 +847,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : (status.exit_code ?? 0);
   const provisionalState = exitCode === 0 ? (summary.state || 'coded') : (summary.state || 'failed');
   // Use worktree path for proof inspection (branch/dirty/pushed are per-working-tree)
-  const proofPath = status.worktree_path || packet.repo;
+  const proofPath = (status.worktree_path && fs.existsSync(status.worktree_path)) ? status.worktree_path : packet.repo;
   const proof = inspectRepoProof(proofPath, summary.commit || 'none');
   const inferredBlocker = inferBlockedReason(logText, {
     state: provisionalState,
