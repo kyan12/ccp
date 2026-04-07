@@ -634,7 +634,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         // Only act on "changes_requested" reviews with a non-empty body
         if (reviewState === 'changes_requested' && reviewBody.trim()) {
           try {
-            const { listJobs: lj, readJson: rj, resultPath: rp, packetPath: pp, createJob, saveStatus: ss } = require('../lib/jobs');
+            const { listJobs: lj, readJson: rj, resultPath: rp, packetPath: pp, createJob } = require('../lib/jobs');
             const { findRepoMapping } = require('../lib/repos');
             const allJobs = lj();
 
@@ -681,14 +681,14 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
                 },
               };
 
-              const jobId = createJob(reviewPacket);
-              process.stdout.write(`[github-webhook] created review-feedback job ${jobId} for ${repo}#${prNum}\n`);
+              const created = createJob(reviewPacket);
+              process.stdout.write(`[github-webhook] created review-feedback job ${created.jobId} for ${repo}#${prNum}\n`);
 
               if (autoStart) {
                 await runSupervisorCycle({ maxConcurrent });
               }
 
-              json(res, 200, { ok: true, action: 'review-feedback-job-created', job_id: jobId, pr: prNum, reviewer });
+              json(res, 200, { ok: true, action: 'review-feedback-job-created', job_id: created.jobId, pr: prNum, reviewer });
               return;
             }
           } catch (error) {
