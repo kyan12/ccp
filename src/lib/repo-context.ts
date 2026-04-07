@@ -48,10 +48,13 @@ function readFirstNChars(filePath: string, n: number): string | null {
   try {
     if (!fs.existsSync(filePath)) return null;
     const fd = fs.openSync(filePath, 'r');
-    const buf = Buffer.alloc(n);
-    const bytesRead = fs.readSync(fd, buf, 0, n, 0);
-    fs.closeSync(fd);
-    return buf.toString('utf8', 0, bytesRead);
+    try {
+      const buf = Buffer.alloc(n);
+      const bytesRead = fs.readSync(fd, buf, 0, n, 0);
+      return buf.toString('utf8', 0, bytesRead);
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     return null;
   }
