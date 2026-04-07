@@ -1259,12 +1259,12 @@ function createJobWorktree(jobId: string, repoPath: string, branch: string | nul
       const gitWt = (args: string[]) => run('git', ['-C', worktreePath, ...args]);
       gitWt(['checkout', '-B', branch, `origin/${branch}`]);
     } else {
-      // For new jobs, create worktree from origin/main
+      // For new jobs, create worktree from origin/main in detached HEAD.
+      // We intentionally leave it detached — checking out 'main' would fail because
+      // it's already checked out in the shared clone. The worker will create its own
+      // feature branch from this starting point.
       const wt = git(['worktree', 'add', worktreePath, 'origin/main', '--detach']);
       if (wt.status !== 0) return null;
-      // Reset to origin/main inside worktree
-      const gitWt = (args: string[]) => run('git', ['-C', worktreePath, ...args]);
-      gitWt(['checkout', '-B', 'main', 'origin/main']);
     }
     return worktreePath;
   } catch {

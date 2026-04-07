@@ -131,6 +131,8 @@ function buildIncidentPacket(kind: string, payload: IntakePayload): JobPacket {
     acceptance_criteria,
     constraints,
     verification_steps,
+    // Propagate priority from intake payload (e.g. CI failures = 2)
+    ...(payload.priority != null ? { priority: payload.priority } : {}),
     metadata: { ...normalized.metadata, enriched_description: description },
   };
 }

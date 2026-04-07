@@ -236,6 +236,8 @@ export interface IntakePayload {
   message?: string;
   data?: Record<string, unknown>;
   action?: string;
+  /** Job priority override: 1=urgent, 2=high, 3=normal, 4=low */
+  priority?: number;
   issue?: Record<string, unknown>;
   culprit?: string;
   issueTitle?: string;
