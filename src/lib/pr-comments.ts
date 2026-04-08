@@ -73,15 +73,40 @@ function fetchPrReviewComments(prUrl: string): ReviewComment[] {
     const text = (out.stdout || '').trim();
     if (!text) return [];
     // Handle paginated output: gh api --paginate may return multiple JSON arrays
-    // separated by whitespace. Parse each array individually to avoid corrupting
-    // comment bodies that contain `] [` patterns.
+    // separated by whitespace. Try parsing as-is first (covers single-page and
+    // valid JSON). Only attempt line-by-line splitting if the initial parse fails,
+    // which avoids false-positive detection of `] [` inside comment body strings.
     let parsed: RawReviewComment[];
-    if (text.startsWith('[') && /\]\s*\[/.test(text)) {
-      const chunks = text.match(/\[[\s\S]*?\](?=\s*\[|\s*$)/g) || [];
-      parsed = chunks.flatMap((chunk: string) => JSON.parse(chunk));
-    } else {
+    try {
       const p = JSON.parse(text);
       parsed = Array.isArray(p) ? p : [p];
+    } catch {
+      // Initial parse failed — likely multiple JSON arrays from pagination.
+      // Split on lines that are standalone `[` or `]` boundaries and parse each page.
+      const pages: RawReviewComment[][] = [];
+      let depth = 0;
+      let start = -1;
+      for (let i = 0; i < text.length; i++) {
+        if (text[i] === '[' && depth === 0) { start = i; depth++; }
+        else if (text[i] === '[') { depth++; }
+        else if (text[i] === ']' && depth === 1) {
+          depth--;
+          if (start >= 0) {
+            try { pages.push(JSON.parse(text.slice(start, i + 1))); } catch { /* skip malformed page */ }
+          }
+          start = -1;
+        }
+        else if (text[i] === ']') { depth--; }
+        // Skip characters inside strings to avoid counting brackets in string values
+        else if (text[i] === '"') {
+          i++;
+          while (i < text.length && text[i] !== '"') {
+            if (text[i] === '\\') i++; // skip escaped char
+            i++;
+          }
+        }
+      }
+      parsed = pages.flat();
     }
     raw = parsed;
   } catch (e) {
