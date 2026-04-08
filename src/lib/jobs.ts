@@ -369,12 +369,8 @@ function buildPrompt(packet: JobPacket): string {
   bits.push('If you make code changes, you MUST create a feature branch FROM main (e.g. `git checkout -b feat/my-branch main`), push it to origin, and create a pull request via `gh pr create --base main`. Never push directly to main. Never branch from another feature branch. Do not stop at a local-only commit.');
   if (packet.reviewComments?.length) {
     bits.push('IMPORTANT: After your final summary, you MUST also output an AddressedComments JSON block.');
-    bits.push('For EACH review comment listed above, report what you did in this exact format:');
-    bits.push('AddressedComments: [');
-    bits.push('  {"commentId": <number>, "status": "fixed"|"not_fixed"|"partial", "explanation": "<what changed or why not fixed>"}');
-    bits.push(']');
-    bits.push('The AddressedComments block MUST be valid JSON on a single line starting with "AddressedComments: ".');
-    bits.push('Include one entry per review comment. Do not skip any.');
+    bits.push('For EACH review comment listed above, report what you did. Output a SINGLE line in this exact format:\nAddressedComments: [{"commentId": <number>, "status": "fixed"|"not_fixed"|"partial", "explanation": "<what changed or why not fixed>"}, ...]');
+    bits.push('The AddressedComments block MUST be valid JSON on a single line starting with "AddressedComments: ". Include one entry per review comment. Do not skip any.');
   }
   return bits.join('\n\n');
 }
