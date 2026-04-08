@@ -248,7 +248,7 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
             const repoName = packet.repo ? packet.repo.split('/').pop() : 'unknown';
             const prNum = result.pr_url ? result.pr_url.split('/').pop() : '';
             sendDiscordMessage(DISCORD_STATUS_CHANNEL, `🔀 MERGED — ${packet.ticket_id || jobId} | ${repoName} | PR #${prNum}`);
-          } catch { /* best-effort */ }
+          } catch (e) { process.stderr.write(`[pr-watcher] discord merge notification failed: ${(e as Error).message}\n`); }
         }
       }
     }
@@ -294,13 +294,13 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
             if (currentForRebase.discord_thread_id) {
               try {
                 sendDiscordMessage(currentForRebase.discord_thread_id, `🔄 Auto-rebased branch to resolve merge conflicts: ${rebaseResult.message}`);
-              } catch { /* best-effort */ }
+              } catch (e) { process.stderr.write(`[pr-watcher] discord rebase thread msg failed: ${(e as Error).message}\n`); }
             }
             if (DISCORD_STATUS_CHANNEL) {
               try {
                 const repoName = packet.repo ? packet.repo.split('/').pop() : 'unknown';
                 sendDiscordMessage(DISCORD_STATUS_CHANNEL, `🔄 Auto-rebase — ${packet.ticket_id || jobId} | ${repoName} | ${rebaseResult.message}`);
-              } catch { /* best-effort */ }
+              } catch (e) { process.stderr.write(`[pr-watcher] discord rebase status msg failed: ${(e as Error).message}\n`); }
             }
             actions.push(entry);
             continue;
@@ -322,7 +322,7 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
             try {
               const repoName = packet.repo ? packet.repo.split('/').pop() : 'unknown';
               sendDiscordMessage(DISCORD_STATUS_CHANNEL, `🔄 Remediation spawned — ${packet.ticket_id || jobId} | ${repoName} | fix job: ${remResult.job_id}`);
-            } catch { /* best-effort */ }
+            } catch (e) { process.stderr.write(`[pr-watcher] discord remediation status msg failed: ${(e as Error).message}\n`); }
           }
         }
       } else if (remediationExists(jobId)) {
@@ -371,7 +371,7 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
         if (review.autoMergeEnabled) parts.push('Auto-merge enabled');
         if (review.blockers?.length) parts.push(`Blockers: ${review.blockers.join('; ')}`);
         sendDiscordMessage(current.discord_thread_id, parts.join('\n'));
-      } catch { /* thread message is best-effort */ }
+      } catch (e) { process.stderr.write(`[pr-watcher] discord thread status msg failed: ${(e as Error).message}\n`); }
     }
 
     // Post lifecycle updates to status channel
@@ -390,7 +390,7 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
             sendDiscordMessage(DISCORD_ERRORS_CHANNEL, `🔴 BLOCKED — ${ticket} | ${repoName} | ${prRef}\n${reason}`);
           }
         }
-      } catch { /* best-effort */ }
+      } catch (e) { process.stderr.write(`[pr-watcher] discord lifecycle status msg failed: ${(e as Error).message}\n`); }
     }
 
     // Only sync Linear when the PR disposition actually changed

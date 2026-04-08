@@ -409,7 +409,8 @@ async function postCompletionComment(
   try {
     await createIssueComment(issueId, parts.join('\n'));
     return true;
-  } catch {
+  } catch (e) {
+    process.stderr.write(`[linear] failed to post result comment on ${issueId}: ${(e as Error).message}\n`);
     return false;
   }
 }
