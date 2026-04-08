@@ -73,8 +73,8 @@ function fetchPrReviewComments(prUrl: string): ReviewComment[] {
     const text = (out.stdout || '').trim();
     if (!text) return [];
     // Handle paginated output: may be multiple JSON arrays concatenated
-    const parsed = JSON.parse(text.startsWith('[') && text.includes('][')
-      ? `[${text.replace(/\]\s*\[/g, ',')}]`
+    const parsed = JSON.parse(text.startsWith('[') && /\]\s*\[/.test(text)
+      ? text.replace(/\]\s*\[/g, ',')
       : text);
     raw = Array.isArray(parsed) ? parsed : [parsed];
   } catch (e) {
