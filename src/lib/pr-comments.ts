@@ -274,8 +274,9 @@ function resolveThread(ownerRepo: string, commentId: number): { ok: boolean; err
   const commentNodeId = nodeOut.stdout.trim();
 
   // Query the thread node ID from the comment's node ID via GraphQL
-  const threadQuery = `query { node(id: "${commentNodeId}") { ... on PullRequestReviewComment { pullRequestReviewThread { id } } } }`;
-  const threadOut = run(gh, ['api', 'graphql', '--field', `query=${threadQuery}`, '--jq', '.data.node.pullRequestReviewThread.id']);
+  // Use proper GraphQL variables to avoid string interpolation injection
+  const threadQuery = 'query($nid: ID!) { node(id: $nid) { ... on PullRequestReviewComment { pullRequestReviewThread { id } } } }';
+  const threadOut = run(gh, ['api', 'graphql', '--field', 'query=' + threadQuery, '--field', 'nid=' + commentNodeId, '--jq', '.data.node.pullRequestReviewThread.id']);
 
   const threadId = (threadOut.stdout || '').trim();
   if (threadOut.status !== 0 || !threadId) {
@@ -283,8 +284,9 @@ function resolveThread(ownerRepo: string, commentId: number): { ok: boolean; err
   }
 
   // Resolve the review thread (keeps content visible, just marks as resolved)
-  const resolveQuery = `mutation { resolveReviewThread(input: {threadId: "${threadId}"}) { thread { isResolved } } }`;
-  const resolveOut = run(gh, ['api', 'graphql', '--field', `query=${resolveQuery}`]);
+  // Use proper GraphQL variables to avoid string interpolation injection
+  const resolveQuery = 'mutation($tid: ID!) { resolveReviewThread(input: {threadId: $tid}) { thread { isResolved } } }';
+  const resolveOut = run(gh, ['api', 'graphql', '--field', 'query=' + resolveQuery, '--field', 'tid=' + threadId]);
 
   if (resolveOut.status !== 0) {
     return { ok: false, error: (resolveOut.stderr || 'graphql resolveReviewThread failed').trim().slice(0, 200) };
