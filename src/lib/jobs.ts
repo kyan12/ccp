@@ -5,6 +5,7 @@ import type {
   RunResult, JobPacket, JobStatus, JobResult, RepoProof,
   PRReviewResult, PrReviewIntegration, RemediationResult, DiscordMessageResult, DiscordThreadResult,
   SupervisorCycleSummary, PreflightResult, LinearSyncResult, PrWatcherCycleResult,
+  ReviewComment, AddressedComment,
 } from '../types';
 const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./linear');
 const { dispatchLinearIssues } = require('./linear-dispatch');
@@ -12,6 +13,7 @@ const { reviewPr } = require('./pr-review');
 const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = require('./outage');
 const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
+const { fetchPrReviewComments, postRemediationComments } = require('./pr-comments');
 // Lazy-require to avoid circular dependency (pr-watcher imports from jobs)
 let _runPrWatcherCycle: (() => Promise<PrWatcherCycleResult>) | undefined;
 function getRunPrWatcherCycle(): () => Promise<PrWatcherCycleResult> {
@@ -341,6 +343,15 @@ function buildPrompt(packet: JobPacket): string {
     bits.push(`Verification steps (you MUST complete each step before reporting done):\n${packet.verification_steps.map((vs, i) => `${i + 1}. ${vs}`).join('\n')}`);
   }
   if (packet.review_feedback?.length) bits.push(`Review feedback to address:\n- ${packet.review_feedback.join('\n- ')}`);
+  if (packet.reviewComments?.length) {
+    bits.push('You MUST address each of the following PR review comments individually.');
+    bits.push('Review comments to address:');
+    for (const rc of packet.reviewComments) {
+      bits.push(`--- Comment #${rc.commentId} (${rc.path}${rc.line ? `:${rc.line}` : ''}) by ${rc.author || 'reviewer'} ---`);
+      bits.push(rc.body);
+      bits.push('---');
+    }
+  }
   bits.push('Never ask clarifying questions. You are running non-interactively — no one will answer.');
   bits.push('If the ticket is ambiguous, investigate the codebase and make your best judgment.');
   bits.push('If truly blocked (missing credentials, broken build, etc.), exit with a clear blocker description — do not ask questions.');
@@ -356,6 +367,15 @@ function buildPrompt(packet: JobPacket): string {
   bits.push('Summary: <1-3 sentence description of what you did>');
   bits.push('Do not claim pushed or deployed unless it actually happened. A local commit on main is not the same as pushed.');
   bits.push('If you make code changes, you MUST create a feature branch FROM main (e.g. `git checkout -b feat/my-branch main`), push it to origin, and create a pull request via `gh pr create --base main`. Never push directly to main. Never branch from another feature branch. Do not stop at a local-only commit.');
+  if (packet.reviewComments?.length) {
+    bits.push('IMPORTANT: After your final summary, you MUST also output an AddressedComments JSON block.');
+    bits.push('For EACH review comment listed above, report what you did in this exact format:');
+    bits.push('AddressedComments: [');
+    bits.push('  {"commentId": <number>, "status": "fixed"|"not_fixed"|"partial", "explanation": "<what changed or why not fixed>"}');
+    bits.push(']');
+    bits.push('The AddressedComments block MUST be valid JSON on a single line starting with "AddressedComments: ".');
+    bits.push('Include one entry per review comment. Do not skip any.');
+  }
   return bits.join('\n\n');
 }
 
@@ -447,6 +467,20 @@ function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result:
       ? 'Investigate the deployment/platform failure, fix anything code-side that can resolve it, and push updates to the same branch. If the issue is definitely external/platform-only, leave a precise blocker note with the exact failing service and URL.'
       : 'Fix the blocking PR issues on the existing branch, push updates to the same branch, and do not create a new PR.',
   ];
+
+  // Fetch structured review comments from the PR for comment-level tracking
+  let reviewComments: ReviewComment[] = [];
+  if (prReview.blockerType === 'review' || prReview.blockerType === 'checks') {
+    try {
+      reviewComments = fetchPrReviewComments(prReview.prUrl);
+      if (reviewComments.length > 0) {
+        appendLog(jobId, `[${nowIso()}] fetched ${reviewComments.length} review comments from PR`);
+      }
+    } catch (e) {
+      appendLog(jobId, `[${nowIso()}] failed to fetch review comments: ${(e as Error).message}`);
+    }
+  }
+
   const remediationPacket: JobPacket = {
     ...packet,
     job_id: remediationJobId,
@@ -455,6 +489,7 @@ function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result:
     kind: prReview.blockerType === 'deploy' ? 'deploy' : 'bug',
     label: prReview.blockerType === 'deploy' ? 'deploy' : 'review-fix',
     review_feedback: feedback,
+    reviewComments: reviewComments.length > 0 ? reviewComments : undefined,
     working_branch: prReview.headRefName || packet.working_branch || null,
     base_branch: prReview.baseRefName || packet.base_branch || 'main',
     acceptance_criteria: [
@@ -531,8 +566,8 @@ function notifyStart(jobId: string): void {
   saveStatus(jobId, { notifications: { start: sent.ok, final: false } });
 }
 
-function parseSummary(logText: string): Record<string, string> {
-  const fields: Record<string, string> = {};
+function parseSummary(logText: string): Record<string, string> & { addressedComments?: AddressedComment[] } {
+  const fields: Record<string, string> & { addressedComments?: AddressedComment[] } = {};
   for (const key of ['State', 'Commit', 'Prod', 'Verified', 'Blocker', 'Risk', 'Summary']) {
     const re = new RegExp(`^${key}:\\s*(.+)$`, 'gmi');
     const matches = [...logText.matchAll(re)];
@@ -554,6 +589,31 @@ function parseSummary(logText: string): Record<string, string> {
       break;
     }
   }
+
+  // Extract AddressedComments JSON block from worker output
+  const addressedPattern = /^AddressedComments:\s*(\[[\s\S]*?\])$/gm;
+  const addressedMatches = [...logText.matchAll(addressedPattern)];
+  if (addressedMatches.length > 0) {
+    const lastMatch = addressedMatches[addressedMatches.length - 1][1];
+    try {
+      const parsed = JSON.parse(lastMatch);
+      if (Array.isArray(parsed)) {
+        fields.addressedComments = parsed.filter((c: Record<string, unknown>) =>
+          typeof c.commentId === 'number' &&
+          typeof c.status === 'string' &&
+          typeof c.explanation === 'string'
+        ).map((c: Record<string, unknown>): AddressedComment => ({
+          commentId: c.commentId as number,
+          status: c.status as 'fixed' | 'not_fixed' | 'partial',
+          explanation: c.explanation as string,
+          commitSha: (c.commitSha as string) || null,
+        }));
+      }
+    } catch {
+      // Malformed JSON — ignore, worker didn't produce valid output
+    }
+  }
+
   return fields;
 }
 
@@ -770,6 +830,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     failed_checks: [],
     risk: summary.risk || null,
     summary: summary.summary || null,
+    addressedComments: summary.addressedComments || undefined,
     tmux_session: status.tmux_session,
     worker_exit_code: exitCode,
     proof,
@@ -793,6 +854,23 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     writeJson(resultPath(jobId), result);
   }
   const remediation = maybeEnqueueReviewRemediation(jobId, packet, result, prReview);
+
+  // Post per-comment replies and summary for remediation jobs that have addressedComments
+  const isRemediationJob = /__deployfix|__reviewfix/.test(jobId);
+  if (isRemediationJob && result.addressedComments?.length && prUrl) {
+    try {
+      const commentResult = postRemediationComments({
+        prUrl,
+        addressedComments: result.addressedComments,
+        commitSha: result.commit !== 'none' ? result.commit : null,
+        resolveThreads: result.addressedComments.every((c: AddressedComment) => c.status === 'fixed'),
+      });
+      appendLog(jobId, `[${nowIso()}] pr comment replies: ${commentResult.replyResults.length} sent, ${commentResult.replyResults.filter((r: { ok: boolean }) => r.ok).length} ok, summary=${commentResult.summaryResult.ok ? 'ok' : 'failed'}${commentResult.fallbackUsed ? ' (fallback)' : ''}`);
+    } catch (e) {
+      appendLog(jobId, `[${nowIso()}] pr comment replies error: ${(e as Error).message}`);
+    }
+  }
+
   const linear = await maybeSyncLinear(jobId);
 
   const currentAfterIntegrations = loadStatus(jobId);

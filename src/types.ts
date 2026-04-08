@@ -50,6 +50,7 @@ export interface JobPacket {
   constraints?: string[];
   verification_steps?: string[];
   review_feedback?: string[];
+  reviewComments?: ReviewComment[];
   working_branch?: string | null;
   base_branch?: string | null;
   metadata?: Record<string, unknown>;
@@ -139,6 +140,7 @@ export interface JobResult {
   failed_checks?: CheckInfo[];
   risk?: string | null;
   summary?: string | null;
+  addressedComments?: AddressedComment[];
   tmux_session?: string | null;
   worker_exit_code?: number;
   proof?: RepoProof;
@@ -281,6 +283,26 @@ export interface DiscordThreadResult {
   threadId: string | null;
   stdout: string;
   stderr: string;
+}
+
+// ── Review comments ──
+
+export interface ReviewComment {
+  commentId: number;
+  threadId?: number | null;
+  path: string;
+  line: number | null;
+  side?: string;
+  body: string;
+  author?: string;
+  inReplyToId?: number | null;
+}
+
+export interface AddressedComment {
+  commentId: number;
+  status: 'fixed' | 'not_fixed' | 'partial';
+  explanation: string;
+  commitSha?: string | null;
 }
 
 // ── Remediation ──
