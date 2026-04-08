@@ -72,11 +72,18 @@ function fetchPrReviewComments(prUrl: string): ReviewComment[] {
     // gh api --paginate may return multiple JSON arrays; concatenate them
     const text = (out.stdout || '').trim();
     if (!text) return [];
-    // Handle paginated output: may be multiple JSON arrays concatenated
-    const parsed = JSON.parse(text.startsWith('[') && /\]\s*\[/.test(text)
-      ? text.replace(/\]\s*\[/g, ',')
-      : text);
-    raw = Array.isArray(parsed) ? parsed : [parsed];
+    // Handle paginated output: gh api --paginate may return multiple JSON arrays
+    // separated by whitespace. Parse each array individually to avoid corrupting
+    // comment bodies that contain `] [` patterns.
+    let parsed: RawReviewComment[];
+    if (text.startsWith('[') && /\]\s*\[/.test(text)) {
+      const chunks = text.match(/\[[\s\S]*?\](?=\s*\[|\s*$)/g) || [];
+      parsed = chunks.flatMap((chunk: string) => JSON.parse(chunk));
+    } else {
+      const p = JSON.parse(text);
+      parsed = Array.isArray(p) ? p : [p];
+    }
+    raw = parsed;
   } catch (e) {
     console.error(`[pr-comments] failed to parse review comments JSON: ${(e as Error).message}`);
     return [];
@@ -218,16 +225,17 @@ function postPrSummaryComment(
 // ── Thread resolution ──
 
 /**
- * Attempt to resolve/minimize a review thread on GitHub.
- * Uses the GraphQL API to minimize (hide) a comment as resolved.
- * Note: Full thread resolution requires the GraphQL `resolveReviewThread` mutation
- * which needs the thread's GraphQL node ID. We attempt to resolve via GraphQL first,
- * falling back to minimizing the comment.
+ * Attempt to resolve a review thread on GitHub.
+ * Uses the GraphQL `resolveReviewThread` mutation which marks the thread as resolved
+ * while keeping the discussion visible and expandable (unlike `minimizeComment` which hides it).
+ *
+ * Requires fetching the thread's GraphQL node ID from the comment's node ID.
+ * If the thread ID cannot be determined, skips resolution rather than hiding the comment.
  */
 function resolveThread(ownerRepo: string, commentId: number): { ok: boolean; error?: string } {
   const gh = commandExists('gh') || 'gh';
 
-  // First, get the GraphQL node_id for this comment
+  // Get the GraphQL node_id for this comment
   const nodeOut = run(gh, [
     'api',
     `repos/${ownerRepo}/pulls/comments/${commentId}`,
@@ -238,16 +246,23 @@ function resolveThread(ownerRepo: string, commentId: number): { ok: boolean; err
     return { ok: false, error: 'could not fetch comment node_id' };
   }
 
-  const nodeId = nodeOut.stdout.trim();
+  const commentNodeId = nodeOut.stdout.trim();
 
-  // Attempt to resolve the review thread via GraphQL
-  // The resolveReviewThread mutation requires the thread ID, not the comment ID.
-  // We need to query the thread ID from the comment's pull_request_review_thread
-  const resolveQuery = `mutation { minimizeComment(input: {subjectId: "${nodeId}", classifier: RESOLVED}) { minimizedComment { isMinimized } } }`;
+  // Query the thread node ID from the comment's node ID via GraphQL
+  const threadQuery = `query { node(id: "${commentNodeId}") { ... on PullRequestReviewComment { pullRequestReviewThread { id } } } }`;
+  const threadOut = run(gh, ['api', 'graphql', '--field', `query=${threadQuery}`, '--jq', '.data.node.pullRequestReviewThread.id']);
+
+  const threadId = (threadOut.stdout || '').trim();
+  if (threadOut.status !== 0 || !threadId) {
+    return { ok: false, error: 'could not determine thread node_id from comment — skipping resolution' };
+  }
+
+  // Resolve the review thread (keeps content visible, just marks as resolved)
+  const resolveQuery = `mutation { resolveReviewThread(input: {threadId: "${threadId}"}) { thread { isResolved } } }`;
   const resolveOut = run(gh, ['api', 'graphql', '--field', `query=${resolveQuery}`]);
 
   if (resolveOut.status !== 0) {
-    return { ok: false, error: (resolveOut.stderr || 'graphql resolve failed').trim().slice(0, 200) };
+    return { ok: false, error: (resolveOut.stderr || 'graphql resolveReviewThread failed').trim().slice(0, 200) };
   }
 
   return { ok: true };
