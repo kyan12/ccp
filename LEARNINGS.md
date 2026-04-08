@@ -365,3 +365,37 @@ Three issues found and fixed:
 - **Silent catch elimination is ongoing**: New code (notifications, Linear dispatch) continues
   to introduce silent catches. Every review should scan for `catch` blocks without logging.
 
+## 2026-04-08 — Nightly Review
+
+### Bug Fixed: Silent catch blocks in pr-watcher.ts Discord notifications and linear.ts comment posting
+
+Seven silent catch blocks that swallowed errors without logging:
+
+1. **`pr-watcher.ts` — 6 Discord notification catches** — The Discord lifecycle feature (b351eb7)
+   introduced 6 `catch { /* best-effort */ }` blocks around `sendDiscordMessage` calls for merge
+   notifications, auto-rebase messages, remediation status, thread status updates, and lifecycle
+   channel updates. If Discord integration breaks (bad channel ID, network issue, CLI failure),
+   all failures are completely invisible. Fixed: all 6 now log to stderr with `[pr-watcher]` prefix.
+
+2. **`linear.ts:412` — `postCompletionComment` silent catch** — When posting a job result comment
+   to a Linear issue fails (API down, permissions changed, issue deleted), the function returns
+   `false` but logs nothing. Caller sees failure but has no diagnostic info. Fixed: logs error
+   to stderr with the issue ID.
+
+### Code Health Observations
+
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+- **`collectPrReviewFeedback` uses `spawnSync`** (`intake-server.ts:131-159`): The function
+  calls `gh api` synchronously 3 times inside an HTTP request handler, blocking the event loop
+  for potentially seconds. Should be refactored to use async `child_process.exec` or cached.
+- **Remaining silent catches**: ~15 `catch { }` blocks remain in the codebase. Most are
+  acceptable (fallback parsing, optional module loading, loop-skip patterns). The Discord and
+  Linear notification catches were the highest priority since they hide integration failures.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Eleven consecutive reviews, each identifying and resolving issues.
+- **Silent catch convention**: All notification/integration catches should log. Loop-skip catches
+  (`catch { continue; }` for scanning job packets) are acceptable when the loop is best-effort.
+
