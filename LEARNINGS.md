@@ -399,3 +399,38 @@ Seven silent catch blocks that swallowed errors without logging:
 - **Silent catch convention**: All notification/integration catches should log. Loop-skip catches
   (`catch { continue; }` for scanning job packets) are acceptable when the loop is best-effort.
 
+## 2026-04-09 — Nightly Review
+
+### Bug Fixed: Missing `prUrl` in webhook-triggered review remediation
+
+The GitHub webhook handler in `intake-server.ts` constructs a `review` object to pass to
+`maybeEnqueueReviewRemediation`, but omitted the `prUrl` property. Inside `maybeEnqueueReviewRemediation`,
+the code reads `prReview.prUrl` to fetch structured review comments via `fetchPrReviewComments`.
+With `prUrl` being `undefined`, `parsePrUrl(undefined)` returned `null`, so `fetchPrReviewComments`
+always returned `[]` — meaning the entire per-comment review reply feature (built across the last
+5 commits: 9049030, 080f877, bc8a1ca, 6cdb66f) was silently non-functional for webhook-triggered
+remediations.
+
+**Fix:** Added `prUrl` to the review object constructed in the webhook handler (line ~619).
+The value was already available as a local variable (`prUrl`) computed at line 591.
+
+### Code Health Observations
+
+- **`collectPrReviewFeedback` redundancy**: The webhook handler calls `collectPrReviewFeedback`
+  (3 sync `gh api` calls) to build text-based blockers, then `maybeEnqueueReviewRemediation`
+  calls `fetchPrReviewComments` (1 more `gh api` call) for the same PR. These could be unified
+  to avoid redundant API calls, but are not functionally incorrect.
+- **`collectPrReviewFeedback` uses `spawnSync` in HTTP handler** (`intake-server.ts:131-159`):
+  Blocks the event loop for potentially seconds during webhook processing. Lower priority since
+  webhooks are infrequent and the server is lightly loaded.
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Twelve consecutive reviews, each identifying and resolving issues.
+- **Manually constructed type-like objects miss properties**: When building an object to satisfy
+  an interface (like `PRReviewResult`), TypeScript won't catch missing properties if the object
+  is used with a wider type. Always verify that hand-constructed objects include all properties
+  the downstream consumer actually reads.
+

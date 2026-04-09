@@ -617,6 +617,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
             skipped: false,
             disposition: 'block',
             blockerType: 'review',
+            prUrl,
             blockers,
             failedChecks: [],
             merged: false,
