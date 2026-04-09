@@ -116,6 +116,7 @@ function fetchPrReviewComments(prUrl: string): ReviewComment[] {
 
   return raw
     .filter((c) => c.body && c.path) // Only include comments with content and a file path
+    .filter((c) => !c.in_reply_to_id) // Exclude reply comments — only top-level review findings become remediation tasks
     .map((c): ReviewComment => ({
       commentId: c.id || c.databaseId || 0,
       threadId: c.pull_request_review_id || null,
@@ -254,13 +255,14 @@ function postPrSummaryComment(
  * Uses the GraphQL `resolveReviewThread` mutation which marks the thread as resolved
  * while keeping the discussion visible and expandable (unlike `minimizeComment` which hides it).
  *
- * Requires fetching the thread's GraphQL node ID from the comment's node ID.
- * If the thread ID cannot be determined, skips resolution rather than hiding the comment.
+ * Traverses pullRequest.reviewThreads to find the thread containing the given comment,
+ * since PullRequestReviewComment does not expose a direct pullRequestReviewThread field
+ * in the GitHub GraphQL schema.
  */
-function resolveThread(ownerRepo: string, commentId: number): { ok: boolean; error?: string } {
+function resolveThread(ownerRepo: string, commentId: number, prNumber?: number): { ok: boolean; error?: string } {
   const gh = commandExists('gh') || 'gh';
 
-  // Get the GraphQL node_id for this comment
+  // Get the GraphQL node_id for this comment via REST
   const nodeOut = run(gh, [
     'api',
     `repos/${ownerRepo}/pulls/comments/${commentId}`,
@@ -273,18 +275,76 @@ function resolveThread(ownerRepo: string, commentId: number): { ok: boolean; err
 
   const commentNodeId = nodeOut.stdout.trim();
 
-  // Query the thread node ID from the comment's node ID via GraphQL
-  // Use proper GraphQL variables to avoid string interpolation injection
-  const threadQuery = 'query($nid: ID!) { node(id: $nid) { ... on PullRequestReviewComment { pullRequestReviewThread { id } } } }';
-  const threadOut = run(gh, ['api', 'graphql', '--field', 'query=' + threadQuery, '--field', 'nid=' + commentNodeId, '--jq', '.data.node.pullRequestReviewThread.id']);
+  // Traverse pullRequest.reviewThreads to find the thread containing this comment.
+  // We fetch threads with their first comment's ID and match against our target.
+  // If prNumber is not provided, fetch it from the comment's pull_request_url.
+  let prNum = prNumber;
+  if (!prNum) {
+    const prOut = run(gh, [
+      'api',
+      `repos/${ownerRepo}/pulls/comments/${commentId}`,
+      '--jq', '.pull_request_url',
+    ]);
+    const prUrlMatch = (prOut.stdout || '').trim().match(/\/pulls\/(\d+)$/);
+    if (prUrlMatch) prNum = Number(prUrlMatch[1]);
+  }
 
-  const threadId = (threadOut.stdout || '').trim();
-  if (threadOut.status !== 0 || !threadId) {
-    return { ok: false, error: 'could not determine thread node_id from comment — skipping resolution' };
+  if (!prNum) {
+    return { ok: false, error: 'could not determine PR number for thread resolution' };
+  }
+
+  // Query review threads, checking each thread's comments for the target comment node ID.
+  // Use pagination (first 100 threads, first 10 comments each) to find the match.
+  const threadQuery = `query($owner: String!, $repo: String!, $pr: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        reviewThreads(first: 100) {
+          nodes {
+            id
+            isResolved
+            comments(first: 10) {
+              nodes { id }
+            }
+          }
+        }
+      }
+    }
+  }`;
+
+  const [owner, repo] = ownerRepo.split('/');
+  const threadOut = run(gh, [
+    'api', 'graphql',
+    '--field', 'query=' + threadQuery,
+    '--field', 'owner=' + owner,
+    '--field', 'repo=' + repo,
+    '--field', 'pr=' + String(prNum),
+  ]);
+
+  if (threadOut.status !== 0) {
+    return { ok: false, error: 'GraphQL reviewThreads query failed: ' + (threadOut.stderr || '').slice(0, 200) };
+  }
+
+  let threadId: string | null = null;
+  try {
+    const data = JSON.parse(threadOut.stdout || '{}');
+    const threads = data?.data?.repository?.pullRequest?.reviewThreads?.nodes || [];
+    for (const thread of threads) {
+      if (thread.isResolved) continue; // already resolved
+      const commentIds: string[] = (thread.comments?.nodes || []).map((c: { id: string }) => c.id);
+      if (commentIds.includes(commentNodeId)) {
+        threadId = thread.id;
+        break;
+      }
+    }
+  } catch (e) {
+    return { ok: false, error: 'failed to parse reviewThreads response: ' + (e as Error).message };
+  }
+
+  if (!threadId) {
+    return { ok: false, error: 'could not find review thread containing comment — may already be resolved or not in first 100 threads' };
   }
 
   // Resolve the review thread (keeps content visible, just marks as resolved)
-  // Use proper GraphQL variables to avoid string interpolation injection
   const resolveQuery = 'mutation($tid: ID!) { resolveReviewThread(input: {threadId: $tid}) { thread { isResolved } } }';
   const resolveOut = run(gh, ['api', 'graphql', '--field', 'query=' + resolveQuery, '--field', 'tid=' + threadId]);
 
@@ -300,6 +360,8 @@ function resolveThread(ownerRepo: string, commentId: number): { ok: boolean; err
 interface PostRemediationCommentsOpts {
   prUrl: string;
   addressedComments: AddressedComment[];
+  /** Original review comments from the packet — used for completeness validation */
+  reviewComments?: ReviewComment[];
   commitSha?: string | null;
   resolveThreads?: boolean;
 }
@@ -339,6 +401,25 @@ function postRemediationComments(opts: PostRemediationCommentsOpts): PostRemedia
     fallbackUsed: false,
   };
 
+  // 0. Completeness validation: check 1:1 mapping between reviewComments and addressedComments
+  if (opts.reviewComments && opts.reviewComments.length > 0) {
+    const expectedIds = new Set(opts.reviewComments.map((c) => c.commentId));
+    const addressedIds = new Set(opts.addressedComments.map((c) => c.commentId));
+    const missing = [...expectedIds].filter((id) => !addressedIds.has(id));
+    const extra = [...addressedIds].filter((id) => !expectedIds.has(id));
+
+    if (missing.length > 0) {
+      console.error(`[pr-comments] incomplete remediation: ${missing.length} review comment(s) not addressed: ${missing.join(', ')}`);
+    }
+    if (extra.length > 0) {
+      console.error(`[pr-comments] unexpected addressed comment IDs not in review comments: ${extra.join(', ')}`);
+    }
+    if (missing.length > 0 || extra.length > 0) {
+      // Log but continue — post what we have rather than silently dropping everything
+      console.error(`[pr-comments] proceeding with ${opts.addressedComments.length}/${opts.reviewComments.length} comment mappings`);
+    }
+  }
+
   // 1. Post individual replies to each addressed comment
   if (opts.addressedComments.length > 0) {
     result.replyResults = postCommentReplies(ownerRepo, prNumber, opts.addressedComments);
@@ -355,11 +436,11 @@ function postRemediationComments(opts: PostRemediationCommentsOpts): PostRemedia
   result.summaryResult = postPrSummaryComment(ownerRepo, prNumber, opts.addressedComments, opts.commitSha);
   if (!result.summaryResult.ok) result.ok = false;
 
-  // 3. Optionally resolve threads for fully-fixed comments
+  // 3. Resolve threads individually for each fixed comment (not all-or-nothing)
   if (opts.resolveThreads) {
     const fixedComments = opts.addressedComments.filter((c) => c.status === 'fixed');
     for (const addressed of fixedComments) {
-      const resolveResult = resolveThread(ownerRepo, addressed.commentId);
+      const resolveResult = resolveThread(ownerRepo, addressed.commentId, prNumber);
       result.resolveResults.push({ commentId: addressed.commentId, ...resolveResult });
     }
   }

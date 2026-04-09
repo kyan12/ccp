@@ -858,8 +858,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       const commentResult = postRemediationComments({
         prUrl,
         addressedComments: result.addressedComments,
+        reviewComments: packet.reviewComments,
         commitSha: result.commit !== 'none' ? result.commit : null,
-        resolveThreads: result.addressedComments.every((c: AddressedComment) => c.status === 'fixed'),
+        resolveThreads: result.addressedComments.some((c: AddressedComment) => c.status === 'fixed'),
       });
       appendLog(jobId, `[${nowIso()}] pr comment replies: ${commentResult.replyResults.length} sent, ${commentResult.replyResults.filter((r: { ok: boolean }) => r.ok).length} ok, summary=${commentResult.summaryResult.ok ? 'ok' : 'failed'}${commentResult.fallbackUsed ? ' (fallback)' : ''}`);
     } catch (e) {
