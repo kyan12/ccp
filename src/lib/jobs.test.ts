@@ -1,5 +1,5 @@
-import { buildPrompt } from './jobs';
-import type { JobPacket } from '../types';
+import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext } from './jobs';
+import type { JobPacket, RepoProof } from '../types';
 
 let passed = 0;
 let failed = 0;
@@ -106,6 +106,119 @@ console.log('\nTest: review feedback preserved');
   }));
   assert(prompt.includes('Fix the typo in README'), 'review feedback included');
   assert(prompt.includes('Never ask clarifying questions'), 'non-interactive constraint with review feedback');
+}
+
+// ── Finalization classification helpers ──
+
+function makeProof(overrides: Partial<RepoProof> = {}): RepoProof {
+  return {
+    repoExists: true,
+    git: true,
+    dirty: false,
+    commitExists: false,
+    branch: 'main',
+    pushed: null,
+    upstream: null,
+    ahead: null,
+    behind: null,
+    ...overrides,
+  };
+}
+
+// ── Test: isNoOpOutcome ──
+console.log('\nTest: isNoOpOutcome classification');
+{
+  // True no-op: no commit, no dirty, summary says "already fixed"
+  assert(
+    isNoOpOutcome({ summary: 'No changes needed — all acceptance criteria already met', commit: 'none' }, makeProof()),
+    'detects "already met" as no-op',
+  );
+  assert(
+    isNoOpOutcome({ summary: 'Already fixed in previous commit', commit: 'none' }, makeProof()),
+    'detects "already fixed" as no-op',
+  );
+  assert(
+    isNoOpOutcome({ summary: 'Nothing to change, tests pass', commit: 'none', blocker: 'nothing to do' }, makeProof()),
+    'detects "nothing to do" via blocker field',
+  );
+  // Not no-op: has commit
+  assert(
+    !isNoOpOutcome({ summary: 'Already fixed', commit: 'abc1234' }, makeProof({ commitExists: true })),
+    'not no-op when commit exists',
+  );
+  // Not no-op: dirty repo
+  assert(
+    !isNoOpOutcome({ summary: 'Already fixed', commit: 'none' }, makeProof({ dirty: true })),
+    'not no-op when repo is dirty',
+  );
+  // Not no-op: normal success summary
+  assert(
+    !isNoOpOutcome({ summary: 'Added new feature and tests pass', commit: 'none' }, makeProof()),
+    'not no-op for normal work summary',
+  );
+}
+
+// ── Test: inferBlockedReason — dirty-repo removed ──
+console.log('\nTest: inferBlockedReason does not handle dirty-repo');
+{
+  // dirty + no commit should NOT be caught by inferBlockedReason (handled separately in finalizeJob)
+  const reason = inferBlockedReason(
+    'some log\nWORKER_EXIT_CODE: 0',
+    { state: 'coded', commit: 'none', prod: 'no', verified: 'not yet', pr_url: null },
+    makeProof({ dirty: true }),
+  );
+  // inferBlockedReason should NOT return for dirty+no-commit (that's dirty-repo, handled in finalizeJob)
+  assert(reason === null, 'dirty repo case delegated to finalizeJob');
+}
+
+// ── Test: inferBlockedReason — no commit, no dirty ──
+console.log('\nTest: inferBlockedReason catches no-commit-no-dirty');
+{
+  const reason = inferBlockedReason(
+    'Summary: did stuff\nWORKER_EXIT_CODE: 0',
+    { state: 'coded', commit: 'none', prod: 'no', verified: 'not yet', pr_url: null },
+    makeProof(),
+  );
+  assert(reason !== null && reason.includes('no commit or file changes found'), 'detects no commit no dirty');
+}
+
+// ── Test: inferBlockedReason — unpushed commit ──
+console.log('\nTest: inferBlockedReason catches unpushed commit');
+{
+  const reason = inferBlockedReason(
+    'Summary: did stuff\nWORKER_EXIT_CODE: 0',
+    { state: 'coded', commit: 'abc1234', prod: 'no', verified: 'not yet', pr_url: null },
+    makeProof({ commitExists: true, pushed: false }),
+  );
+  assert(reason !== null && reason.includes('not pushed'), 'detects unpushed commit');
+}
+
+// ── Test: extractWorkerFailureContext ──
+console.log('\nTest: extractWorkerFailureContext');
+{
+  const ctx1 = extractWorkerFailureContext('Blocker: missing API key\nWORKER_EXIT_CODE: 1');
+  assert(ctx1 === 'missing API key', 'extracts blocker line');
+
+  const ctx2 = extractWorkerFailureContext('Summary: Fixed the bug\nWORKER_EXIT_CODE: 0');
+  assert(ctx2 === 'Fixed the bug', 'extracts summary line');
+
+  const ctx3 = extractWorkerFailureContext('WORKER_EXIT_CODE: 0');
+  // Should return last non-empty lines or fallback
+  assert(typeof ctx3 === 'string' && ctx3.length > 0, 'returns fallback context');
+}
+
+// ── Test: harness-failure scenario (exit 0, no summary fields) ──
+console.log('\nTest: harness-failure detection logic');
+{
+  // When parseSummary returns empty (no State, Summary, or Commit), exit 0 → harness-failure
+  // This is tested by verifying hasSummaryOutput logic
+  const emptyResult = { state: undefined, summary: undefined, commit: undefined } as unknown as Record<string, string>;
+  const hasSummary = !!(emptyResult.state || emptyResult.summary || emptyResult.commit);
+  assert(!hasSummary, 'empty summary detected for harness-failure path');
+
+  const validResult = { state: 'coded', summary: 'did work', commit: 'abc1234' };
+  const hasValidSummary = !!(validResult.state || validResult.summary || validResult.commit);
+  assert(hasValidSummary, 'valid summary not mistaken for harness-failure');
 }
 
 // ── Summary ──

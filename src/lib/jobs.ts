@@ -737,6 +737,18 @@ function extractWorkerFailureContext(logText: string, maxLen: number = 500): str
   return 'no diagnostic output captured';
 }
 
+/**
+ * Detect if the worker outcome is a legitimate no-op (nothing to change).
+ * Signals: exit 0, no commit, no dirty files, and summary indicates nothing-to-do.
+ */
+function isNoOpOutcome(summary: Record<string, string>, proof: RepoProof): boolean {
+  if (proof.commitExists || proof.dirty) return false;
+  if (summary.commit && summary.commit !== 'none') return false;
+  const noOpPatterns = /\b(no.?op|no changes? needed|already (?:fixed|met|resolved|done|implemented|merged|satisfied|complete)|nothing to (?:do|change|fix)|acceptance criteria (?:already|are already) met|all acceptance criteria already met)\b/i;
+  const text = [summary.summary, summary.blocker].filter(Boolean).join(' ');
+  return noOpPatterns.test(text);
+}
+
 function inferBlockedReason(logText: string, result: { state: string; commit: string; prod: string; verified: string; pr_url: string | null }, proof: RepoProof): string | null {
   const permissionMatch = logText.match(/I need file write permission to proceed\.[\s\S]*?(?=WORKER_EXIT_CODE:|$)/i);
   if (permissionMatch) {
@@ -746,11 +758,11 @@ function inferBlockedReason(logText: string, result: { state: string; commit: st
   const workerContext = extractWorkerFailureContext(logText);
   const proofDetail = `(commit=${proof.commitExists ? 'yes' : 'no'}, dirty=${proof.dirty ? 'yes' : 'no'}, pushed=${proof.pushed ?? 'unknown'})`;
 
+  // Note: dirty-repo (proof.dirty && !proof.commitExists) is handled as its own
+  // classification in finalizeJob before this function is called.
+
   if ((result.state === 'coded' || result.state === 'done' || result.state === 'verified') && !proof.commitExists && !proof.dirty) {
     return `no commit or file changes found ${proofDetail}. Worker said: ${workerContext}`;
-  }
-  if ((result.state === 'coded' || result.state === 'done' || result.state === 'verified') && proof.dirty && !proof.commitExists) {
-    return `uncommitted local changes but no commit created ${proofDetail}. Worker said: ${workerContext}`;
   }
   if ((result.state === 'coded' || result.state === 'done' || result.state === 'verified') && proof.commitExists && proof.pushed === false && !hasReviewDelivery) {
     return `local commit exists but was not pushed ${proofDetail}. Worker said: ${workerContext}`;
@@ -780,18 +792,40 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : (status.exit_code ?? 0);
   const provisionalState = exitCode === 0 ? (summary.state || 'coded') : (summary.state || 'failed');
   const proof = inspectRepoProof(packet.repo, summary.commit || 'none');
-  const inferredBlocker = inferBlockedReason(logText, {
-    state: provisionalState,
-    commit: summary.commit || 'none',
-    prod: summary.prod || 'no',
-    verified: summary.verified || 'not yet',
-    pr_url: summary.pr_url || null,
-  }, proof);
-  const finalState = inferredBlocker ? 'blocked' : provisionalState;
+  const hasSummaryOutput = !!(summary.state || summary.summary || summary.commit);
 
-  // If the job is blocked due to dirty repo state, clean it up immediately so
+  // Classification priority:
+  // 1. Harness failure: exit 0 but worker produced no parseable summary at all
+  // 2. No-op: worker produced summary but determined nothing needs to change
+  // 3. Dirty-repo: uncommitted changes but no commit created
+  // 4. Regular blocked inference
+  let finalState: string;
+  let inferredBlocker: string | null;
+
+  if (exitCode === 0 && !hasSummaryOutput) {
+    finalState = 'harness-failure';
+    inferredBlocker = 'worker exited 0 but produced no final summary — harness or contract failure (check worker.log for raw output)';
+  } else if (exitCode === 0 && isNoOpOutcome(summary, proof)) {
+    finalState = 'no-op';
+    inferredBlocker = null;
+  } else if (proof.dirty && !proof.commitExists && ['coded', 'done', 'verified'].includes(provisionalState)) {
+    finalState = 'dirty-repo';
+    const workerContext = extractWorkerFailureContext(logText);
+    inferredBlocker = `uncommitted local changes but no commit created — worker may have been interrupted or failed to commit. Branch: ${proof.branch || 'unknown'}. Action: inspect repo changes, commit manually, or discard with git checkout. Worker said: ${workerContext}`;
+  } else {
+    inferredBlocker = inferBlockedReason(logText, {
+      state: provisionalState,
+      commit: summary.commit || 'none',
+      prod: summary.prod || 'no',
+      verified: summary.verified || 'not yet',
+      pr_url: summary.pr_url || null,
+    }, proof);
+    finalState = inferredBlocker ? 'blocked' : provisionalState;
+  }
+
+  // If the job is blocked/dirty-repo due to dirty repo state, clean it up immediately so
   // subsequent jobs don't inherit dirty working tree (e.g. from API 500 mid-run)
-  if (finalState === 'blocked' && proof.dirty && packet.repo) {
+  if ((finalState === 'blocked' || finalState === 'dirty-repo') && proof.dirty && packet.repo) {
     const cleanResult = cleanRepoIfDirty(packet.repo, proof);
     appendLog(jobId, `[${nowIso()}] repo cleanup: ${cleanResult}`);
   }
@@ -889,10 +923,19 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     const commitShort = result.commit && result.commit !== 'none' ? result.commit.slice(0, 7) : null;
 
     let runsMsg: string;
-    if (exitCode !== 0 || result.state === 'blocked' || result.state === 'failed') {
+    const isErrorState = exitCode !== 0 || ['blocked', 'failed', 'dirty-repo', 'harness-failure'].includes(result.state);
+    if (result.state === 'no-op') {
+      runsMsg = `⏭️ NO-OP — ${ticket} | ${repoName}\n${result.summary || 'No changes needed — already resolved'}`;
+    } else if (isErrorState) {
       const maxBlocker = 1800;
       const blocker = result.blocker ? (result.blocker.length > maxBlocker ? result.blocker.slice(0, maxBlocker - 3) + '...' : result.blocker) : 'unknown';
-      const emoji = result.state === 'blocked' ? '🔴 BLOCKED' : '❌ FAIL';
+      const emojiMap: Record<string, string> = {
+        'blocked': '🔴 BLOCKED',
+        'dirty-repo': '🟠 DIRTY-REPO',
+        'harness-failure': '🟣 HARNESS-FAILURE',
+        'failed': '❌ FAIL',
+      };
+      const emoji = emojiMap[result.state] || '❌ FAIL';
       const exitInfo = exitCode !== 0 ? ` (exit ${exitCode})` : '';
       runsMsg = `${emoji} — ${ticket} | ${repoName}${exitInfo}\n${blocker}`;
     } else {
@@ -907,8 +950,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       runsMsg = parts.join(' | ');
     }
 
-    // Route: successes → status channel, all failures/blocked → errors channel
-    const isFailure = exitCode !== 0 || result.state === 'blocked' || result.state === 'failed';
+    // Route: successes + no-ops → status channel, all failures/blocked → errors channel
+    const isFailure = exitCode !== 0 || ['blocked', 'failed', 'dirty-repo', 'harness-failure'].includes(result.state);
     const target = isFailure ? DISCORD_ERRORS_CHANNEL : DISCORD_STATUS_CHANNEL;
     const sentMain = sendDiscordMessage(target, runsMsg);
 
@@ -928,7 +971,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     appendLog(jobId, `[${nowIso()}] FINAL notify: ${sentMain.ok ? 'ok' : (sentMain.stderr || 'failed')}`);
 
     const isCleanMerge = exitCode === 0
-      && result.state !== 'blocked' && result.state !== 'failed'
+      && !['blocked', 'failed', 'dirty-repo', 'harness-failure'].includes(result.state)
       && (!result.pr_url || (prReview.ok && prReview.autoMergeEnabled));
     let threadId: string | null = null;
     if (!isCleanMerge && sentMain.ok && sentMain.messageId) {
@@ -953,7 +996,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     saveStatus(jobId, { notifications: { final: sentMain.ok, start: true }, discord_thread_id: threadId });
 
     // Post completion comment to Linear ticket
-    const didWork = result.commit !== 'none' || result.state === 'blocked' || result.state === 'coded' || result.state === 'done' || result.state === 'verified';
+    const didWork = result.commit !== 'none' || ['blocked', 'coded', 'done', 'verified', 'dirty-repo', 'harness-failure'].includes(result.state);
     if (didWork && packet.ticket_id) {
       const link = getJobLinearLink(jobId);
       if (link?.issueId) {
@@ -966,6 +1009,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const statusMap: Record<string, string> = {
     coded: 'pr_open', done: 'merged', verified: 'verified',
     blocked: 'failed', failed: 'failed',
+    'no-op': 'completed', 'dirty-repo': 'failed', 'harness-failure': 'failed',
   };
   const webhookStatus = statusMap[finalState] || 'in_progress';
   const whLog = fireWebhookCallback({
@@ -975,7 +1019,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   if (whLog) appendLog(jobId, `[${nowIso()}] ${whLog}`);
 
   // Outage circuit breaker: detect API failures and trigger outage mode
-  const wasApiFailure = (exitCode !== 0 || finalState === 'blocked') && isApiOutageLog(logText);
+  const wasApiFailure = (exitCode !== 0 || ['blocked', 'harness-failure'].includes(finalState)) && isApiOutageLog(logText);
   const { enteredOutage } = recordJobOutcome(wasApiFailure);
   if (enteredOutage) {
     const outagePct = packet.ticket_id || jobId;
@@ -1027,7 +1071,8 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
   const promptFile = path.join(jobDir(jobId), 'prompt.txt');
   fs.writeFileSync(promptFile, buildPrompt(packet));
 
-  const workerCmd = `${shellQuote(pf.claude)} --print --permission-mode bypassPermissions -p ${shellQuote(fs.readFileSync(promptFile, 'utf8'))}`;
+  // Pipe prompt via stdin to avoid OS ARG_MAX limits on large prompts
+  const workerCmd = `cat ${shellQuote(promptFile)} | ${shellQuote(pf.claude)} --print --permission-mode bypassPermissions`;
   const gitUser = gitIdentity();
   const shellScript = [
     'set -euo pipefail',
@@ -1050,7 +1095,11 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
     'exit $exit_code',
   ].filter(Boolean).join('\n');
 
-  const out = run(pf.tmux, ['new-session', '-d', '-s', session, 'bash', '-lc', shellScript]);
+  // Write shell script to file to avoid ARG_MAX limits when passing to tmux
+  const scriptFile = path.join(jobDir(jobId), 'worker.sh');
+  fs.writeFileSync(scriptFile, shellScript, { mode: 0o755 });
+
+  const out = run(pf.tmux, ['new-session', '-d', '-s', session, 'bash', '-l', scriptFile]);
   if (out.status !== 0) {
     throw new Error((out.stderr || out.stdout || 'tmux new-session failed').trim());
   }
@@ -1356,6 +1405,10 @@ function healthCheck(): Record<string, unknown> {
 module.exports = {
   ROOT,
   JOBS_DIR,
+  buildPrompt,
+  isNoOpOutcome,
+  inferBlockedReason,
+  extractWorkerFailureContext,
   createJob,
   listJobs,
   jobsByState,
@@ -1379,7 +1432,6 @@ module.exports = {
   statusPath,
   archiveOldJobs,
   healthCheck,
-  buildPrompt,
   sendDiscordMessage,
   createDiscordThread,
   sendToThread,
@@ -1389,6 +1441,9 @@ export {
   ROOT,
   JOBS_DIR,
   buildPrompt,
+  isNoOpOutcome,
+  inferBlockedReason,
+  extractWorkerFailureContext,
   createJob,
   listJobs,
   jobsByState,
