@@ -744,9 +744,26 @@ function extractWorkerFailureContext(logText: string, maxLen: number = 500): str
 function isNoOpOutcome(summary: Record<string, string>, proof: RepoProof): boolean {
   if (proof.commitExists || proof.dirty) return false;
   if (summary.commit && summary.commit !== 'none') return false;
-  const noOpPatterns = /\b(no.?op|no changes? needed|already (?:fixed|met|resolved|done|implemented|merged|satisfied|complete)|nothing to (?:do|change|fix)|acceptance criteria (?:already|are already) met|all acceptance criteria already met)\b/i;
-  const text = [summary.summary, summary.blocker].filter(Boolean).join(' ');
-  return noOpPatterns.test(text);
+  const noOpPatterns = /\b(no.?op|no changes? needed|already (?:fixed|addressed|met|resolved|done|implemented|merged|satisfied|complete)|nothing to (?:do|change|fix)|acceptance criteria (?:already|are already) met|all acceptance criteria already met)\b/i;
+  const addressedComments = (summary as Record<string, unknown>).addressedComments;
+  const hasAddressedComments = Array.isArray(addressedComments) && addressedComments.length > 0;
+  const text = [summary.summary, summary.blocker, summary.verified].filter(Boolean).join(' ');
+  return noOpPatterns.test(text) || hasAddressedComments;
+}
+
+function inferPrUrlFromPacket(packet: JobPacket): string | null {
+  const metadata = packet.metadata as Record<string, unknown> | undefined;
+  const metadataUrl = metadata?.pr_url || metadata?.prUrl;
+  if (typeof metadataUrl === 'string' && /^https:\/\/github\.com\/.+\/pull\/\d+/i.test(metadataUrl)) {
+    return metadataUrl;
+  }
+
+  for (const line of packet.review_feedback || []) {
+    const match = line.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/i);
+    if (match) return match[0];
+  }
+
+  return null;
 }
 
 function inferBlockedReason(logText: string, result: { state: string; commit: string; prod: string; verified: string; pr_url: string | null }, proof: RepoProof): string | null {
@@ -831,7 +848,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   }
 
   // Fallback: if no PR URL found in logs but branch was pushed, check GitHub for an open PR
-  let prUrl: string | null = summary.pr_url || null;
+  let prUrl: string | null = summary.pr_url || inferPrUrlFromPacket(packet) || null;
   if (!prUrl && proof.pushed && proof.branch && proof.branch !== 'main' && proof.branch !== 'master' && packet.repo) {
     const gh = commandExists('gh');
     if (gh) {

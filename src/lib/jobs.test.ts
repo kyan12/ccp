@@ -141,6 +141,14 @@ console.log('\nTest: isNoOpOutcome classification');
     isNoOpOutcome({ summary: 'Nothing to change, tests pass', commit: 'none', blocker: 'nothing to do' }, makeProof()),
     'detects "nothing to do" via blocker field',
   );
+  assert(
+    isNoOpOutcome({ summary: 'All 5 PR review comments are already addressed in the current branch', commit: 'none' }, makeProof()),
+    'detects "already addressed" as no-op',
+  );
+  assert(
+    isNoOpOutcome({ summary: 'No new changes needed', commit: 'none', addressedComments: [{ commentId: 1, status: 'fixed' }] } as unknown as Record<string, string>, makeProof()),
+    'treats addressedComments coverage as no-op evidence when repo is clean',
+  );
   // Not no-op: has commit
   assert(
     !isNoOpOutcome({ summary: 'Already fixed', commit: 'abc1234' }, makeProof({ commitExists: true })),
