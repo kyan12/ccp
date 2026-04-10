@@ -32,9 +32,11 @@ interface SchedulingConfig {
 }
 
 function loadConfig(): SchedulingConfig | null {
+  if (!fs.existsSync(SCHEDULING_CONFIG)) return null;
   try {
     return JSON.parse(fs.readFileSync(SCHEDULING_CONFIG, 'utf8'));
-  } catch {
+  } catch (err) {
+    console.error(`[scheduling] failed to parse ${SCHEDULING_CONFIG}: ${(err as Error).message}`);
     return null;
   }
 }
@@ -114,7 +116,9 @@ function canDispatchJobs(priority?: string): { allowed: boolean; reason: string 
       const resetStr = new Date(rl.resetAt).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
       return { allowed: false, reason: `rate limited — paused until ${resetStr} ET` };
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    console.error(`[scheduling] failed to check rate limit: ${(err as Error).message}`);
+  }
 
   // Check outage state (takes priority over peak scheduling)
   try {
@@ -126,7 +130,9 @@ function canDispatchJobs(priority?: string): { allowed: boolean; reason: string 
         : '';
       return { allowed: false, reason: `Anthropic API outage detected${since} — probing for recovery` };
     }
-  } catch { /* ignore, proceed normally */ }
+  } catch (err) {
+    console.error(`[scheduling] failed to check outage status: ${(err as Error).message}`);
+  }
 
   const config = loadConfig();
   if (!config || !config.enabled) {
