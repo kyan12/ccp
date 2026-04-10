@@ -399,3 +399,35 @@ Seven silent catch blocks that swallowed errors without logging:
 - **Silent catch convention**: All notification/integration catches should log. Loop-skip catches
   (`catch { continue; }` for scanning job packets) are acceptable when the loop is best-effort.
 
+## 2026-04-10 — Nightly Review
+
+### Bug Fixed: Silent catch blocks in scheduling.ts hide outage and rate-limit state
+
+`canDispatchJobs()` in `scheduling.ts` had two `catch { /* ignore */ }` blocks wrapping calls
+to `isRateLimited()` and `getOutageStatus()` from the outage module. If either function throws
+(e.g., corrupted `outage.json`, module load error), the check is silently skipped and the
+supervisor proceeds to dispatch jobs into a broken API — the exact scenario the outage and
+rate-limit systems are designed to prevent.
+
+Additionally, `loadConfig()` used a bare `catch { return null; }` that swallowed parse errors
+for `scheduling.json`. A corrupted scheduling config file would silently disable scheduling
+rather than alerting operators.
+
+**Fix:** All three catch blocks now log to stderr with `[scheduling]` prefix, matching the
+project convention from 58af809. `loadConfig` also gained an `existsSync` guard to distinguish
+"file doesn't exist" (normal, no log) from "file exists but is corrupted" (logged).
+
+### Code Health Observations
+
+- **Open PR #28**: Fixes `prUrl` passthrough for webhook-triggered review remediation. Reviewed
+  by Devin, CI passed. Should be merged.
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Twelve consecutive reviews, each identifying and resolving issues.
+- **Outage-critical paths must not silently swallow errors**: The scheduling module is a
+  safety gate — if it can't determine outage/rate-limit status, it should err toward caution
+  (or at minimum, make the failure visible in logs).
+
