@@ -147,7 +147,22 @@ console.log('\nTest: isNoOpOutcome classification');
   );
   assert(
     isNoOpOutcome({ summary: 'No new changes needed', commit: 'none', addressedComments: [{ commentId: 1, status: 'fixed' }] } as unknown as Record<string, string>, makeProof()),
-    'treats addressedComments coverage as no-op evidence when repo is clean',
+    'treats all-fixed addressedComments as no-op evidence when repo is clean',
+  );
+  // Not no-op: addressedComments with not_fixed status
+  assert(
+    !isNoOpOutcome({ summary: 'Could not fix the issues', commit: 'none', addressedComments: [{ commentId: 1, status: 'not_fixed' }] } as unknown as Record<string, string>, makeProof()),
+    'not no-op when addressedComments has not_fixed status',
+  );
+  // Not no-op: addressedComments with mixed statuses
+  assert(
+    !isNoOpOutcome({ summary: 'Partial progress', commit: 'none', addressedComments: [{ commentId: 1, status: 'fixed' }, { commentId: 2, status: 'not_fixed' }] } as unknown as Record<string, string>, makeProof()),
+    'not no-op when addressedComments has mixed fixed/not_fixed',
+  );
+  // Not no-op: addressedComments with partial status
+  assert(
+    !isNoOpOutcome({ summary: 'Partially done', commit: 'none', addressedComments: [{ commentId: 1, status: 'partial' }] } as unknown as Record<string, string>, makeProof()),
+    'not no-op when addressedComments has partial status',
   );
   // Not no-op: has commit
   assert(

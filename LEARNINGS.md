@@ -431,3 +431,38 @@ project convention from 58af809. `loadConfig` also gained an `existsSync` guard 
   safety gate — if it can't determine outage/rate-limit status, it should err toward caution
   (or at minimum, make the failure visible in logs).
 
+## 2026-04-11 — Nightly Review
+
+### Bug Fixed: isNoOpOutcome misclassifies failed remediation as no-op
+
+`isNoOpOutcome` in `jobs.ts` returned `true` whenever `addressedComments` was non-empty,
+regardless of the fix status of individual comments. A remediation worker that reports all
+comments as `not_fixed` or `partial` (making no code changes) would be classified as `no-op`
+instead of falling through to `blocked` classification. This caused failed remediations to
+be silently routed to the status channel instead of the errors channel, making them invisible
+to operators.
+
+**Fix:** Changed the check from `hasAddressedComments` (any non-empty array) to
+`allCommentsAlreadyFixed` (every comment has `status: 'fixed'`). Only truly resolved
+remediations (all comments already fixed, nothing to change) are classified as no-op.
+
+Also logged `parseSummary` AddressedComments JSON parse failures instead of silently
+swallowing them, matching the project convention from 58af809.
+
+### Code Health Observations
+
+- **Open PR #28**: Fixes `prUrl` passthrough for webhook-triggered review remediation.
+  Should be merged.
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+- **`collectPrReviewFeedback` uses `spawnSync`** (`intake-server.ts:131-159`): Calls `gh api`
+  synchronously 3 times inside an HTTP request handler, blocking the event loop. Should be
+  refactored to use async `child_process.exec` or cached.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Thirteen consecutive reviews, each identifying and resolving issues.
+- **Classification logic must be precise**: Boolean checks on collections (`hasX` vs `allX`)
+  must match the semantic intent. The no-op classifier needs to distinguish "already resolved"
+  from "failed to resolve" — presence of data is not evidence of success.
+

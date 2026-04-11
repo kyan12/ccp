@@ -605,8 +605,8 @@ function parseSummary(logText: string): Record<string, string> & { addressedComm
           commitSha: (c.commitSha as string) || null,
         }));
       }
-    } catch {
-      // Malformed JSON — ignore, worker didn't produce valid output
+    } catch (e) {
+      console.error(`[parseSummary] failed to parse AddressedComments JSON: ${(e as Error).message}`);
     }
   }
 
@@ -745,10 +745,11 @@ function isNoOpOutcome(summary: Record<string, string>, proof: RepoProof): boole
   if (proof.commitExists || proof.dirty) return false;
   if (summary.commit && summary.commit !== 'none') return false;
   const noOpPatterns = /\b(no.?op|no changes? needed|already (?:fixed|addressed|met|resolved|done|implemented|merged|satisfied|complete)|nothing to (?:do|change|fix)|acceptance criteria (?:already|are already) met|all acceptance criteria already met)\b/i;
-  const addressedComments = (summary as Record<string, unknown>).addressedComments;
-  const hasAddressedComments = Array.isArray(addressedComments) && addressedComments.length > 0;
+  const addressedComments = (summary as Record<string, unknown>).addressedComments as Array<{ status?: string }> | undefined;
+  const allCommentsAlreadyFixed = Array.isArray(addressedComments) && addressedComments.length > 0
+    && addressedComments.every((c) => c.status === 'fixed');
   const text = [summary.summary, summary.blocker, summary.verified].filter(Boolean).join(' ');
-  return noOpPatterns.test(text) || hasAddressedComments;
+  return noOpPatterns.test(text) || allCommentsAlreadyFixed;
 }
 
 function inferPrUrlFromPacket(packet: JobPacket): string | null {
