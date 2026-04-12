@@ -559,6 +559,8 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
           let body = '';
           let context = '';
           let reviewState = '';
+          let headRefName: string | null = null;
+          let baseRefName: string | null = null;
 
           if (ghEvent === 'pull_request_review_comment') {
             const comment = payload.comment as Record<string, unknown>;
@@ -568,12 +570,20 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
             const path = String(comment?.path || '').trim();
             const line = Number(comment?.line || comment?.original_line || 0) || null;
             context = `${path}${line ? `:${line}` : ''}`;
+            const head = pr?.head as Record<string, unknown> | undefined;
+            const base = pr?.base as Record<string, unknown> | undefined;
+            headRefName = (head?.ref as string) || null;
+            baseRefName = (base?.ref as string) || null;
           } else if (ghEvent === 'pull_request_review') {
             const review = payload.review as Record<string, unknown>;
             const pr = payload.pull_request as Record<string, unknown>;
             prNum = Number(pr?.number || 0) || null;
             body = String(review?.body || '').trim();
             reviewState = String(review?.state || '').toUpperCase();
+            const head = pr?.head as Record<string, unknown> | undefined;
+            const base = pr?.base as Record<string, unknown> | undefined;
+            headRefName = (head?.ref as string) || null;
+            baseRefName = (base?.ref as string) || null;
           } else if (ghEvent === 'issue_comment') {
             const issue = payload.issue as Record<string, unknown>;
             const comment = payload.comment as Record<string, unknown>;
@@ -617,6 +627,9 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
             skipped: false,
             disposition: 'block',
             blockerType: 'review',
+            prUrl,
+            headRefName,
+            baseRefName,
             blockers,
             failedChecks: [],
             merged: false,

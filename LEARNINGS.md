@@ -466,3 +466,51 @@ swallowing them, matching the project convention from 58af809.
   must match the semantic intent. The no-op classifier needs to distinguish "already resolved"
   from "failed to resolve" — presence of data is not evidence of success.
 
+## 2026-04-12 — Nightly Review
+
+### Bug Fixed: Webhook-triggered remediation starts from main instead of PR branch
+
+The GitHub webhook handler in `intake-server.ts` constructs a review object for
+`maybeEnqueueReviewRemediation`, but omitted `headRefName` and `baseRefName`. Inside
+`maybeEnqueueReviewRemediation`, the code reads `prReview.headRefName` (line 489) to set
+`working_branch` on the remediation packet. With `headRefName` undefined, the fallback
+chain `prReview.headRefName || packet.working_branch || null` evaluates to `null` for
+jobs where the original worker created the branch (no `working_branch` on the original
+packet). A null `working_branch` causes `startTmuxWorker` to run `git reset --hard origin/main`,
+so the remediation worker starts from main instead of the PR's feature branch.
+
+**Impact:** Webhook-triggered remediations (from `pull_request_review_comment` and
+`pull_request_review` events) would start on main, not on the PR branch. The worker
+would need to discover and checkout the correct branch itself, which is unreliable and
+may result in creating a second PR or failing to find the existing changes.
+
+**Fix:** Extract `head.ref` and `base.ref` from the `pull_request` object in the webhook
+payload (already present for `pull_request_review_comment` and `pull_request_review` events).
+Add `headRefName`, `baseRefName`, and `prUrl` to the manually-constructed review object.
+
+Note: `issue_comment` events don't include full PR data in the payload, so `headRefName`
+remains null for those — the remediation falls back to `packet.working_branch`.
+
+Also supersedes PR #28's fix (which added only `prUrl`) by including all three missing
+properties in a single change.
+
+### Code Health Observations
+
+- **Open PR #28**: Fixes `prUrl` only; this nightly fix is a superset that also adds
+  `headRefName` and `baseRefName`. PR #28 can be closed once this merges.
+- **`collectPrReviewFeedback` uses `spawnSync`** (`intake-server.ts:131-159`): Calls `gh api`
+  synchronously 3 times inside an HTTP request handler, blocking the event loop. Should be
+  refactored to use async `child_process.exec` or cached.
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+- **Duplicate `isErrorState`/`isFailure` check** (`jobs.ts:944,972`): Two identical boolean
+  expressions in `finalizeJob`. Should use a single variable.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Fourteen consecutive reviews, each identifying and resolving issues.
+- **Manually-constructed review objects must include all consumed properties**: The webhook
+  handler constructs a review object ad-hoc instead of calling `reviewPr()`. Any property
+  that `maybeEnqueueReviewRemediation` reads must be explicitly included. TypeScript won't
+  catch this because the parameter type uses `&` intersection with optional fields.
+
