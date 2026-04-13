@@ -466,3 +466,42 @@ swallowing them, matching the project convention from 58af809.
   must match the semantic intent. The no-op classifier needs to distinguish "already resolved"
   from "failed to resolve" — presence of data is not evidence of success.
 
+## 2026-04-13 — Nightly Review
+
+### Bug Fixed: outage.ts loadState() silent catch hides corrupted state file
+
+`loadState()` in `outage.ts` used a bare `catch {}` that didn't distinguish "file doesn't
+exist" (normal startup) from "file exists but is corrupted" (dangerous). If `outage.json`
+was corrupted during an active outage (e.g., partial write from concurrent `saveState`,
+disk issue), `loadState()` would silently return `{outage: false}`, effectively clearing
+the circuit breaker. The supervisor would then dispatch jobs into a broken API — the exact
+scenario the outage system is designed to prevent.
+
+**Fix:** Added `fs.existsSync` guard to distinguish missing file (return defaults, no log)
+from corrupted file (log error, then return defaults). Matches the pattern established in
+`scheduling.ts` (d290eff). Extracted `DEFAULT_STATE` constant to avoid repeating the
+default object literal.
+
+### Code Health Observations
+
+- **Open PRs #28 and #31**: Both fix webhook-triggered remediation review issues. #31 is
+  more recent (2026-04-12) and may supersede #28. Consider merging or closing #28.
+- **Open PR #18**: Hardens `ghJson` parse and pr-watcher silent catches. Open since
+  2026-04-06 — should be reviewed and merged.
+- **`collectPrReviewFeedback` uses `spawnSync`** (`intake-server.ts:131-159`): Calls `gh api`
+  synchronously 3 times inside an HTTP request handler, blocking the event loop. Should be
+  refactored to use async `child_process.exec` or cached.
+- **Advisory lock pattern** (`jobs.ts:118-152`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+- **Duplicated utility functions**: `parsePrUrl`, `commandExists`, and `run` are defined
+  identically in `pr-review.ts`, `pr-comments.ts`, and `jobs.ts`. Should be extracted to
+  a shared module to prevent drift.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Fourteen consecutive reviews, each identifying and resolving issues.
+- **Safety-critical modules need robust error handling**: The outage module is a safety gate.
+  Silent error swallowing in safety gates is worse than in regular code — it silently disables
+  the safety mechanism. The `existsSync` + try/catch + log pattern should be mandatory for
+  all state-file reads in safety-critical paths.
+

@@ -47,20 +47,24 @@ interface OutageState {
   rateLimitReason: string | null;
 }
 
+const DEFAULT_STATE: OutageState = {
+  outage: false,
+  consecutiveApiFailures: 0,
+  lastFailureAt: null,
+  outageSince: null,
+  lastProbeAt: null,
+  lastProbeResult: null,
+  rateLimitResetAt: null,
+  rateLimitReason: null,
+};
+
 function loadState(): OutageState {
+  if (!fs.existsSync(OUTAGE_STATE_PATH)) return { ...DEFAULT_STATE };
   try {
     return JSON.parse(fs.readFileSync(OUTAGE_STATE_PATH, 'utf8'));
-  } catch {
-    return {
-      outage: false,
-      consecutiveApiFailures: 0,
-      lastFailureAt: null,
-      outageSince: null,
-      lastProbeAt: null,
-      lastProbeResult: null,
-      rateLimitResetAt: null,
-      rateLimitReason: null,
-    };
+  } catch (err) {
+    console.error(`[outage] failed to parse ${OUTAGE_STATE_PATH}: ${(err as Error).message}`);
+    return { ...DEFAULT_STATE };
   }
 }
 
