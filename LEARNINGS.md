@@ -505,3 +505,36 @@ default object literal.
   the safety mechanism. The `existsSync` + try/catch + log pattern should be mandatory for
   all state-file reads in safety-critical paths.
 
+## 2026-04-14 — Nightly Review
+
+### Refactor: Extract duplicated shell utilities to `shell.ts`
+
+`run`, `commandExists`, and `parsePrUrl` were independently defined in `pr-review.ts`,
+`pr-comments.ts`, and `jobs.ts` (also `shellQuote` in `jobs.ts`). The `commandExists`
+implementations had already drifted: `jobs.ts` added a cache (`_commandExistsCache`) that
+the other two files lacked, meaning every `commandExists` call in PR review/comment code
+spawned a subprocess even for previously-checked commands.
+
+**Fix:** Extracted all four functions to `src/lib/shell.ts`. All consumers now import from
+the shared module. The cached `commandExists` from `jobs.ts` is the canonical version.
+
+### Code Health Observations
+
+- **`collectPrReviewFeedback` uses `spawnSync`** (`intake-server.ts:120-159`): Calls `gh api`
+  synchronously 3 times inside an HTTP request handler, blocking the event loop. Should be
+  refactored to use async `child_process.exec` or cached. Flagged in two prior reviews.
+- **Advisory lock pattern** (`jobs.ts:103-137`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+- **Open PRs #28 and #31**: Both fix webhook-triggered remediation review issues. #31
+  supersedes #28 (adds `headRefName`/`baseRefName` in addition to `prUrl`). #28 can be
+  closed in favor of #31.
+- **Open PR #18**: Hardens `ghJson` parse and pr-watcher silent catches. Open since
+  2026-04-06, should be reviewed and merged.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Fifteen consecutive reviews, each identifying and resolving issues.
+- **Shared utility modules**: Duplicated utility functions should be extracted early. The
+  `commandExists` cache drift illustrates how independent copies diverge over time — one
+  file gets the improvement, others don't.
+

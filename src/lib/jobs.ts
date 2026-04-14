@@ -2,11 +2,12 @@ import fs = require('fs');
 import path = require('path');
 import { spawnSync } from 'child_process';
 import type {
-  RunResult, JobPacket, JobStatus, JobResult, RepoProof,
+  JobPacket, JobStatus, JobResult, RepoProof,
   PRReviewResult, PrReviewIntegration, RemediationResult, DiscordMessageResult, DiscordThreadResult,
   SupervisorCycleSummary, PreflightResult, LinearSyncResult, PrWatcherCycleResult,
   ReviewComment, AddressedComment,
 } from '../types';
+import { run, commandExists, shellQuote } from './shell';
 const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./linear');
 const { dispatchLinearIssues } = require('./linear-dispatch');
 const { reviewPr } = require('./pr-review');
@@ -46,23 +47,6 @@ function writeJson(file: string, data: unknown): void {
 function appendLog(jobId: string, text: string): void {
   const file = path.join(jobDir(jobId), 'worker.log');
   fs.appendFileSync(file, text.endsWith('\n') ? text : text + '\n');
-}
-
-function shellQuote(value: string): string {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
-
-function run(command: string, args: string[] = [], options: Record<string, unknown> = {}): RunResult {
-  return spawnSync(command, args, { encoding: 'utf8', ...options }) as unknown as RunResult;
-}
-
-const _commandExistsCache = new Map<string, string>();
-function commandExists(cmd: string): string {
-  if (_commandExistsCache.has(cmd)) return _commandExistsCache.get(cmd)!;
-  const out = spawnSync('sh', ['-lc', `command -v ${cmd}`], { encoding: 'utf8' });
-  const result = out.status === 0 ? out.stdout.trim() : '';
-  _commandExistsCache.set(cmd, result);
-  return result;
 }
 
 function gitIdentity(): { name: string; email: string } {

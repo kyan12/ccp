@@ -9,23 +9,8 @@
  * 5. Falling back to a single PR-level summary when threading is unavailable
  */
 
-import { spawnSync } from 'child_process';
-import type { RunResult, ReviewComment, AddressedComment } from '../types';
-
-function run(command: string, args: string[] = [], options: Record<string, unknown> = {}): RunResult {
-  return spawnSync(command, args, { encoding: 'utf8', ...options }) as unknown as RunResult;
-}
-
-function commandExists(cmd: string): string {
-  const out = spawnSync('sh', ['-lc', `command -v ${cmd}`], { encoding: 'utf8' });
-  return out.status === 0 ? out.stdout.trim() : '';
-}
-
-function parsePrUrl(prUrl: string | null | undefined): { ownerRepo: string; number: number } | null {
-  const m = String(prUrl || '').match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/i);
-  if (!m) return null;
-  return { ownerRepo: m[1], number: Number(m[2]) };
-}
+import type { ReviewComment, AddressedComment } from '../types';
+import { run, commandExists, parsePrUrl } from './shell';
 
 // ── Fetch review comments ──
 
