@@ -538,3 +538,41 @@ the shared module. The cached `commandExists` from `jobs.ts` is the canonical ve
   `commandExists` cache drift illustrates how independent copies diverge over time — one
   file gets the improvement, others don't.
 
+## 2026-04-15 — Nightly Review
+
+### Fix: `collectPrReviewFeedback` blocks event loop with synchronous `gh api` calls
+
+`collectPrReviewFeedback` in `intake-server.ts` called `ghApiJson` three times sequentially,
+and `ghApiJson` used `spawnSync` to run `gh api`. Each call blocks the Node.js event loop
+for the duration of the GitHub API round-trip (typically 0.5–3s each). With three sequential
+calls, the webhook server could be blocked for 1.5–9 seconds, during which no other HTTP
+requests (webhooks, dashboard, SSE) are served.
+
+**Impact:** GitHub retries webhooks after 10s of no response. Under load or with slow API
+responses, the server could miss webhooks entirely, causing missed remediation triggers.
+
+**Fix:** Converted `ghApiJson` from `spawnSync` to async `execFile` (promisified). Converted
+`collectPrReviewFeedback` to async. The three GitHub API calls now run in parallel via
+`Promise.all`, reducing total wall time from ~3× a single call to ~1× while also unblocking
+the event loop for other requests. Removed unused `spawnSync` import.
+
+### Code Health Observations
+
+- **Open PR #31**: Fixes `headRefName`/`baseRefName` missing from webhook-triggered
+  remediation review objects. Should be merged — remediation workers currently start from
+  main instead of the PR's feature branch.
+- **Open PR #28**: Superseded by #31. Can be closed.
+- **Open PR #18**: Hardens `ghJson` parse and pr-watcher silent catches. Open since
+  2026-04-06, should be reviewed and merged.
+- **Advisory lock pattern** (`jobs.ts:103-137`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+
+### Patterns Worth Reinforcing
+
+- **Nightly review cadence**: Sixteen consecutive reviews, each identifying and resolving issues.
+- **Async I/O in HTTP handlers**: Never use `spawnSync` or other blocking operations inside
+  HTTP request handlers. Node.js is single-threaded — blocking the event loop prevents all
+  concurrent request processing. Use `execFile`/`exec` with promises for subprocess calls.
+- **`Promise.all` for independent I/O**: When making multiple independent API calls, use
+  `Promise.all` to run them concurrently rather than sequentially.
+
