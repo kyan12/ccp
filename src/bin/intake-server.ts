@@ -2,7 +2,9 @@
 import http = require('http');
 import fs = require('fs');
 import path = require('path');
-import { spawnSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+const execFileAsync = promisify(execFile);
 import type { IntakeToLinearResult } from '../types';
 const { intakeToLinear } = require('../lib/intake-runner');
 const { loadConfig } = require('../lib/config');
@@ -108,16 +110,18 @@ function verifyVercel(req: http.IncomingMessage): boolean {
   return provided === expected;
 }
 
-function ghApiJson(pathOrArgs: string | string[]): unknown {
+async function ghApiJson(pathOrArgs: string | string[]): Promise<unknown> {
   const args = ['api', ...(Array.isArray(pathOrArgs) ? pathOrArgs : [pathOrArgs])];
-  const out = spawnSync('gh', args, { encoding: 'utf8' });
-  if (out.status !== 0) {
-    throw new Error((out.stderr || out.stdout || `gh ${args.join(' ')} failed`).trim());
+  try {
+    const { stdout } = await execFileAsync('gh', args, { encoding: 'utf8' });
+    return JSON.parse(stdout || 'null');
+  } catch (err: unknown) {
+    const e = err as { stderr?: string; stdout?: string; message?: string };
+    throw new Error((e.stderr || e.stdout || e.message || `gh ${args.join(' ')} failed`).trim());
   }
-  return JSON.parse(out.stdout || 'null');
 }
 
-function collectPrReviewFeedback(repo: string, prNum: number): string[] {
+async function collectPrReviewFeedback(repo: string, prNum: number): Promise<string[]> {
   const out: string[] = [];
   const seen = new Set<string>();
 
@@ -128,17 +132,21 @@ function collectPrReviewFeedback(repo: string, prNum: number): string[] {
     out.push(normalized);
   };
 
-  const reviewComments = ghApiJson(`repos/${repo}/pulls/${prNum}/comments`) as Array<Record<string, unknown>>;
+  const [reviewComments, reviews, issueComments] = await Promise.all([
+    ghApiJson(`repos/${repo}/pulls/${prNum}/comments`) as Promise<Array<Record<string, unknown>>>,
+    ghApiJson(`repos/${repo}/pulls/${prNum}/reviews`) as Promise<Array<Record<string, unknown>>>,
+    ghApiJson(`repos/${repo}/issues/${prNum}/comments`) as Promise<Array<Record<string, unknown>>>,
+  ]);
+
   for (const comment of reviewComments || []) {
     const body = String(comment?.body || '').trim();
     if (!body) continue;
     const author = String((comment?.user as Record<string, unknown> | undefined)?.login || 'unknown');
-    const path = String(comment?.path || '').trim();
+    const filePath = String(comment?.path || '').trim();
     const line = Number(comment?.line || comment?.original_line || 0) || null;
-    push(`review-comment ${path}${line ? `:${line}` : ''} by ${author}: ${body}`);
+    push(`review-comment ${filePath}${line ? `:${line}` : ''} by ${author}: ${body}`);
   }
 
-  const reviews = ghApiJson(`repos/${repo}/pulls/${prNum}/reviews`) as Array<Record<string, unknown>>;
   for (const review of reviews || []) {
     const body = String(review?.body || '').trim();
     if (!body) continue;
@@ -147,7 +155,6 @@ function collectPrReviewFeedback(repo: string, prNum: number): string[] {
     push(`review ${state || 'COMMENTED'} by ${author}: ${body}`);
   }
 
-  const issueComments = ghApiJson(`repos/${repo}/issues/${prNum}/comments`) as Array<Record<string, unknown>>;
   for (const comment of issueComments || []) {
     const body = String(comment?.body || '').trim();
     if (!body) continue;
@@ -610,7 +617,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
           const { job, result: jobResult } = matchedJob;
           const packet = rj(pp(job.job_id));
           const blockerText = `${ghEvent}${reviewState ? ` ${reviewState}` : ''}${context ? ` ${context}` : ''}: ${body}`;
-          const blockers = collectPrReviewFeedback(repo, prNum);
+          const blockers = await collectPrReviewFeedback(repo, prNum);
           if (blockers.length === 0) blockers.push(blockerText);
           const review = {
             ok: true,
