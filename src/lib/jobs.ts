@@ -8,6 +8,7 @@ import type {
   ReviewComment, AddressedComment,
 } from '../types';
 import { run, commandExists, shellQuote } from './shell';
+const { inspectDiscordTransport, hasDiscordTransport, sendDiscordMessage, createDiscordThread } = require('./discord');
 const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./linear');
 const { dispatchLinearIssues } = require('./linear-dispatch');
 const { reviewPr } = require('./pr-review');
@@ -357,38 +358,6 @@ function buildPrompt(packet: JobPacket): string {
     bits.push('The AddressedComments block MUST be valid JSON on a single line starting with "AddressedComments: ". Include one entry per review comment. Do not skip any.');
   }
   return bits.join('\n\n');
-}
-
-function sendDiscordMessage(channelId: string, message: string): DiscordMessageResult {
-  const out = run('openclaw', ['message', 'send', '--channel', 'discord', '--target', `channel:${channelId}`, '--message', message]);
-  let messageId: string | null = null;
-  try {
-    const parsed = JSON.parse(out.stdout || '{}');
-    messageId = parsed.messageId || parsed.id || null;
-  } catch {
-    const match = (out.stdout || '').match(/(\d{17,20})/);
-    messageId = match ? match[1] : null;
-  }
-  return { ok: out.status === 0, stdout: out.stdout, stderr: out.stderr, messageId };
-}
-
-function createDiscordThread(channelId: string, messageId: string, threadName: string): DiscordThreadResult {
-  const out = run('openclaw', [
-    'message', 'thread-create',
-    '--channel', 'discord',
-    '--channel-id', channelId,
-    '--message-id', messageId,
-    '--thread-name', threadName.slice(0, 100),
-  ]);
-  let threadId: string | null = null;
-  try {
-    const parsed = JSON.parse(out.stdout || '{}');
-    threadId = parsed.threadId || parsed.id || null;
-  } catch {
-    const match = (out.stdout || '').match(/(\d{17,20})/);
-    threadId = match ? match[1] : null;
-  }
-  return { ok: out.status === 0, threadId, stdout: out.stdout, stderr: out.stderr };
 }
 
 function sendToThread(threadId: string, message: string): DiscordMessageResult {
@@ -990,8 +959,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
         if (prReview.ok && prReview.blockers?.length) threadParts.push(`PR blockers: ${prReview.blockers.join('; ')}`);
         if (remediation.ok && !remediation.skipped) threadParts.push(`Remediation job: \`${remediation.job_id}\``);
         threadParts.push(`\nUpdates will be posted here. Thread auto-archives after 24h of inactivity.`);
-        sendToThread(threadId, threadParts.join('\n'));
-        appendLog(jobId, `[${nowIso()}] thread created: ${threadId}`);
+        sendToThread(thread.threadId, threadParts.join('\n'));
+        appendLog(jobId, `[${nowIso()}] thread created: ${thread.threadId}`);
       }
     }
 
