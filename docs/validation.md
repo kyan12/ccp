@@ -87,7 +87,7 @@ Per-repo, set `validation.enabled: false` or simply omit the `validation` block.
 | Condition | Reason |
 |-----------|--------|
 | `CCP_VALIDATION_ENABLED=false` | Global kill switch |
-| Final state is `no-op`, `harness-failure`, or `dirty-repo` | Nothing meaningful to validate |
+| Final state is **not** `coded`, `done`, or `verified` | For `blocked`/`failed`/`dirty-repo` the finalize path has already run `cleanRepoIfDirty`, which discards the worker's uncommitted work and returns the repo to `main` — validating that would give a bogus report |
 | No repo mapping for `packet.repo` | Can't look up config |
 | Mapping has no `validation` block | Not opted in |
 | `validation.enabled === false` | Per-repo opt-out |

@@ -776,8 +776,12 @@ function runPostWorkerValidation(
   if (String(process.env.CCP_VALIDATION_ENABLED || 'true').toLowerCase() === 'false') {
     return null;
   }
-  // Don't validate when there's nothing new to validate.
-  if (['no-op', 'harness-failure', 'dirty-repo'].includes(finalState)) return null;
+  // Only validate productive terminal states. Notably we must exclude 'blocked'
+  // and 'failed' because cleanRepoIfDirty may have discarded the worker's
+  // uncommitted work and checked the repo back out to main before this point —
+  // running install/typecheck/test against main would produce a bogus report
+  // attributed to the job.
+  if (!['coded', 'done', 'verified'].includes(finalState)) return null;
   if (!packet.repo) return null;
 
   const mapping = findRepoByPath(packet.repo);
