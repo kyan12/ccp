@@ -239,7 +239,100 @@ export function compactReport(report: ValidationReport | undefined | null): Reco
   };
 }
 
-module.exports = { runValidation, summarizeReport, compactReport };
+/**
+ * Phase 2b: decide whether a failing validation report should gate the job.
+ *
+ * Returns true iff:
+ *   1. The report actually ran (not skipped) AND it failed, AND
+ *   2. Gating is enabled \u2014 either globally via CCP_VALIDATION_GATE=true, or
+ *      per-repo via `config.gate === true`. CCP_VALIDATION_GATE=false hard-disables
+ *      even if per-repo config opts in.
+ *
+ * When CCP_VALIDATION_GATE is unset the per-repo flag wins.
+ */
+export function shouldGateOnValidation(
+  config: ValidationConfig | null | undefined,
+  report: ValidationReport | null | undefined,
+): boolean {
+  if (!report || report.skipped || report.ok) return false;
+  const envRaw = process.env.CCP_VALIDATION_GATE;
+  if (typeof envRaw === 'string' && envRaw.length > 0) {
+    const lower = envRaw.toLowerCase();
+    if (lower === 'false' || lower === '0' || lower === 'off' || lower === 'no') return false;
+    if (lower === 'true' || lower === '1' || lower === 'on' || lower === 'yes') return true;
+    // any other value \u2014 fall through to per-repo setting
+  }
+  return !!(config && config.gate === true);
+}
+
+export interface ValidationBlocker {
+  /** Human-readable blocker message for result.blocker. */
+  message: string;
+  /** Synthetic check entries for result.failed_checks. */
+  failedChecks: Array<{ name: string; state: string; url: string | null }>;
+  /** Ordered list of failing required step names. */
+  failedStepNames: string[];
+  /** Structured feedback lines to hand to the remediation agent. */
+  feedback: string[];
+}
+
+/**
+ * Build blocker + feedback payloads from a failed validation report.
+ * Pure function \u2014 no side effects, safe to unit-test.
+ */
+export function buildValidationBlocker(report: ValidationReport): ValidationBlocker {
+  const failedRequired = (report.steps || []).filter((s) => !s.ok && s.required);
+  const failedSoft = (report.steps || []).filter((s) => !s.ok && !s.required);
+  const failedStepNames = failedRequired.map((s) => s.name);
+
+  const firstLines = failedRequired
+    .map((s) => {
+      const tail = (s.stderrExcerpt || s.stdoutExcerpt || '').trim();
+      const firstLine = tail ? tail.split(/\r?\n/).find((l) => l.trim().length > 0) : '';
+      const tag = s.timedOut ? 'timeout' : `exit ${s.exitCode ?? 'null'}`;
+      return `  - ${s.name} (${tag}, ${Math.round(s.durationMs / 1000)}s)${firstLine ? ` \u2014 ${firstLine.slice(0, 200)}` : ''}`;
+    })
+    .join('\n');
+
+  const message =
+    `validation failed on post-worker static checks (${failedRequired.length} required step(s) failing)\n${firstLines}`;
+
+  const failedChecks = failedRequired.map((s) => ({
+    name: `validation:${s.name}`,
+    state: s.timedOut ? 'TIMED_OUT' : 'FAILURE',
+    url: null,
+  }));
+
+  // Detailed feedback lines for the remediation agent. We include trailing
+  // stderr/stdout excerpts so the agent doesn't have to guess what broke.
+  const feedback: string[] = [
+    `Static validation failed against commit ${report.commit || 'unknown'} on branch ${report.branch || 'unknown'}.`,
+    `Failing required steps: ${failedStepNames.join(', ') || '(none reported)'}.`,
+  ];
+  if (failedSoft.length) {
+    feedback.push(`Non-blocking soft failures (address opportunistically): ${failedSoft.map((s) => s.name).join(', ')}.`);
+  }
+  for (const s of failedRequired) {
+    feedback.push(
+      `\n=== step: ${s.name} (${s.timedOut ? 'timed out' : `exit ${s.exitCode ?? 'null'}`}, ${Math.round(s.durationMs / 1000)}s) ===`,
+    );
+    feedback.push(`cmd: ${s.cmd}`);
+    const stderr = (s.stderrExcerpt || '').trim();
+    const stdout = (s.stdoutExcerpt || '').trim();
+    if (stderr) feedback.push(`stderr (trailing):\n${stderr}`);
+    if (stdout && stdout !== stderr) feedback.push(`stdout (trailing):\n${stdout}`);
+  }
+
+  return { message, failedChecks, failedStepNames, feedback };
+}
+
+module.exports = {
+  runValidation,
+  summarizeReport,
+  compactReport,
+  shouldGateOnValidation,
+  buildValidationBlocker,
+};
 
 // Silence unused-import warning for path (kept for future step-file resolution).
 void path;

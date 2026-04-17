@@ -18,14 +18,23 @@ compile, typecheck, or pass tests.
 6. A one-line summary is appended to `worker.log` and to the final Discord
    message (e.g. `validation:ok (pass=3 fail=0 42s)`).
 
-**Phase 2a (this PR): informational only.** A failing validation does NOT change
-the job state today. The goal here is to accumulate signal and make sure the
-validator itself is reliable before turning it into a gate.
+**Phase 2a (default): informational only.** A failing validation does NOT change
+the job state. The report is attached to `result.json` and a `validation:…` tag
+shows up in the final Discord message, but the job still finishes as `coded`/
+`done`/`verified`.
 
-**Phase 2b (next PR):** a failing **required** step will:
-- promote `result.state` to `validation-failed`
-- auto-spawn a `__valfix` remediation job with the validation log as feedback
-- block PR auto-merge until the fix lands
+**Phase 2b (opt-in via `validation.gate: true` per repo, or global
+`CCP_VALIDATION_GATE=true`):** a failing **required** step will:
+- set `result.state` to `blocked`
+- set `result.blocker_type` to `'validation-failed'`
+- populate `result.failed_checks` with synthetic `validation:<step>` entries
+- auto-spawn a `__valfix` remediation job (suffix added to the original job id)
+  whose packet targets the existing branch, inherits the original goal, and
+  carries the failing steps' command + trailing stderr as `review_feedback`
+
+The `__valfix` job is gated behind the same `CCP_PR_REMEDIATE_ENABLED` flag
+that the PR-review remediation already uses. Remediation is refused when the
+job id already ends in `__valfix|__reviewfix|__deployfix` to bound recursion.
 
 ## Configuring a repo
 
@@ -48,6 +57,14 @@ Add a `validation` block to any entry in `configs/repos.json`:
   }
 }
 ```
+
+### Top-level fields
+
+| Field | Required | Default | Purpose |
+|-------|----------|---------|---------|
+| `enabled` | no | true when `steps` present | Per-repo kill switch. |
+| `gate` | no | false | Phase 2b: when true, a failing required step promotes the job to `blocked` and spawns `__valfix`. Leave false while you're still building trust in the signal. |
+| `steps` | yes | — | Ordered list of step definitions. |
 
 ### Step fields
 
@@ -81,6 +98,21 @@ all validation runs. Useful for emergency rollback if a misconfigured step is
 eating cycle budget.
 
 Per-repo, set `validation.enabled: false` or simply omit the `validation` block.
+
+## Gate override (Phase 2b)
+
+`CCP_VALIDATION_GATE` is a global override for the per-repo `validation.gate`
+flag:
+
+| Value (case-insensitive) | Effect |
+|---|---|
+| unset | Use `validation.gate` on each repo (default: false) |
+| `true` / `1` / `on` / `yes` | Gate ON for **every** repo with a validation config, regardless of per-repo setting |
+| `false` / `0` / `off` / `no` | Gate OFF globally, even if a repo opts in |
+
+Recommended rollout: turn on `validation.gate: true` for one repo at a time
+once Phase 2a noise has been quiet for a few days. Keep `CCP_VALIDATION_GATE`
+unset so an emergency can be handled with a single env flip.
 
 ## When validation is skipped
 

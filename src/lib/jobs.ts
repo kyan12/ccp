@@ -8,7 +8,7 @@ import type {
   ReviewComment, AddressedComment, ValidationReport,
 } from '../types';
 import { run, commandExists, shellQuote } from './shell';
-import { runValidation, summarizeReport } from './validator';
+import { runValidation, summarizeReport, shouldGateOnValidation, buildValidationBlocker } from './validator';
 const { findRepoByPath } = require('./repos');
 const { inspectDiscordTransport, hasDiscordTransport, sendDiscordMessage, createDiscordThread } = require('./discord');
 const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./linear');
@@ -396,10 +396,87 @@ function maybeReviewPr(jobId: string, result: JobResult): PRReviewResult & { ski
   }
 }
 
+/**
+ * Phase 2b: if validation gating promoted the job to `validation-failed`, spawn
+ * a `__valfix` remediation job with the failing-step output as feedback. The
+ * fix job targets the same branch so the existing PR gets updated in place.
+ *
+ * Gated on CCP_PR_REMEDIATE_ENABLED (shared with PR-review remediation) and
+ * the per-repo `validation.gate` flag that already produced the blocker.
+ */
+function maybeEnqueueValidationRemediation(
+  jobId: string,
+  packet: JobPacket,
+  result: JobResult,
+): RemediationResult {
+  const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
+  if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
+  if (/__deployfix|__reviewfix|__valfix/.test(jobId)) {
+    return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
+  }
+  if (result.blocker_type !== 'validation-failed') {
+    return { ok: false, skipped: true, reason: 'job is not blocked on validation' };
+  }
+  if (!result.validation || result.validation.skipped) {
+    return { ok: false, skipped: true, reason: 'no validation report to remediate' };
+  }
+
+  const remediationJobId = `${jobId}__valfix`;
+  if (fs.existsSync(statusPath(remediationJobId))) {
+    return { ok: true, skipped: true, reason: 'remediation job already exists', job_id: remediationJobId };
+  }
+
+  const blocker = buildValidationBlocker(result.validation);
+  const failingList = blocker.failedStepNames.join(', ') || 'unknown';
+  const feedback: string[] = [
+    `Static validation failed for ${packet.ticket_id || jobId}.`,
+    `Failing required steps: ${failingList}.`,
+    result.pr_url ? `PR: ${result.pr_url}` : `Branch: ${result.branch || 'unknown'}`,
+    'Fix every failing step on the existing branch. Do not create a new PR.',
+    'Re-run the same validation commands locally after your fix to confirm green before pushing.',
+    ...blocker.feedback,
+  ];
+
+  const remediationPacket: JobPacket = {
+    ...packet,
+    job_id: remediationJobId,
+    goal: `Remediate validation failure(s) for ${packet.ticket_id || jobId} (${failingList})`,
+    source: 'validation',
+    kind: 'bug',
+    label: 'validation-fix',
+    review_feedback: feedback,
+    // Clear inherited PR review comments — this is a validation-fix task, not a
+    // review-fix task. Leaving them set would cause buildPrompt to instruct the
+    // agent to also "address each review comment individually" + emit an
+    // AddressedComments block, which is irrelevant here and splits attention.
+    reviewComments: undefined,
+    working_branch: result.branch && result.branch !== 'unknown' ? result.branch : packet.working_branch || null,
+    base_branch: packet.base_branch || 'main',
+    acceptance_criteria: [
+      ...(packet.acceptance_criteria || []),
+      `Make every failing validation step pass: ${failingList}.`,
+      'Push updates to the existing PR branch.',
+      'Do not create a new PR.',
+    ],
+    verification_steps: [
+      ...(packet.verification_steps || []),
+      'Re-run the failing validation commands locally before declaring done.',
+      'If a command cannot reasonably be made green in this patch, leave a precise blocker note explaining why.',
+    ],
+    created_at: nowIso(),
+  };
+  const created = createJob(remediationPacket);
+  appendLog(jobId, `[${nowIso()}] validation remediation job queued: ${created.jobId}`);
+  return { ok: true, skipped: false, job_id: created.jobId, branch: remediationPacket.working_branch, blockerType: 'validation-failed' };
+}
+
 function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result: JobResult, prReview: PRReviewResult & { skipped?: boolean }): RemediationResult {
   const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
   if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
-  if (/__deployfix|__reviewfix/.test(jobId)) return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
+  // Include __valfix so a Phase 2b validation remediation PR that picks up a
+  // blocking review doesn't cascade into a __valfix__reviewfix job — one layer
+  // of auto-remediation per original job id, period.
+  if (/__deployfix|__reviewfix|__valfix/.test(jobId)) return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
   if (!prReview?.ok || prReview.disposition !== 'block') return { ok: false, skipped: true, reason: 'no blocking PR review' };
   const remediationSuffix = prReview.blockerType === 'deploy' ? '__deployfix' : '__reviewfix';
   const remediationJobId = `${jobId}${remediationSuffix}`;
@@ -918,13 +995,36 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     updated_at: nowIso(),
   };
 
-  // Post-worker static validation (Phase 2a: informational only — does NOT change state).
-  // Runs per-repo `install/typecheck/lint/test/build` style commands configured in repos.json.
+  // Post-worker static validation.
+  //   Phase 2a: attach the report to result.json for visibility (always on).
+  //   Phase 2b: if the repo opts in via `validation.gate=true` (or global
+  //             CCP_VALIDATION_GATE=true), a failing required step promotes the
+  //             job to `blocked` with blocker_type='validation-failed' and a
+  //             `__valfix` remediation job is spawned below.
   // See docs/validation.md. Gate with CCP_VALIDATION_ENABLED=false to disable globally.
   const validationReport = runPostWorkerValidation(jobId, packet, result, finalState);
+  let validationGated = false;
   if (validationReport) {
     result.validation = validationReport;
     appendLog(jobId, `[${nowIso()}] validation: ${summarizeReport(validationReport)}`);
+
+    const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
+    const mappingValidation = (mapping && typeof mapping === 'object' ? (mapping as { validation?: unknown }).validation : null) as
+      | import('../types').ValidationConfig
+      | null
+      | undefined;
+    if (shouldGateOnValidation(mappingValidation, validationReport)) {
+      const blocker = buildValidationBlocker(validationReport);
+      finalState = 'blocked';
+      result.state = 'blocked';
+      result.blocker = blocker.message;
+      result.blocker_type = 'validation-failed';
+      result.failed_checks = blocker.failedChecks;
+      result.prod = 'no';
+      result.verified = 'not yet';
+      validationGated = true;
+      appendLog(jobId, `[${nowIso()}] validation gate: promoted to blocked (${blocker.failedStepNames.join(', ') || 'unknown'})`);
+    }
   }
   writeJson(resultPath(jobId), result);
   const started = status.started_at ? new Date(status.started_at).getTime() : Date.now();
@@ -939,11 +1039,27 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
 
   const prReview = maybeReviewPr(jobId, result);
   if (prReview?.ok) {
-    result.blocker_type = prReview.blockerType || null;
-    result.failed_checks = prReview.failedChecks || [];
+    // Preserve the validation blocker if we set one \u2014 a green PR-review disposition
+    // must not silently erase a local validation failure.
+    if (!validationGated) {
+      result.blocker_type = prReview.blockerType || null;
+      result.failed_checks = prReview.failedChecks || [];
+    } else if (prReview.blockerType) {
+      // PR review found its own blocker on top of the validation failure: keep
+      // the validation blocker_type (it's the primary signal locally) but append
+      // PR-side failing checks so operators see both.
+      const existing = result.failed_checks || [];
+      const extra = (prReview.failedChecks || []).filter(
+        (c) => !existing.some((e) => e.name === c.name),
+      );
+      result.failed_checks = [...existing, ...extra];
+    }
     writeJson(resultPath(jobId), result);
   }
   const remediation = maybeEnqueueReviewRemediation(jobId, packet, result, prReview);
+  const validationRemediation = validationGated
+    ? maybeEnqueueValidationRemediation(jobId, packet, result)
+    : { ok: false, skipped: true, reason: 'validation not gated' } as RemediationResult;
 
   // Post per-comment replies and summary for remediation jobs that have addressedComments
   const isRemediationJob = /__deployfix|__reviewfix/.test(jobId);
@@ -974,6 +1090,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
         reason: prReview.reason || 'unknown PR review error',
       },
       remediation,
+      validationRemediation,
     },
   });
 
@@ -1003,6 +1120,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       const exitInfo = exitCode !== 0 ? ` (exit ${exitCode})` : '';
       runsMsg = `${emoji} — ${ticket} | ${repoName}${exitInfo}\n${blocker}`;
       if (validationTag) runsMsg += `\n${validationTag}`;
+      if (validationRemediation.ok && !validationRemediation.skipped && validationRemediation.job_id) {
+        runsMsg += `\n🔁 valfix: ${validationRemediation.job_id}`;
+      }
     } else {
       const parts: string[] = [`✅ DONE — ${ticket} | ${repoName}`];
       if (commitShort) parts.push(commitShort);

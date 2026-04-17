@@ -1,8 +1,8 @@
 import fs = require('fs');
 import os = require('os');
 import path = require('path');
-import { runValidation, summarizeReport, compactReport } from './validator';
-import type { ValidationConfig } from '../types';
+import { runValidation, summarizeReport, compactReport, shouldGateOnValidation, buildValidationBlocker } from './validator';
+import type { ValidationConfig, ValidationReport } from '../types';
 
 let passed = 0;
 let failed = 0;
@@ -282,6 +282,153 @@ console.log('\nTest: summarizeReport + compactReport');
   assert(compactReport(null) === null, 'compactReport(null) === null');
   assert(compactReport(undefined) === null, 'compactReport(undefined) === null');
   cleanup(repo);
+}
+
+// ── shouldGateOnValidation ──
+console.log('\nTest: shouldGateOnValidation — passed report never gates');
+{
+  const reportOk: ValidationReport = {
+    ok: true, steps: [],
+    startedAt: '', finishedAt: '', durationMs: 0,
+  };
+  delete process.env.CCP_VALIDATION_GATE;
+  assert(shouldGateOnValidation({ steps: [], gate: true }, reportOk) === false, 'passing report does not gate even with gate=true');
+}
+
+console.log('\nTest: shouldGateOnValidation — skipped report never gates');
+{
+  const reportSkip: ValidationReport = {
+    ok: false, skipped: true, reason: 'no config',
+    steps: [], startedAt: '', finishedAt: '', durationMs: 0,
+  };
+  delete process.env.CCP_VALIDATION_GATE;
+  assert(shouldGateOnValidation({ steps: [], gate: true }, reportSkip) === false, 'skipped report does not gate');
+}
+
+console.log('\nTest: shouldGateOnValidation — per-repo gate=true triggers');
+{
+  const reportFail: ValidationReport = {
+    ok: false,
+    steps: [{
+      name: 'typecheck', cmd: 'tsc', required: true, ok: false,
+      exitCode: 1, durationMs: 10, stdoutExcerpt: '', stderrExcerpt: 'err',
+    }],
+    startedAt: '', finishedAt: '', durationMs: 10,
+  };
+  delete process.env.CCP_VALIDATION_GATE;
+  assert(shouldGateOnValidation({ steps: [], gate: true }, reportFail) === true, 'gate=true + failing report triggers');
+  assert(shouldGateOnValidation({ steps: [], gate: false }, reportFail) === false, 'gate=false does not trigger');
+  assert(shouldGateOnValidation({ steps: [] }, reportFail) === false, 'missing gate defaults to false');
+  assert(shouldGateOnValidation(null, reportFail) === false, 'null config does not trigger');
+  assert(shouldGateOnValidation(undefined, reportFail) === false, 'undefined config does not trigger');
+}
+
+console.log('\nTest: shouldGateOnValidation — global override');
+{
+  const reportFail: ValidationReport = {
+    ok: false,
+    steps: [{
+      name: 'typecheck', cmd: 'tsc', required: true, ok: false,
+      exitCode: 1, durationMs: 10, stdoutExcerpt: '', stderrExcerpt: 'err',
+    }],
+    startedAt: '', finishedAt: '', durationMs: 10,
+  };
+  process.env.CCP_VALIDATION_GATE = 'true';
+  assert(shouldGateOnValidation({ steps: [], gate: false }, reportFail) === true, 'CCP_VALIDATION_GATE=true overrides per-repo false');
+  assert(shouldGateOnValidation(null, reportFail) === true, 'CCP_VALIDATION_GATE=true works with null config');
+
+  process.env.CCP_VALIDATION_GATE = 'false';
+  assert(shouldGateOnValidation({ steps: [], gate: true }, reportFail) === false, 'CCP_VALIDATION_GATE=false overrides per-repo true');
+
+  process.env.CCP_VALIDATION_GATE = '1';
+  assert(shouldGateOnValidation(null, reportFail) === true, '"1" is parsed as true');
+  process.env.CCP_VALIDATION_GATE = '0';
+  assert(shouldGateOnValidation({ steps: [], gate: true }, reportFail) === false, '"0" is parsed as false');
+  process.env.CCP_VALIDATION_GATE = 'off';
+  assert(shouldGateOnValidation({ steps: [], gate: true }, reportFail) === false, '"off" is parsed as false');
+  process.env.CCP_VALIDATION_GATE = 'on';
+  assert(shouldGateOnValidation(null, reportFail) === true, '"on" is parsed as true');
+
+  process.env.CCP_VALIDATION_GATE = 'bogus';
+  assert(shouldGateOnValidation({ steps: [], gate: true }, reportFail) === true, 'unknown env value falls back to per-repo (true)');
+  assert(shouldGateOnValidation({ steps: [], gate: false }, reportFail) === false, 'unknown env value falls back to per-repo (false)');
+  delete process.env.CCP_VALIDATION_GATE;
+}
+
+// ── buildValidationBlocker ──
+console.log('\nTest: buildValidationBlocker — failing required step');
+{
+  const report: ValidationReport = {
+    ok: false,
+    steps: [
+      { name: 'install', cmd: 'npm ci', required: true, ok: true, exitCode: 0, durationMs: 1000, stdoutExcerpt: '', stderrExcerpt: '' },
+      { name: 'typecheck', cmd: 'npm run typecheck', required: true, ok: false, exitCode: 2, durationMs: 12345, stdoutExcerpt: 'checking...', stderrExcerpt: 'src/foo.ts(3,4): error TS2345: Type x is not assignable to y\n' },
+    ],
+    startedAt: '2025-01-01T00:00:00Z',
+    finishedAt: '2025-01-01T00:00:12Z',
+    durationMs: 13345,
+    commit: 'abc1234',
+    branch: 'feature/test',
+  };
+  const blocker = buildValidationBlocker(report);
+  assert(blocker.failedStepNames.length === 1 && blocker.failedStepNames[0] === 'typecheck', 'failedStepNames lists the failing required step');
+  assert(blocker.failedChecks.length === 1, 'failedChecks has one entry');
+  assert(blocker.failedChecks[0].name === 'validation:typecheck', 'failedChecks name is prefixed validation:');
+  assert(blocker.failedChecks[0].state === 'FAILURE', 'non-timeout failure -> state FAILURE');
+  assert(blocker.message.includes('typecheck'), 'blocker message mentions step name');
+  assert(blocker.message.includes('error TS2345'), 'blocker message includes first stderr line');
+  assert(blocker.feedback.some((l) => l.includes('commit abc1234')), 'feedback mentions commit');
+  assert(blocker.feedback.some((l) => l.includes('branch feature/test')), 'feedback mentions branch');
+  assert(blocker.feedback.some((l) => l.includes('npm run typecheck')), 'feedback includes cmd');
+  assert(blocker.feedback.some((l) => l.includes('error TS2345')), 'feedback includes stderr excerpt');
+}
+
+console.log('\nTest: buildValidationBlocker — timeout rendered as TIMED_OUT');
+{
+  const report: ValidationReport = {
+    ok: false,
+    steps: [{
+      name: 'test', cmd: 'npm test', required: true, ok: false,
+      timedOut: true, exitCode: null, durationMs: 600000, stdoutExcerpt: '', stderrExcerpt: 'hung',
+    }],
+    startedAt: '', finishedAt: '', durationMs: 600000,
+  };
+  const blocker = buildValidationBlocker(report);
+  assert(blocker.failedChecks[0].state === 'TIMED_OUT', 'timed-out step -> state TIMED_OUT');
+  assert(blocker.message.includes('timeout'), 'message mentions timeout');
+  assert(blocker.feedback.some((l) => l.includes('timed out')), 'feedback marks step as timed out');
+}
+
+console.log('\nTest: buildValidationBlocker — non-required failures surface as soft note only');
+{
+  const report: ValidationReport = {
+    ok: false,
+    steps: [
+      { name: 'typecheck', cmd: 'tsc', required: true, ok: false, exitCode: 1, durationMs: 10, stdoutExcerpt: '', stderrExcerpt: 'type err' },
+      { name: 'lint', cmd: 'eslint', required: false, ok: false, exitCode: 1, durationMs: 10, stdoutExcerpt: '', stderrExcerpt: 'lint err' },
+    ],
+    startedAt: '', finishedAt: '', durationMs: 20,
+  };
+  const blocker = buildValidationBlocker(report);
+  assert(blocker.failedStepNames.length === 1 && blocker.failedStepNames[0] === 'typecheck', 'only required step in failedStepNames');
+  assert(blocker.failedChecks.length === 1, 'only one failed check entry');
+  assert(blocker.feedback.some((l) => l.includes('Non-blocking soft failures')), 'soft failures mentioned in feedback');
+  assert(blocker.feedback.some((l) => l.includes('lint')), 'soft failure name in feedback');
+}
+
+console.log('\nTest: buildValidationBlocker — handles missing excerpts gracefully');
+{
+  const report: ValidationReport = {
+    ok: false,
+    steps: [{
+      name: 'build', cmd: 'npm run build', required: true, ok: false,
+      exitCode: 1, durationMs: 500, stdoutExcerpt: '', stderrExcerpt: '',
+    }],
+    startedAt: '', finishedAt: '', durationMs: 500,
+  };
+  const blocker = buildValidationBlocker(report);
+  assert(blocker.message.includes('build'), 'message still names step with no excerpt');
+  assert(blocker.feedback.some((l) => l.includes('npm run build')), 'cmd included even with empty excerpt');
 }
 
 console.log(`\nTotal: ${passed} passed, ${failed} failed`);
