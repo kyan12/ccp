@@ -42,6 +42,14 @@ export interface ValidationStep {
 export interface ValidationConfig {
   /** If false, skip validation for this repo entirely. Default: true when steps present. */
   enabled?: boolean;
+  /**
+   * Phase 2b: when true, a failing required step promotes the job to `blocked`
+   * with `blocker_type: 'validation-failed'` and spawns a `__valfix` remediation
+   * job. Default: false (Phase 2a behavior — informational only).
+   *
+   * Can be overridden globally with CCP_VALIDATION_GATE=true|false.
+   */
+  gate?: boolean;
   steps: ValidationStep[];
 }
 
@@ -148,6 +156,8 @@ export interface JobIntegrations {
   linear?: LinearIntegration;
   prReview?: PrReviewIntegration;
   remediation?: RemediationResult;
+  /** Phase 2b: record of the __valfix remediation spawn attempt (if any). */
+  validationRemediation?: RemediationResult;
 }
 
 export interface JobStatus {
