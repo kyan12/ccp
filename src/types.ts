@@ -190,6 +190,8 @@ export interface JobStatus {
   last_heartbeat_at: string | null;
   last_output_excerpt: string;
   exit_code: number | null;
+  /** Resolved agent driver name for this job (set at dispatch time). */
+  agent?: string;
   notifications?: JobNotifications;
   integrations?: JobIntegrations;
   discord_thread_id?: string | null;

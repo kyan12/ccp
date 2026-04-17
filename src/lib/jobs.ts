@@ -298,10 +298,32 @@ function preflight(jobId: string): PreflightResult {
   const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   // Resolve the agent driver once so env inspection + failure gate both see
   // the same choice. `findRepoByPath` returns the mapping (if any) for the
-  // repo path; RepoMapping.agent is read off that.
+  // repo path; RepoMapping.agent / agentFallback are read off that.
+  //
+  // Fallback wiring (PR B): when the primary driver's circuit breaker is
+  // open AND the repo has opted into `agentFallback`, resolveAgent swaps us
+  // to the fallback driver here. The swap is logged to worker.log so the
+  // operator sees why a job ran on the non-default agent.
   const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
   const mappingAgent = (mapping && typeof mapping === 'object' ? (mapping as { agent?: string }).agent : undefined);
-  const resolution = resolveAgent(packet, mappingAgent ? { agent: mappingAgent } : null);
+  const mappingFallback = (mapping && typeof mapping === 'object' ? (mapping as { agentFallback?: string }).agentFallback : undefined);
+  const { getOutageStatus: getOutageStatusForAgent } = require('./outage') as typeof import('./outage');
+  const checkCircuit = (name: string): boolean => {
+    try { return !!getOutageStatusForAgent(name)?.outage; } catch { return false; }
+  };
+  const resolution = resolveAgent(
+    packet,
+    (mappingAgent || mappingFallback)
+      ? { agent: mappingAgent, agentFallback: mappingFallback }
+      : null,
+    { checkCircuit },
+  );
+  if (resolution.fellBackDueToOutage && resolution.primaryDriver) {
+    appendLog(
+      jobId,
+      `[${nowIso()}] agent-fallback: primary '${resolution.primaryDriver.name}' circuit open → dispatching via fallback '${resolution.driver.name}'`,
+    );
+  }
   const agentPf = resolution.driver.preflight();
   const env = inspectEnvironment(packet.repo, resolution.driver);
   const failures: string[] = [];
@@ -1232,26 +1254,38 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   });
   if (whLog) appendLog(jobId, `[${nowIso()}] ${whLog}`);
 
-  // Outage circuit breaker: detect API failures and trigger outage mode
-  const wasApiFailure = (exitCode !== 0 || ['blocked', 'harness-failure'].includes(finalState)) && isApiOutageLog(logText);
-  const { enteredOutage } = recordJobOutcome(wasApiFailure);
+  // Outage circuit breaker: detect API failures and trigger outage mode.
+  // Per-agent (PR B): log + state file are keyed by whichever driver actually
+  // ran the job (pf.agent). Falls back to the packet's configured agent so
+  // circuit flips happen even when preflight didn't stash agent on status.
+  // status.agent is stamped at dispatch time (startJob → saveStatus), so it
+  // reflects the driver that actually ran — including post-fallback swaps.
+  // packet.agent is the static configuration fallback; 'claude-code' is the
+  // ultimate default.
+  const activeAgent = status.agent || packet.agent || 'claude-code';
+  const activeDriverLabel = (getAgent(activeAgent) || claudeCodeDriver).label;
+  const wasApiFailure = (exitCode !== 0 || ['blocked', 'harness-failure'].includes(finalState)) && isApiOutageLog(logText, activeAgent);
+  const { enteredOutage } = recordJobOutcome(wasApiFailure, activeAgent);
   if (enteredOutage) {
     const outagePct = packet.ticket_id || jobId;
-    const alertMsg = `⚠️ OUTAGE DETECTED — Anthropic API is returning errors. Pausing all job dispatch until it recovers. Last job: ${outagePct}`;
+    const alertMsg = `⚠️ OUTAGE DETECTED — ${activeDriverLabel} API is returning errors. Pausing dispatch for this agent until it recovers. Last job: ${outagePct}`;
     sendDiscordMessage(DISCORD_ERRORS_CHANNEL, alertMsg);
-    appendLog(jobId, `[${nowIso()}] outage mode activated`);
+    appendLog(jobId, `[${nowIso()}] outage mode activated for agent '${activeAgent}'`);
   }
 
-  // Rate limit detection: if worker hit usage limits, pause until reset time
+  // Rate limit detection: if worker hit usage limits, pause until reset time.
+  // Rate-limit state stays on the active agent's circuit; only Anthropic's
+  // wall-clock reset phrasing is currently parseable, so Codex jobs will
+  // generally take the generic API-error path above instead.
   const { detectRateLimit: detectRL, recordRateLimit } = require('./outage');
   const rateLimit = detectRL(logText);
   if (rateLimit) {
-    recordRateLimit(rateLimit.resetAt, rateLimit.reason);
+    recordRateLimit(rateLimit.resetAt, rateLimit.reason, activeAgent);
     const resetDate = new Date(rateLimit.resetAt);
     const resetStr = resetDate.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
-    const alertMsg = `⏸️ RATE LIMITED — Claude usage limit hit. Pausing all dispatch until ${resetStr} ET. Last job: ${packet.ticket_id || jobId}`;
+    const alertMsg = `⏸️ RATE LIMITED — ${activeDriverLabel} usage limit hit. Pausing dispatch for this agent until ${resetStr} ET. Last job: ${packet.ticket_id || jobId}`;
     sendDiscordMessage(DISCORD_ERRORS_CHANNEL, alertMsg);
-    appendLog(jobId, `[${nowIso()}] rate limit detected — pausing until ${rateLimit.resetAt}`);
+    appendLog(jobId, `[${nowIso()}] rate limit detected for '${activeAgent}' — pausing until ${rateLimit.resetAt}`);
   }
 
   return { ok: true, state: finalState, exitCode, result, linear };

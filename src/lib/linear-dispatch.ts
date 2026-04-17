@@ -130,6 +130,28 @@ function chooseKind(issue: LinearDispatchIssue): string {
   return issue.project?.name === 'Reliability / Incidents' ? 'bug' : 'feature';
 }
 
+/**
+ * Parse any `agent:<name>` label on the Linear ticket into a packet-level
+ * agent override. This is the "manual override" knob from Phase 1 PR B:
+ * operators can flip a single ticket to Codex (or back to Claude) by
+ * attaching an `agent:codex` / `agent:claude-code` label — no config change
+ * or redeploy required.
+ *
+ * Precedence: packet.agent (this function) > repo.agent > env CCP_AGENT >
+ * built-in default. The first `agent:<name>` label wins if multiple are
+ * present (Linear's label order is stable and editor-controlled).
+ */
+function chooseAgentLabel(issue: LinearDispatchIssue): string | undefined {
+  for (const raw of issue.labels?.nodes || []) {
+    const name = String(raw.name || '').toLowerCase().trim();
+    if (name.startsWith('agent:')) {
+      const value = name.slice('agent:'.length).trim();
+      if (value) return value;
+    }
+  }
+  return undefined;
+}
+
 function parseStructuredDescription(description: string | null | undefined): {
   goal: string | null;
   acceptance_criteria: string[];
@@ -251,6 +273,7 @@ function issueToPacket(issue: LinearDispatchIssue): JobPacket {
     goal = issue.title;
   }
 
+  const agentLabel = chooseAgentLabel(issue);
   return {
     job_id: `linear_${issue.identifier.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
     ticket_id: issue.identifier,
@@ -266,6 +289,9 @@ function issueToPacket(issue: LinearDispatchIssue): JobPacket {
     acceptance_criteria,
     constraints,
     verification_steps,
+    // Only set when the ticket carries an explicit `agent:<name>` label.
+    // Leaving it undefined preserves repo-level + env-level precedence.
+    ...(agentLabel ? { agent: agentLabel } : {}),
   };
 }
 
@@ -354,6 +380,7 @@ module.exports = {
   listDispatchCandidates,
   issueToPacket,
   readState,
+  chooseAgentLabel,
 };
 
-export { dispatchLinearIssues, listDispatchCandidates, issueToPacket, readState };
+export { dispatchLinearIssues, listDispatchCandidates, issueToPacket, readState, chooseAgentLabel };
