@@ -1539,6 +1539,27 @@ function interruptJob(jobId: string): { ok: boolean; job_id: string; state: stri
     const out = run(tmux, ['kill-session', '-t', status.tmux_session]);
     appendLog(jobId, `[${nowIso()}] tmux kill-session: ${out.status === 0 ? 'ok' : (out.stderr || out.stdout || 'failed').trim()}`);
   }
+  // Phase 3: interrupt is a terminal path — operator-initiated jobs jump
+  // straight to `blocked` and never hit finalizeJob (reconcileJob only
+  // finalizes `state === 'running'`). If a worktree was allocated for
+  // this job we have to release it here or it leaks on disk forever.
+  // Best-effort: any release failure is logged but must not prevent the
+  // interrupt from succeeding.
+  if (status.workdir) {
+    try {
+      const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
+      const releaseResult = releaseWorktree(status.workdir, packet.repo);
+      appendLog(
+        jobId,
+        `[${nowIso()}] worktree release (interrupt): ${releaseResult.ok ? 'ok' : 'failed'} — ${releaseResult.detail}`,
+      );
+    } catch (err) {
+      appendLog(
+        jobId,
+        `[${nowIso()}] worktree release (interrupt) errored: ${(err as Error).message}`,
+      );
+    }
+  }
   saveStatus(jobId, {
     state: 'blocked',
     exit_code: 130,
