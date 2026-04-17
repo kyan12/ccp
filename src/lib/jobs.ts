@@ -8,7 +8,7 @@ import type {
   ReviewComment, AddressedComment, ValidationReport,
 } from '../types';
 import { run, commandExists, shellQuote } from './shell';
-import { resolveAgent } from './agents';
+import { resolveAgent, getAgent, claudeCodeDriver } from './agents';
 import type { AgentDriver } from './agents';
 import { runValidation, summarizeReport, shouldGateOnValidation, buildValidationBlocker } from './validator';
 const { findRepoByPath } = require('./repos');
@@ -1289,20 +1289,20 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
   // shape is preserved verbatim here (cat prompt | claude --print ...) so
   // this refactor is behavior-neutral; non-claude drivers pick their own
   // command shape without touching jobs.ts.
-  const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
-  const mappingAgent = (mapping && typeof mapping === 'object' ? (mapping as { agent?: string }).agent : undefined);
-  const resolution = resolveAgent(packet, mappingAgent ? { agent: mappingAgent } : null);
-  const agentCommand = resolution.driver.buildCommand({
+  //
+  // preflight() already resolved the agent (pf.agent) and wrote the name +
+  // binary into the PreflightResult. Look the driver up by name instead of
+  // re-resolving, so unknown-agent warnings aren't emitted twice per job and
+  // we don't redundantly scan the repos config again.
+  const agent: AgentDriver = (pf.agent && getAgent(pf.agent)) || claudeCodeDriver;
+  const agentCommand = agent.buildCommand({
     promptPath: promptFile,
     repoPath: packet.repo!,
     packet,
     bin: pf.claude,
   });
   const workerCmd = agentCommand.shellCmd;
-  appendLog(
-    jobId,
-    `[${nowIso()}] agent: ${resolution.driver.name} (source=${resolution.source}${resolution.fellBack ? ', fell-back' : ''})`,
-  );
+  appendLog(jobId, `[${nowIso()}] agent: ${agent.name}`);
   const extraEnv = Object.entries(agentCommand.env || {}).map(
     ([k, v]) => `export ${k}=${shellQuote(v)}`,
   );
