@@ -12,6 +12,15 @@
         "enabled": false,
         "branch": "main",
         "timeoutSec": 900
+      },
+      "validation": {
+        "steps": [
+          { "name": "install", "cmd": "npm ci --no-audit --no-fund", "timeoutSec": 300 },
+          { "name": "typecheck", "cmd": "npm run typecheck", "timeoutSec": 300 },
+          { "name": "lint", "cmd": "npm run lint", "timeoutSec": 180, "required": false },
+          { "name": "test", "cmd": "npm test -- --run", "timeoutSec": 900 },
+          { "name": "build", "cmd": "npm run build", "timeoutSec": 600 }
+        ]
       }
     }
   ]

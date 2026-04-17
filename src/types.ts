@@ -20,6 +20,61 @@ export interface RepoMapping {
   mergeMethod?: 'squash' | 'merge' | 'rebase';
   linearOrg?: string;
   nightly?: NightlyConfig;
+  validation?: ValidationConfig;
+}
+
+// ── Validation ──
+
+/** A single post-worker validation step (typecheck, test, build, etc.). */
+export interface ValidationStep {
+  /** Short identifier shown in dashboard/Discord (e.g. 'typecheck', 'test'). */
+  name: string;
+  /** Shell command run via `sh -lc` from the repo root. */
+  cmd: string;
+  /** Per-step timeout. Default: 600 (10 min). */
+  timeoutSec?: number;
+  /** If false, step failure does NOT fail overall validation. Default: true. */
+  required?: boolean;
+  /** Extra env vars to inject into this step only. */
+  env?: Record<string, string>;
+}
+
+export interface ValidationConfig {
+  /** If false, skip validation for this repo entirely. Default: true when steps present. */
+  enabled?: boolean;
+  steps: ValidationStep[];
+}
+
+export interface ValidationStepResult {
+  name: string;
+  cmd: string;
+  required: boolean;
+  ok: boolean;
+  /** If true, step was not executed (e.g. earlier required step failed & fail-fast, or disabled). */
+  skipped?: boolean;
+  /** If true, step was killed by the timeout. */
+  timedOut?: boolean;
+  exitCode: number | null;
+  durationMs: number;
+  /** Trailing excerpt of stdout (for diagnostics in result.json / dashboard). */
+  stdoutExcerpt: string;
+  stderrExcerpt: string;
+}
+
+export interface ValidationReport {
+  /** true iff every required step exited 0 (non-required failures ignored). */
+  ok: boolean;
+  /** true if validation was not executed for this job (no config, no commit, etc.). */
+  skipped?: boolean;
+  /** Populated when skipped=true. */
+  reason?: string;
+  steps: ValidationStepResult[];
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  /** Echo the git commit the validation was run against, for reproducibility. */
+  commit?: string | null;
+  branch?: string | null;
 }
 
 export interface NightlyConfig {
@@ -144,6 +199,7 @@ export interface JobResult {
   tmux_session?: string | null;
   worker_exit_code?: number;
   proof?: RepoProof;
+  validation?: ValidationReport;
   updated_at: string;
 }
 
