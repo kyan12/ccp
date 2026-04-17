@@ -10,6 +10,7 @@
       "mergeMethod": "squash",
       "agent": "claude-code",
       "agentFallback": "codex",
+      "memoryFile": ".ccp/memory.md",
       "nightly": {
         "enabled": false,
         "branch": "main",
