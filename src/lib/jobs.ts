@@ -8,6 +8,8 @@ import type {
   ReviewComment, AddressedComment, ValidationReport,
 } from '../types';
 import { run, commandExists, shellQuote } from './shell';
+import { resolveAgent } from './agents';
+import type { AgentDriver } from './agents';
 import { runValidation, summarizeReport, shouldGateOnValidation, buildValidationBlocker } from './validator';
 const { findRepoByPath } = require('./repos');
 const { inspectDiscordTransport, hasDiscordTransport, sendDiscordMessage, createDiscordThread } = require('./discord');
@@ -218,10 +220,8 @@ function jobsByState(): Record<string, JobStatus[]> {
   return buckets;
 }
 
-function inspectEnvironment(repo: string | null): Record<string, unknown> {
+function inspectEnvironment(repo: string | null, agent: AgentDriver): Record<string, unknown> {
   const tmux = commandExists('tmux');
-  const claudeOpus = commandExists('claude-opus');
-  const claude = commandExists('claude');
   const git = commandExists('git');
   const node = commandExists('node');
   const openclaw = commandExists('openclaw');
@@ -240,35 +240,48 @@ function inspectEnvironment(repo: string | null): Record<string, unknown> {
     };
   }
 
-  const claudeCommand = claudeOpus || claude || '';
-  let claudeVersion: Record<string, unknown> | null = null;
-  if (claudeCommand) {
-    const out = run(claudeCommand, ['--version']);
-    claudeVersion = {
-      ok: out.status === 0,
-      stdout: (out.stdout || '').trim(),
-      stderr: (out.stderr || '').trim(),
+  // Delegate coding-agent binary/version detection to the resolved driver so
+  // adding new agents doesn't require editing this function.
+  const agentPreflight = agent.preflight();
+  let agentVersion: Record<string, unknown> | null = null;
+  if (agentPreflight.bin) {
+    agentVersion = {
+      ok: agentPreflight.ok,
+      stdout: agentPreflight.version || '',
+      stderr: '',
     };
   }
 
   const openclawStatus = openclaw ? run('openclaw', ['status']) : null;
 
+  // `commands.claude_opus` / `commands.claude` stay populated so existing
+  // dashboards/logs keep working; drivers return them in their commands map.
+  const agentCmds = agentPreflight.commands || {};
+
   return {
     checked_at: nowIso(),
     repo,
     repo_exists: repoExists,
+    agent: agent.name,
     commands: {
       tmux,
-      claude_opus: claudeOpus,
-      claude,
+      claude_opus: agentCmds.claude_opus || '',
+      claude: agentCmds.claude || '',
       git,
       node,
       openclaw,
+      // Driver-specific entries (e.g. future 'codex') flow through verbatim.
+      ...Object.fromEntries(
+        Object.entries(agentCmds).filter(([k]) => k !== 'claude' && k !== 'claude_opus'),
+      ),
     },
     shell,
     home,
     git_status: gitStatus,
-    claude_version: claudeVersion,
+    // `claude_version` retained for backward-compat with dashboard/preflight
+    // consumers; represents whichever driver is active.
+    claude_version: agentVersion,
+    agent_version: agentVersion,
     openclaw_status: openclawStatus ? {
       ok: openclawStatus.status === 0,
       stdout: (openclawStatus.stdout || '').trim(),
@@ -279,13 +292,20 @@ function inspectEnvironment(repo: string | null): Record<string, unknown> {
 
 function preflight(jobId: string): PreflightResult {
   const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
-  const env = inspectEnvironment(packet.repo);
+  // Resolve the agent driver once so env inspection + failure gate both see
+  // the same choice. `findRepoByPath` returns the mapping (if any) for the
+  // repo path; RepoMapping.agent is read off that.
+  const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
+  const mappingAgent = (mapping && typeof mapping === 'object' ? (mapping as { agent?: string }).agent : undefined);
+  const resolution = resolveAgent(packet, mappingAgent ? { agent: mappingAgent } : null);
+  const agentPf = resolution.driver.preflight();
+  const env = inspectEnvironment(packet.repo, resolution.driver);
   const failures: string[] = [];
   if (!packet.ticket_id) failures.push('ticket_id missing');
   if (!packet.repo || !(env.repo_exists as boolean)) failures.push(`repo missing: ${packet.repo || '(unset)'}`);
   const cmds = env.commands as Record<string, string>;
   if (!cmds.tmux) failures.push('tmux not found on PATH');
-  if (!(cmds.claude_opus || cmds.claude)) failures.push('claude-opus/claude not found on PATH');
+  if (!agentPf.ok) failures.push(...agentPf.failures);
   if (!cmds.git) failures.push('git not found on PATH');
   if (!cmds.node) failures.push('node not found on PATH');
   if (!cmds.openclaw) failures.push('openclaw not found on PATH');
@@ -293,7 +313,11 @@ function preflight(jobId: string): PreflightResult {
   return {
     ok: failures.length === 0,
     tmux: cmds.tmux,
-    claude: cmds.claude_opus || cmds.claude,
+    // `claude` here is the resolved agent binary — name retained for back-
+    // compat with PreflightResult consumers (startTmuxWorker etc.). When a
+    // non-claude driver is active this will be that driver's binary path.
+    claude: agentPf.bin,
+    agent: resolution.driver.name,
     failures,
     environment: env,
   };
@@ -1257,8 +1281,27 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
   const promptFile = path.join(jobDir(jobId), 'prompt.txt');
   fs.writeFileSync(promptFile, buildPrompt(packet));
 
-  // Pipe prompt via stdin to avoid OS ARG_MAX limits on large prompts
-  const workerCmd = `cat ${shellQuote(promptFile)} | ${shellQuote(pf.claude)} --print --permission-mode bypassPermissions`;
+  // Build the agent invocation through the resolved driver. Claude Code's
+  // shape is preserved verbatim here (cat prompt | claude --print ...) so
+  // this refactor is behavior-neutral; non-claude drivers pick their own
+  // command shape without touching jobs.ts.
+  const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
+  const mappingAgent = (mapping && typeof mapping === 'object' ? (mapping as { agent?: string }).agent : undefined);
+  const resolution = resolveAgent(packet, mappingAgent ? { agent: mappingAgent } : null);
+  const agentCommand = resolution.driver.buildCommand({
+    promptPath: promptFile,
+    repoPath: packet.repo!,
+    packet,
+    bin: pf.claude,
+  });
+  const workerCmd = agentCommand.shellCmd;
+  appendLog(
+    jobId,
+    `[${nowIso()}] agent: ${resolution.driver.name} (source=${resolution.source}${resolution.fellBack ? ', fell-back' : ''})`,
+  );
+  const extraEnv = Object.entries(agentCommand.env || {}).map(
+    ([k, v]) => `export ${k}=${shellQuote(v)}`,
+  );
   const gitUser = gitIdentity();
   const shellScript = [
     'set -euo pipefail',
@@ -1266,6 +1309,7 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
     `export GIT_AUTHOR_EMAIL=${shellQuote(gitUser.email)}`,
     `export GIT_COMMITTER_NAME=${shellQuote(gitUser.name)}`,
     `export GIT_COMMITTER_EMAIL=${shellQuote(gitUser.email)}`,
+    ...extraEnv,
     `cd ${shellQuote(packet.repo!)}`,
     // Ensure repo is on main with latest code before worker starts
     // (prevents stale branch issues and accidental branching from feature branches)

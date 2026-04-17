@@ -8,6 +8,7 @@
       "aliases": ["my-app", "app"],
       "autoMerge": true,
       "mergeMethod": "squash",
+      "agent": "claude-code",
       "nightly": {
         "enabled": false,
         "branch": "main",

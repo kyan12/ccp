@@ -21,6 +21,19 @@ export interface RepoMapping {
   linearOrg?: string;
   nightly?: NightlyConfig;
   validation?: ValidationConfig;
+  /**
+   * Phase 1 (PR A): default coding agent for jobs targeting this repo. When
+   * unset, falls back to CCP_AGENT, then the built-in 'claude-code' driver.
+   * Known values: 'claude-code' | 'claude'. Additional drivers (e.g. 'codex')
+   * slot in via the agents registry in follow-up PRs.
+   */
+  agent?: string;
+  /**
+   * Phase 1 (PR B, reserved field): if set, the supervisor may route jobs
+   * to this agent when the primary agent's circuit breaker is open.
+   * Ignored in PR A (no fallback orchestration is wired yet).
+   */
+  agentFallback?: string;
 }
 
 // ── Validation ──
@@ -119,6 +132,11 @@ export interface JobPacket {
   metadata?: Record<string, unknown>;
   created_at?: string;
   nightly?: NightlyConfig;
+  /**
+   * Phase 1 (PR A): per-job override of the coding agent. Highest precedence
+   * in the resolver. Set via Linear labels, Discord command, or dashboard.
+   */
+  agent?: string;
 }
 
 // ── Job status ──
@@ -403,7 +421,14 @@ export interface SupervisorCycleSummary {
 export interface PreflightResult {
   ok: boolean;
   tmux: string;
+  /**
+   * Resolved coding-agent binary path. Named `claude` for backward compat
+   * with existing callers; the field may in fact point to a different
+   * agent's binary once non-claude drivers are registered.
+   */
   claude: string;
+  /** Phase 1 (PR A): which agent driver resolved for this job. */
+  agent?: string;
   failures: string[];
   environment: Record<string, unknown>;
 }
