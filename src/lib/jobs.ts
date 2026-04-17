@@ -307,9 +307,27 @@ function preflight(jobId: string): PreflightResult {
   const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
   const mappingAgent = (mapping && typeof mapping === 'object' ? (mapping as { agent?: string }).agent : undefined);
   const mappingFallback = (mapping && typeof mapping === 'object' ? (mapping as { agentFallback?: string }).agentFallback : undefined);
-  const { getOutageStatus: getOutageStatusForAgent } = require('./outage') as typeof import('./outage');
+  const {
+    getOutageStatus: getOutageStatusForAgent,
+    isRateLimited: isRateLimitedForAgent,
+  } = require('./outage') as typeof import('./outage');
+  // "Circuit" here means "don't dispatch to this driver right now" — that
+  // covers both the consecutive-failure breaker (outage=true) AND the
+  // provider's own rate-limit window (paused=true). Rate-limit failures
+  // don't increment the outage counter (they're matched by the separate
+  // rateLimit regex bucket), so without this second check a
+  // rate-limited driver would pass the per-job defer gate and get
+  // dispatched every cycle until the window expires. resolveAgent uses
+  // the same predicate for the primary-vs-fallback swap so fallback is
+  // triggered by rate limits too, not just API errors.
   const checkCircuit = (name: string): boolean => {
-    try { return !!getOutageStatusForAgent(name)?.outage; } catch { return false; }
+    try {
+      if (getOutageStatusForAgent(name)?.outage) return true;
+    } catch { /* fall through */ }
+    try {
+      if (isRateLimitedForAgent(name)?.paused) return true;
+    } catch { /* fall through */ }
+    return false;
   };
   const resolution = resolveAgent(
     packet,
@@ -334,9 +352,23 @@ function preflight(jobId: string): PreflightResult {
   const resolvedCircuitOpen = checkCircuit(resolution.driver.name);
   if (resolvedCircuitOpen) {
     const label = resolution.driver.label || resolution.driver.name;
+    // Narrow the defer reason so operators see whether we're waiting on an
+    // outage circuit vs. a rate-limit window. isRateLimited takes
+    // precedence in the message when both are true because the reset
+    // time is more actionable than the outage-since timestamp.
+    let cause = 'circuit open';
+    try {
+      const rl = isRateLimitedForAgent(resolution.driver.name);
+      if (rl?.paused) {
+        const resetStr = rl.resetAt
+          ? new Date(rl.resetAt).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' })
+          : null;
+        cause = resetStr ? `rate-limited until ${resetStr} ET` : 'rate-limited';
+      }
+    } catch { /* keep default cause */ }
     const deferReason = resolution.fellBackDueToOutage
-      ? `both primary and fallback ('${label}') circuits open — deferring`
-      : `${label} circuit open — deferring (no fallback configured for this repo)`;
+      ? `both primary and fallback ('${label}') unavailable (${cause}) — deferring`
+      : `${label} ${cause} — deferring (no fallback configured for this repo)`;
     appendLog(jobId, `[${nowIso()}] agent-defer: ${deferReason}`);
     return {
       ok: false,
