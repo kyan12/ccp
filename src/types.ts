@@ -432,6 +432,16 @@ export interface PreflightResult {
   /** Phase 1 (PR A): which agent driver resolved for this job. */
   agent?: string;
   failures: string[];
+  /**
+   * Phase 1 (PR B): preflight wants the supervisor to defer this job to a
+   * later cycle rather than marking it blocked. Set when the resolved
+   * driver's circuit is open and no viable fallback exists, so we don't
+   * burn quota on a known-failing agent while still letting jobs with
+   * healthy agents run this cycle. Mutually exclusive with ok=false +
+   * failures.
+   */
+  deferred?: boolean;
+  deferReason?: string;
   environment: Record<string, unknown>;
 }
 

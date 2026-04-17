@@ -324,6 +324,31 @@ function preflight(jobId: string): PreflightResult {
       `[${nowIso()}] agent-fallback: primary '${resolution.primaryDriver.name}' circuit open → dispatching via fallback '${resolution.driver.name}'`,
     );
   }
+  // Per-job defer gate (PR B): if the resolved driver's circuit is open
+  // (including cases where fallback resolved back to the same circuit-open
+  // driver), tell the supervisor to skip this cycle instead of burning
+  // quota on a known-failing agent. The scheduler now only blocks dispatch
+  // globally when ALL agents are out, so this per-job deferral is what
+  // preserves the "don't hammer a dead API" semantics for repos pinned to
+  // a specific agent with no viable alternative.
+  const resolvedCircuitOpen = checkCircuit(resolution.driver.name);
+  if (resolvedCircuitOpen) {
+    const label = resolution.driver.label || resolution.driver.name;
+    const deferReason = resolution.fellBackDueToOutage
+      ? `both primary and fallback ('${label}') circuits open — deferring`
+      : `${label} circuit open — deferring (no fallback configured for this repo)`;
+    appendLog(jobId, `[${nowIso()}] agent-defer: ${deferReason}`);
+    return {
+      ok: false,
+      deferred: true,
+      deferReason,
+      tmux: '',
+      claude: '',
+      agent: resolution.driver.name,
+      failures: [],
+      environment: inspectEnvironment(packet.repo, resolution.driver),
+    };
+  }
   const agentPf = resolution.driver.preflight();
   const env = inspectEnvironment(packet.repo, resolution.driver);
   const failures: string[] = [];
@@ -1447,6 +1472,17 @@ function startJob(jobId: string): Record<string, unknown> {
   });
   appendLog(jobId, `[${nowIso()}] preflight start`);
   const pf = preflight(jobId);
+  if (pf.deferred) {
+    // Restore queued so the next cycle picks it up again once the
+    // circuit closes. No blocker, no tmux session, no alert.
+    const reason = pf.deferReason || 'agent circuit open — deferring';
+    appendLog(jobId, `[${nowIso()}] preflight deferred: ${reason}`);
+    saveStatus(jobId, {
+      state: 'queued',
+      last_output_excerpt: safeExcerpt(reason),
+    });
+    return { ok: false, deferred: true, reason, packet, environment: pf.environment };
+  }
   if (!pf.ok) {
     const reason = pf.failures.join('; ');
     markBlocked(jobId, reason);
@@ -1545,20 +1581,36 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
 
   // Check peak-hour scheduling + outage state before dispatching new jobs
   const { canDispatchJobs } = require('./scheduling');
-  const { runOutageProbe: probeOutage, getOutageStatus } = require('./outage');
+  const {
+    runOutageProbe: probeOutage,
+    getOutageStatus,
+    getAllOutageStatuses,
+  } = require('./outage') as typeof import('./outage');
   const scheduleCheck = canDispatchJobs();
   (summary as unknown as Record<string, unknown>).scheduling = scheduleCheck;
 
-  // During outage: probe the API each cycle and auto-resume when it recovers
-  if (!scheduleCheck.allowed && scheduleCheck.reason.includes('outage')) {
-    const probe = probeOutage();
-    if (probe.nowRecovered) {
-      const outageDuration = probe.state.outageSince
-        ? Math.round((Date.now() - new Date(probe.state.outageSince).getTime()) / 60000)
-        : null;
-      const msg = `✅ Anthropic API recovered — resuming job dispatch${outageDuration ? ` (outage lasted ~${outageDuration} min)` : ''}.`;
-      sendDiscordMessage(DISCORD_ERRORS_CHANNEL, msg);
+  // Per-agent probe (PR B): probe every driver currently flagged as out,
+  // not just claude-code. Each driver's probe hits its own health endpoint
+  // so Anthropic and OpenAI recoveries are detected independently. We
+  // emit a Discord note for each recovery so operators know which
+  // provider came back. Runs every cycle whether or not the global
+  // dispatch gate is open — a healthy driver's dispatch shouldn't delay
+  // another driver's recovery detection.
+  try {
+    const statuses = getAllOutageStatuses();
+    for (const [agentName, st] of Object.entries(statuses)) {
+      if (!st.outage) continue;
+      const probe = probeOutage(agentName);
+      if (probe.nowRecovered) {
+        const outageDuration = probe.state.outageSince
+          ? Math.round((Date.now() - new Date(probe.state.outageSince).getTime()) / 60000)
+          : null;
+        const msg = `✅ ${agentName} API recovered — resuming job dispatch${outageDuration ? ` (outage lasted ~${outageDuration} min)` : ''}.`;
+        sendDiscordMessage(DISCORD_ERRORS_CHANNEL, msg);
+      }
     }
+  } catch (err) {
+    console.error(`[ccp] per-agent outage probe failed: ${(err as Error).message}`);
   }
 
   if (!scheduleCheck.allowed && queued.length > 0) {
@@ -1586,7 +1638,18 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
         continue;
       }
       try {
-        summary.started.push({ job_id: job.job_id, ...startJob(job.job_id) });
+        const result = startJob(job.job_id);
+        if ((result as { deferred?: boolean }).deferred) {
+          // Per-job outage deferral — keep the job in queued and surface
+          // in the skipped list so ops can see the reason without the
+          // job being marked blocked.
+          summary.skipped.push({
+            job_id: job.job_id,
+            reason: (result as { reason?: string }).reason || 'agent circuit open',
+          });
+          continue;
+        }
+        summary.started.push({ job_id: job.job_id, ...result });
         if (packet.repo) busyRepos.add(packet.repo);
         started++;
       } catch (error) {
