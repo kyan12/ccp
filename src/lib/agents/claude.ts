@@ -80,8 +80,14 @@ export const claudeCodeDriver: AgentDriver = {
 
   probe(): AgentProbeResult {
     // Minimal "am I up?" check — mirrors the pre-refactor probeAnthropicApi().
+    // Resolve the binary the same way preflight() does so that on boxes where
+    // only `claude-opus` (the preferred symlink) is on PATH, probe() still
+    // runs. Falls back to the literal `claude` string only if nothing is
+    // resolvable — which is also what the old implementation did.
+    const { bin } = resolveClaudeBinary();
+    const probeBin = bin || 'claude';
     const result = spawnSync(
-      'claude',
+      probeBin,
       ['--print', '--model', 'claude-haiku-4-5', 'Reply with the word PONG only.'],
       { encoding: 'utf8', timeout: 30000 },
     );
