@@ -85,10 +85,15 @@ tarballs).
     the exact git root it would prefer.
 - **Auth**: the supervisor box must be pre-authenticated via `codex login`
   (ChatGPT OAuth) or `OPENAI_API_KEY`. The driver doesn't touch creds.
-- **Probe**: `codex --version`. This is intentionally shallow — a full
-  round-trip through `codex exec` would consume real quota every probe
-  cycle. Once `codex login status` stabilizes its exit codes, we can layer
-  an auth check on top.
+- **Probe**: `codex exec --color never --skip-git-repo-check 'Reply with the
+  word PONG only.'` — a real API round-trip, same pattern as the Claude
+  driver, matched with a `PONG` regex. Consumes ~1 small completion per
+  supervisor cycle while the circuit is open; that's the cost of a probe
+  that can actually see outages (a `codex --version` check was rejected
+  because it would oscillate the circuit breaker — the binary being
+  installed tells us nothing about whether the OpenAI API is reachable).
+  `codex --version` is still used as a pre-check to surface a useful
+  install-problem message when the binary itself is missing.
 - **Outage patterns**: OpenAI SDK `APIError: 5xx`, generic `openai …
   unavailable` / `service unavailable`, Cloudflare 502/503/504 shapes,
   and shared network faults (`ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`).

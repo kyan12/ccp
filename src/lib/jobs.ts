@@ -373,9 +373,21 @@ function preflight(jobId: string): PreflightResult {
         cause = resetStr ? `rate-limited until ${resetStr} ET` : 'rate-limited';
       }
     } catch { /* keep default cause */ }
+    // Three cases for the reason string:
+    //   1. fellBackDueToOutage=true → we swapped to fallback successfully
+    //      but the fallback's circuit is now also open (rare, usually a
+    //      second consecutive provider failure).
+    //   2. mappingFallback is configured → resolveAgent evaluated the
+    //      swap but kept the primary because BOTH circuits are open
+    //      (see src/lib/agents/index.ts:154-160). Operators need to see
+    //      both driver names here so they don't waste time adding
+    //      fallback config that already exists.
+    //   3. No fallback configured → the original single-agent message.
     const deferReason = resolution.fellBackDueToOutage
       ? `both primary and fallback ('${label}') unavailable (${cause}) — deferring`
-      : `${label} ${cause} — deferring (no fallback configured for this repo)`;
+      : mappingFallback
+        ? `primary '${resolution.driver.name}' and fallback '${mappingFallback}' both unavailable (${cause}) — deferring`
+        : `${label} ${cause} — deferring (no fallback configured for this repo)`;
     appendLog(jobId, `[${nowIso()}] agent-defer: ${deferReason}`);
     return {
       ok: false,
