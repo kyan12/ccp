@@ -98,6 +98,43 @@ console.log('\nTest: blocked scenario directs blocker output');
   );
 }
 
+// ── Test: memory section injection (Phase 5a) ──
+console.log('\nTest: memory parameter injects repository context section');
+{
+  const mem = '# My project\n\nUse Volta, not nvm. Branch from main.';
+  const prompt = buildPrompt(makePacket(), mem);
+  assert(
+    prompt.includes('Repository context (persistent memory'),
+    'contains memory section header',
+  );
+  assert(
+    prompt.includes('--- BEGIN REPOSITORY MEMORY ---'),
+    'contains begin marker',
+  );
+  assert(
+    prompt.includes('--- END REPOSITORY MEMORY ---'),
+    'contains end marker',
+  );
+  assert(prompt.includes('Use Volta, not nvm.'), 'memory body is in the prompt');
+  // Memory must appear before the ticket goal (human-reading order).
+  const memIdx = prompt.indexOf('--- BEGIN REPOSITORY MEMORY ---');
+  const goalIdx = prompt.indexOf('Goal: ');
+  assert(memIdx >= 0 && memIdx < goalIdx, 'memory precedes ticket goal');
+}
+
+console.log('\nTest: no memory section when memory is absent');
+{
+  const plain = buildPrompt(makePacket());
+  assert(!plain.includes('Repository context'), 'omits header when no memory');
+  assert(!plain.includes('BEGIN REPOSITORY MEMORY'), 'omits markers when no memory');
+}
+
+console.log('\nTest: whitespace-only memory is ignored by buildPrompt');
+{
+  const prompt = buildPrompt(makePacket(), '   \n\t\n');
+  assert(!prompt.includes('Repository context'), 'empty memory not rendered');
+}
+
 // ── Test: review feedback prompt still works ──
 console.log('\nTest: review feedback preserved');
 {

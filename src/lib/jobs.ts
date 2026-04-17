@@ -12,6 +12,7 @@ import { resolveAgent, getAgent, claudeCodeDriver } from './agents';
 import type { AgentDriver } from './agents';
 import { runValidation, summarizeReport, shouldGateOnValidation, buildValidationBlocker } from './validator';
 const { findRepoByPath } = require('./repos');
+const { loadRepoMemory } = require('./memory');
 const { inspectDiscordTransport, hasDiscordTransport, sendDiscordMessage, createDiscordThread } = require('./discord');
 const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./linear');
 const { dispatchLinearIssues } = require('./linear-dispatch');
@@ -444,8 +445,25 @@ function markBlocked(jobId: string, reason: string): void {
   });
 }
 
-function buildPrompt(packet: JobPacket): string {
+function buildPrompt(packet: JobPacket, memory?: string | null): string {
   const bits: string[] = [];
+  // Repository memory goes first so the agent reads project conventions
+  // BEFORE the ticket goal — same mental order a human developer would
+  // follow (skim the project README, then start on the ticket). We wrap
+  // it in a labelled section with clear begin/end markers so the agent
+  // can't confuse persistent context with the ticket's own ask. Review
+  // comments / acceptance criteria still take precedence because they
+  // appear later and are more specific.
+  if (memory && memory.trim()) {
+    bits.push(
+      [
+        'Repository context (persistent memory — read this first, then the ticket):',
+        '--- BEGIN REPOSITORY MEMORY ---',
+        memory.trim(),
+        '--- END REPOSITORY MEMORY ---',
+      ].join('\n'),
+    );
+  }
   bits.push(`Ticket: ${packet.ticket_id || 'UNTRACKED'}`);
   bits.push(`Goal: ${packet.goal || 'No goal provided'}`);
   if (packet.constraints?.length) bits.push(`Constraints:\n- ${packet.constraints.join('\n- ')}`);
@@ -1393,7 +1411,19 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
 
   const logFile = path.join(jobDir(jobId), 'worker.log');
   const promptFile = path.join(jobDir(jobId), 'prompt.txt');
-  fs.writeFileSync(promptFile, buildPrompt(packet));
+  // Load per-repo memory (Phase 5a). loadRepoMemory returns null when
+  // no memory file is configured or present, in which case buildPrompt
+  // skips the memory section entirely. Surface the resolved path +
+  // truncation state in the worker log so operators can tell at a
+  // glance whether a job ran with memory.
+  const memory = loadRepoMemory(packet);
+  if (memory) {
+    appendLog(
+      jobId,
+      `[${nowIso()}] repo memory loaded: ${memory.path} (${Buffer.byteLength(memory.content, 'utf8')} bytes${memory.truncated ? ', truncated' : ''})`,
+    );
+  }
+  fs.writeFileSync(promptFile, buildPrompt(packet, memory?.content));
 
   // Build the agent invocation through the resolved driver. Claude Code's
   // shape is preserved verbatim here (cat prompt | claude --print ...) so

@@ -34,6 +34,24 @@ export interface RepoMapping {
    * Ignored in PR A (no fallback orchestration is wired yet).
    */
   agentFallback?: string;
+  /**
+   * Phase 5a: path to a per-repo memory/context file that is prepended
+   * to every worker prompt for this repo. Persistent project knowledge
+   * — conventions, architectural notes, known pitfalls, "don't touch X"
+   * warnings — lives here so operators don't have to restate them in
+   * every Linear ticket.
+   *
+   * Accepted forms:
+   *   - absolute path (e.g. "/srv/ccp/memory/my-app.md")
+   *   - path relative to the repo checkout (e.g. "docs/ccp-memory.md")
+   *
+   * When unset, the loader looks for `.ccp/memory.md` at the repo root.
+   * Missing files are silently ignored (not an error — just means no
+   * memory for this repo yet). Content is capped at 16KB; anything
+   * beyond that is truncated with a visible marker so operators notice
+   * and split the file up.
+   */
+  memoryFile?: string;
 }
 
 // ── Validation ──
