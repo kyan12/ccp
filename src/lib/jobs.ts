@@ -350,7 +350,14 @@ function preflight(jobId: string): PreflightResult {
   // preserves the "don't hammer a dead API" semantics for repos pinned to
   // a specific agent with no viable alternative.
   const resolvedCircuitOpen = checkCircuit(resolution.driver.name);
-  if (resolvedCircuitOpen) {
+  // Explicit packet-level overrides bypass the defer gate: an operator
+  // who sets `packet.agent` is deliberately forcing a dispatch to that
+  // driver (documented in docs/agents.md as the escape hatch for
+  // driving the probe cycle on a circuit-open provider). resolveAgent
+  // already preserves packet choice over fallback at
+  // src/lib/agents/index.ts:140; this mirrors that precedence here so
+  // the explicit choice isn't silently demoted to a deferral.
+  if (resolvedCircuitOpen && resolution.source !== 'packet') {
     const label = resolution.driver.label || resolution.driver.name;
     // Narrow the defer reason so operators see whether we're waiting on an
     // outage circuit vs. a rate-limit window. isRateLimited takes
