@@ -5,9 +5,11 @@ import type {
   JobPacket, JobStatus, JobResult, RepoProof,
   PRReviewResult, PrReviewIntegration, RemediationResult, DiscordMessageResult, DiscordThreadResult,
   SupervisorCycleSummary, PreflightResult, LinearSyncResult, PrWatcherCycleResult,
-  ReviewComment, AddressedComment,
+  ReviewComment, AddressedComment, ValidationReport,
 } from '../types';
 import { run, commandExists, shellQuote } from './shell';
+import { runValidation, summarizeReport } from './validator';
+const { findRepoByPath } = require('./repos');
 const { inspectDiscordTransport, hasDiscordTransport, sendDiscordMessage, createDiscordThread } = require('./discord');
 const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./linear');
 const { dispatchLinearIssues } = require('./linear-dispatch');
@@ -754,6 +756,84 @@ function tmuxSessionAlive(session: string | null): boolean {
   return out.status === 0;
 }
 
+/**
+ * Run the per-repo post-worker validation pipeline (typecheck/test/build/etc.).
+ *
+ * Phase 2a: **informational only** — the report is attached to result.json and
+ * surfaced in logs/Discord, but the final job state is NOT changed by validation
+ * outcome. Phase 2b will promote a failing required step into a blocking state
+ * and auto-spawn a `__valfix` remediation job.
+ *
+ * Returns null if validation wasn't even attempted (e.g. no repo mapping,
+ * globally disabled, or terminal state with no produced commit).
+ */
+function runPostWorkerValidation(
+  jobId: string,
+  packet: JobPacket,
+  result: JobResult,
+  finalState: string,
+): ValidationReport | null {
+  if (String(process.env.CCP_VALIDATION_ENABLED || 'true').toLowerCase() === 'false') {
+    return null;
+  }
+  // Only validate productive terminal states. Notably we must exclude 'blocked'
+  // and 'failed' because cleanRepoIfDirty may have discarded the worker's
+  // uncommitted work and checked the repo back out to main before this point —
+  // running install/typecheck/test against main would produce a bogus report
+  // attributed to the job.
+  if (!['coded', 'done', 'verified'].includes(finalState)) return null;
+  if (!packet.repo) return null;
+
+  const mapping = findRepoByPath(packet.repo);
+  if (!mapping || !mapping.validation) return null;
+
+  const logFile = path.join(jobDir(jobId), 'validation.log');
+  try {
+    fs.writeFileSync(logFile, `[${nowIso()}] validator start — job=${jobId} repo=${packet.repo}\n`);
+  } catch {
+    // non-fatal
+  }
+
+  appendLog(
+    jobId,
+    `[${nowIso()}] validation: starting ${mapping.validation.steps?.length || 0} step(s) on ${result.branch || 'unknown'}`,
+  );
+
+  try {
+    return runValidation({
+      repoPath: packet.repo,
+      config: mapping.validation,
+      logFile,
+      commit: result.commit && result.commit !== 'none' ? result.commit : null,
+      branch: result.branch || null,
+      onStepStart: (step, i, total) => {
+        appendLog(jobId, `[${nowIso()}] validation step ${i + 1}/${total}: ${step.name}`);
+      },
+      onStepEnd: (stepResult, i, total) => {
+        const tag = stepResult.ok ? 'pass' : (stepResult.timedOut ? 'timeout' : 'fail');
+        appendLog(
+          jobId,
+          `[${nowIso()}] validation step ${i + 1}/${total} ${stepResult.name}: ${tag} ` +
+            `(exit=${stepResult.exitCode ?? 'null'}, ${stepResult.durationMs}ms)`,
+        );
+      },
+    });
+  } catch (err) {
+    // runValidation swallows errors itself; this is belt-and-suspenders.
+    const msg = err instanceof Error ? err.message : String(err);
+    appendLog(jobId, `[${nowIso()}] validation: unexpected error: ${msg}`);
+    return {
+      ok: false,
+      skipped: true,
+      reason: `validator error: ${msg}`,
+      steps: [],
+      startedAt: nowIso(),
+      finishedAt: nowIso(),
+      durationMs: 0,
+    };
+  }
+}
+
 async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string; exitCode: number; result: JobResult; linear: LinearSyncResult }> {
   const status = loadStatus(jobId);
   const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
@@ -837,6 +917,15 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     proof,
     updated_at: nowIso(),
   };
+
+  // Post-worker static validation (Phase 2a: informational only — does NOT change state).
+  // Runs per-repo `install/typecheck/lint/test/build` style commands configured in repos.json.
+  // See docs/validation.md. Gate with CCP_VALIDATION_ENABLED=false to disable globally.
+  const validationReport = runPostWorkerValidation(jobId, packet, result, finalState);
+  if (validationReport) {
+    result.validation = validationReport;
+    appendLog(jobId, `[${nowIso()}] validation: ${summarizeReport(validationReport)}`);
+  }
   writeJson(resultPath(jobId), result);
   const started = status.started_at ? new Date(status.started_at).getTime() : Date.now();
   const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
@@ -895,6 +984,10 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
 
     let runsMsg: string;
     const isErrorState = exitCode !== 0 || ['blocked', 'failed', 'dirty-repo', 'harness-failure'].includes(result.state);
+    // Build a short validation tag (e.g. "validation:ok (pass=3 fail=0 42s)") if validation ran.
+    const validationTag = result.validation && !result.validation.skipped
+      ? `validation:${summarizeReport(result.validation)}`
+      : null;
     if (result.state === 'no-op') {
       runsMsg = `⏭️ NO-OP — ${ticket} | ${repoName}\n${result.summary || 'No changes needed — already resolved'}`;
     } else if (isErrorState) {
@@ -909,6 +1002,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       const emoji = emojiMap[result.state] || '❌ FAIL';
       const exitInfo = exitCode !== 0 ? ` (exit ${exitCode})` : '';
       runsMsg = `${emoji} — ${ticket} | ${repoName}${exitInfo}\n${blocker}`;
+      if (validationTag) runsMsg += `\n${validationTag}`;
     } else {
       const parts: string[] = [`✅ DONE — ${ticket} | ${repoName}`];
       if (commitShort) parts.push(commitShort);
@@ -918,6 +1012,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
         const v = result.verified.length > 200 ? result.verified.slice(0, 197) + '...' : result.verified;
         parts.push(v);
       }
+      if (validationTag) parts.push(validationTag);
       runsMsg = parts.join(' | ');
     }
 
