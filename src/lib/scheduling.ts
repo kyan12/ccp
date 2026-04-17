@@ -106,29 +106,76 @@ function isPeakHour(now?: Date): { peak: boolean; label: string | null; nextOffP
 
 /**
  * Should the supervisor dispatch new jobs right now?
+ *
+ * Per-agent (PR B): this function used to default to the claude-code
+ * circuit and pause ALL dispatch when Anthropic was down. After PR B every
+ * registered agent has its own circuit + its own rate-limit window, so the
+ * global gate only blocks dispatch when EVERY registered agent is in
+ * outage (or rate limited). As long as at least one driver is healthy,
+ * we let the queue through and the per-job preflight resolver picks the
+ * right target (including fallback swaps for repos that opted in via
+ * `repos.json: { agentFallback: '...' }`).
  */
 function canDispatchJobs(priority?: string): { allowed: boolean; reason: string } {
-  // Check rate limit first (takes priority over everything)
+  let outage: { getAllOutageStatuses?: () => Record<string, { outage: boolean; outageSince?: string | null; rateLimitResetAt?: string | null }>; getOutageStatus?: (agent?: string) => { outage: boolean; outageSince?: string | null }; isRateLimited?: (agent?: string) => { paused: boolean; resetAt?: string; reason?: string | null } } | null = null;
   try {
-    const { isRateLimited } = require('./outage');
-    const rl = isRateLimited();
-    if (rl.paused) {
-      const resetStr = new Date(rl.resetAt).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
-      return { allowed: false, reason: `rate limited — paused until ${resetStr} ET` };
+    outage = require('./outage');
+  } catch (err) {
+    console.error(`[scheduling] failed to load outage module: ${(err as Error).message}`);
+  }
+
+  // Enumerate every registered agent's status so we can answer
+  // "is there ANY usable driver right now?"
+  let statuses: Record<string, { outage: boolean; outageSince?: string | null; rateLimitResetAt?: string | null }> = {};
+  try {
+    statuses = outage?.getAllOutageStatuses?.() || {};
+  } catch (err) {
+    console.error(`[scheduling] failed to enumerate agent statuses: ${(err as Error).message}`);
+  }
+  const agentNames = Object.keys(statuses);
+
+  // Rate limit takes priority over outage. Only block globally when every
+  // known agent is currently rate-limited — otherwise a single driver's
+  // quota wall shouldn't pause dispatch for healthy drivers.
+  try {
+    const rl = outage?.isRateLimited?.();
+    if (rl?.paused) {
+      const allLimited = agentNames.length > 0 && agentNames.every((name) => {
+        try { return !!outage?.isRateLimited?.(name)?.paused; } catch { return false; }
+      });
+      if (allLimited || agentNames.length === 0) {
+        const resetStr = new Date(rl.resetAt!).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+        return { allowed: false, reason: `rate limited — paused until ${resetStr} ET` };
+      }
     }
   } catch (err) {
     console.error(`[scheduling] failed to check rate limit: ${(err as Error).message}`);
   }
 
-  // Check outage state (takes priority over peak scheduling)
+  // Outage gate: block only when every registered agent is circuit-open.
+  // When some agents are still healthy, the per-job preflight resolver
+  // handles fallback swaps / skips non-dispatchable jobs.
   try {
-    const { getOutageStatus } = require('./outage');
-    const outageState = getOutageStatus();
-    if (outageState.outage) {
-      const since = outageState.outageSince
-        ? ` since ${new Date(outageState.outageSince).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' })}`
-        : '';
-      return { allowed: false, reason: `Anthropic API outage detected${since} — probing for recovery` };
+    if (agentNames.length > 0) {
+      const inOutage = agentNames.filter((name) => statuses[name]?.outage);
+      const allOut = inOutage.length === agentNames.length;
+      if (allOut) {
+        const driverList = inOutage.join(', ');
+        const since = statuses[inOutage[0]]?.outageSince
+          ? ` since ${new Date(statuses[inOutage[0]]!.outageSince!).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' })}`
+          : '';
+        return { allowed: false, reason: `all agents in outage (${driverList})${since} — probing for recovery` };
+      }
+    } else {
+      // Legacy path: agent list unavailable, fall back to the default
+      // agent's outage state (preserves pre-PR-B behavior on older installs).
+      const outageState = outage?.getOutageStatus?.();
+      if (outageState?.outage) {
+        const since = outageState.outageSince
+          ? ` since ${new Date(outageState.outageSince).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' })}`
+          : '';
+        return { allowed: false, reason: `API outage detected${since} — probing for recovery` };
+      }
     }
   } catch (err) {
     console.error(`[scheduling] failed to check outage status: ${(err as Error).message}`);

@@ -1,39 +1,42 @@
 /**
- * outage.ts — Anthropic API outage circuit breaker.
+ * outage.ts — per-agent API outage circuit breaker.
  *
- * Tracks consecutive API failures. When a threshold is hit, the supervisor
- * pauses all new job dispatch and probes the API each cycle until it recovers.
- * Auto-resumes on recovery with a Discord notification.
+ * Tracks consecutive API failures per agent driver. When an agent's threshold
+ * is hit, the supervisor pauses dispatch for that agent (and probes it each
+ * cycle until it recovers) — other agents remain dispatchable.
+ *
+ * State layout:
+ *   configs/outage-<agent>.json   — one file per registered agent
+ *   configs/outage.json           — legacy singleton (claude-code); auto-
+ *                                    migrated to outage-claude-code.json on
+ *                                    first read, then left in place as a
+ *                                    tombstone so rollback is non-destructive.
+ *
+ * Pattern + probe detection delegates to the AgentDriver's failurePatterns /
+ * probe() via the agent registry — this module is now agent-agnostic.
  */
 
 import fs = require('fs');
 import path = require('path');
-import { spawnSync } from 'child_process';
+import { getAgent, claudeCodeDriver, AGENTS } from './agents';
+import type { AgentDriver } from './agents';
 
 const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(__dirname, '..', '..'));
-const OUTAGE_STATE_PATH: string = path.join(ROOT, 'configs', 'outage.json');
+const CONFIGS_DIR: string = path.join(ROOT, 'configs');
+const LEGACY_OUTAGE_PATH: string = path.join(CONFIGS_DIR, 'outage.json');
+const DEFAULT_AGENT = 'claude-code';
 
-// Patterns in worker logs that indicate an Anthropic API error (not a code bug)
-const API_ERROR_PATTERNS: RegExp[] = [
-  /API Error: 5\d\d\b/i,
-  /api_error.*internal server error/i,
-  /"type":"api_error"/i,
-  /overloaded_error/i,
-  /\b529\b/,
-  /ECONNRESET|ETIMEDOUT|ECONNREFUSED/,
-  /anthropic.*unavailable/i,
-  /service.*unavailable/i,
-];
+function statePathFor(agent: string): string {
+  return path.join(CONFIGS_DIR, `outage-${agent}.json`);
+}
+
+function resolveDriver(agent: string | null | undefined): AgentDriver {
+  if (!agent) return claudeCodeDriver;
+  return getAgent(agent) || claudeCodeDriver;
+}
 
 // How many consecutive API failures before pausing dispatch
 const FAILURE_THRESHOLD = 2;
-
-// Patterns that indicate a rate limit with a reset time
-const RATE_LIMIT_PATTERNS: RegExp[] = [
-  /hit your limit.*resets?\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:\(([^)]+)\))?/i,
-  /rate.?limit.*reset.*?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
-  /usage.*limit.*reset.*?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
-];
 
 interface OutageState {
   outage: boolean;
@@ -45,6 +48,8 @@ interface OutageState {
   /** ISO timestamp when rate limit resets — dispatch pauses until this time */
   rateLimitResetAt: string | null;
   rateLimitReason: string | null;
+  /** Which agent this state tracks (denormalized for easier debugging). */
+  agent?: string;
 }
 
 const DEFAULT_STATE: OutageState = {
@@ -58,27 +63,74 @@ const DEFAULT_STATE: OutageState = {
   rateLimitReason: null,
 };
 
-function loadState(): OutageState {
-  if (!fs.existsSync(OUTAGE_STATE_PATH)) return { ...DEFAULT_STATE };
+function loadState(agent: string = DEFAULT_AGENT): OutageState {
+  const target = statePathFor(agent);
+
+  // Backward-compat: one-time migration of the legacy outage.json (which
+  // only ever tracked claude-code) to outage-claude-code.json.
+  if (
+    agent === DEFAULT_AGENT &&
+    !fs.existsSync(target) &&
+    fs.existsSync(LEGACY_OUTAGE_PATH)
+  ) {
+    try {
+      const legacyRaw = fs.readFileSync(LEGACY_OUTAGE_PATH, 'utf8');
+      const legacy = JSON.parse(legacyRaw) as OutageState;
+      fs.mkdirSync(CONFIGS_DIR, { recursive: true });
+      fs.writeFileSync(target, JSON.stringify({ ...legacy, agent }, null, 2));
+    } catch (err) {
+      console.error(
+        `[outage] failed to migrate legacy ${LEGACY_OUTAGE_PATH}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  if (!fs.existsSync(target)) return { ...DEFAULT_STATE, agent };
   try {
-    return JSON.parse(fs.readFileSync(OUTAGE_STATE_PATH, 'utf8'));
+    return { ...JSON.parse(fs.readFileSync(target, 'utf8')), agent };
   } catch (err) {
-    console.error(`[outage] failed to parse ${OUTAGE_STATE_PATH}: ${(err as Error).message}`);
-    return { ...DEFAULT_STATE };
+    console.error(`[outage] failed to parse ${target}: ${(err as Error).message}`);
+    return { ...DEFAULT_STATE, agent };
   }
 }
 
-function saveState(state: OutageState): void {
-  fs.mkdirSync(path.dirname(OUTAGE_STATE_PATH), { recursive: true });
-  fs.writeFileSync(OUTAGE_STATE_PATH, JSON.stringify(state, null, 2));
+function saveState(state: OutageState, agent: string = DEFAULT_AGENT): void {
+  const target = statePathFor(agent);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, JSON.stringify({ ...state, agent }, null, 2));
 }
 
 /**
- * Detect whether a worker log contains Anthropic API error patterns.
+ * Detect whether a worker log contains patterns the given agent treats as
+ * transient API errors. When agent is omitted (legacy callers), scan every
+ * registered driver's patterns — keeps behavior compatible with the pre-PR-B
+ * "did claude blow up?" single-path check.
  */
-export function isApiOutageLog(logText: string): boolean {
-  return API_ERROR_PATTERNS.some(re => re.test(logText));
+export function isApiOutageLog(logText: string, agent?: string | null): boolean {
+  if (agent) {
+    const driver = resolveDriver(agent);
+    return driver.failurePatterns.apiError.some(re => re.test(logText));
+  }
+  // No agent supplied → be permissive, check all known drivers so the cycle
+  // loop's generic "was this an API failure?" question still answers yes.
+  const seen = new Set<AgentDriver>();
+  for (const d of Object.values(AGENTS)) {
+    if (seen.has(d)) continue;
+    seen.add(d);
+    if (d.failurePatterns.apiError.some(re => re.test(logText))) return true;
+  }
+  return false;
 }
+
+/** Rate-limit patterns (original Anthropic-oriented ones, retained here as
+ * the Anthropic reset-time format is the only one we can currently parse
+ * into a wall-clock reset). OpenAI's "try again in 30s" shape is best-effort
+ * scanned but not used for pause-until-timestamp yet. */
+const RATE_LIMIT_PATTERNS: RegExp[] = [
+  /hit your limit.*resets?\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:\(([^)]+)\))?/i,
+  /rate.?limit.*reset.*?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
+  /usage.*limit.*reset.*?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
+];
 
 /**
  * Detect rate limit in worker log and extract the reset time.
@@ -155,21 +207,22 @@ function getTimezoneOffset(tz: string, date: Date): number {
 }
 
 /**
- * Record a rate limit event. Sets the pause-until time.
+ * Record a rate limit event. Rate limits stay on the default agent's state
+ * for now (OpenAI's reset format isn't wall-clock parseable yet — Codex rate
+ * limits are still recorded as generic API failures via recordJobOutcome).
  */
-export function recordRateLimit(resetAt: string, reason: string): void {
-  const state = loadState();
+export function recordRateLimit(resetAt: string, reason: string, agent: string = DEFAULT_AGENT): void {
+  const state = loadState(agent);
   state.rateLimitResetAt = resetAt;
   state.rateLimitReason = reason;
-  saveState(state);
+  saveState(state, agent);
 }
 
 /**
- * Check if dispatch should be paused due to rate limiting.
- * Returns the reset time if still paused, null if clear.
+ * Check if dispatch should be paused due to rate limiting on `agent`.
  */
-export function isRateLimited(): { paused: true; resetAt: string; reason: string | null } | { paused: false } {
-  const state = loadState();
+export function isRateLimited(agent: string = DEFAULT_AGENT): { paused: true; resetAt: string; reason: string | null } | { paused: false } {
+  const state = loadState(agent);
   if (!state.rateLimitResetAt) return { paused: false };
   const resetTime = new Date(state.rateLimitResetAt).getTime();
   const now = Date.now();
@@ -177,7 +230,7 @@ export function isRateLimited(): { paused: true; resetAt: string; reason: string
     // Rate limit window has passed — clear it
     state.rateLimitResetAt = null;
     state.rateLimitReason = null;
-    saveState(state);
+    saveState(state, agent);
     return { paused: false };
   }
   return { paused: true, resetAt: state.rateLimitResetAt, reason: state.rateLimitReason };
@@ -185,12 +238,15 @@ export function isRateLimited(): { paused: true; resetAt: string; reason: string
 
 /**
  * Call after a job finishes. If it failed due to an API error, increment the
- * counter and potentially trigger outage mode.
+ * counter and potentially trigger outage mode for the given agent.
  *
  * @returns true if we just entered outage mode (caller should alert Discord)
  */
-export function recordJobOutcome(wasApiFailure: boolean): { enteredOutage: boolean; state: OutageState } {
-  const state = loadState();
+export function recordJobOutcome(
+  wasApiFailure: boolean,
+  agent: string = DEFAULT_AGENT,
+): { enteredOutage: boolean; state: OutageState } {
+  const state = loadState(agent);
 
   if (wasApiFailure) {
     state.consecutiveApiFailures++;
@@ -198,7 +254,7 @@ export function recordJobOutcome(wasApiFailure: boolean): { enteredOutage: boole
     if (!state.outage && state.consecutiveApiFailures >= FAILURE_THRESHOLD) {
       state.outage = true;
       state.outageSince = new Date().toISOString();
-      saveState(state);
+      saveState(state, agent);
       return { enteredOutage: true, state };
     }
   } else {
@@ -208,37 +264,43 @@ export function recordJobOutcome(wasApiFailure: boolean): { enteredOutage: boole
     }
   }
 
-  saveState(state);
+  saveState(state, agent);
   return { enteredOutage: false, state };
 }
 
 /**
- * Probe the Anthropic API with a minimal request.
- * Uses the claude binary in the environment (same as workers use).
- * Returns true if the API responds successfully.
+ * Probe the given agent's API with a minimal request. Delegates to the
+ * AgentDriver.probe() implementation so each provider chooses its own
+ * cheapest health check.
+ */
+export function probeAgent(agent: string = DEFAULT_AGENT): boolean {
+  const driver = resolveDriver(agent);
+  return driver.probe().ok;
+}
+
+/**
+ * Backward-compat alias — callers that still say "probeAnthropicApi" are
+ * implicitly talking about the default (claude-code) agent.
+ * @deprecated Prefer probeAgent(name).
  */
 export function probeAnthropicApi(): boolean {
-  // Try a tiny claude call — just ask for a one-word response
-  const result = spawnSync(
-    'claude',
-    ['--print', '--model', 'claude-haiku-4-5', 'Reply with the word PONG only.'],
-    { encoding: 'utf8', timeout: 30000 }
-  );
-  return result.status === 0 && /PONG/i.test(result.stdout || '');
+  return probeAgent(DEFAULT_AGENT);
 }
 
 /**
  * Run probe and update state. If recovering from outage, clears the flag.
  * @returns { wasOutage, nowRecovered } — caller sends Discord alert if nowRecovered
  */
-export function runOutageProbe(): { wasOutage: boolean; nowRecovered: boolean; state: OutageState } {
-  const state = loadState();
+export function runOutageProbe(
+  agent: string = DEFAULT_AGENT,
+): { wasOutage: boolean; nowRecovered: boolean; state: OutageState } {
+  const state = loadState(agent);
   if (!state.outage) {
     return { wasOutage: false, nowRecovered: false, state };
   }
 
   state.lastProbeAt = new Date().toISOString();
-  const ok = probeAnthropicApi();
+  const ok = probeAgent(agent);
   state.lastProbeResult = ok ? 'ok' : 'fail';
 
   if (ok) {
@@ -247,24 +309,40 @@ export function runOutageProbe(): { wasOutage: boolean; nowRecovered: boolean; s
     state.outageSince = null;
   }
 
-  saveState(state);
+  saveState(state, agent);
   return { wasOutage: true, nowRecovered: ok, state };
 }
 
 /**
- * Check current outage status without modifying state.
+ * Check current outage status for the given agent without modifying state.
  */
-export function getOutageStatus(): OutageState {
-  return loadState();
+export function getOutageStatus(agent: string = DEFAULT_AGENT): OutageState {
+  return loadState(agent);
 }
 
 /**
- * Manually clear outage state (e.g. operator override).
+ * Aggregate outage status for every registered agent (unique drivers).
+ * Useful for the dashboard and for scheduling decisions that need to
+ * answer "is there ANY usable agent right now?"
  */
-export function clearOutage(): void {
-  const state = loadState();
+export function getAllOutageStatuses(): Record<string, OutageState> {
+  const seen = new Set<AgentDriver>();
+  const result: Record<string, OutageState> = {};
+  for (const [name, driver] of Object.entries(AGENTS)) {
+    if (seen.has(driver)) continue;
+    seen.add(driver);
+    result[name] = loadState(name);
+  }
+  return result;
+}
+
+/**
+ * Manually clear outage state for the given agent (e.g. operator override).
+ */
+export function clearOutage(agent: string = DEFAULT_AGENT): void {
+  const state = loadState(agent);
   state.outage = false;
   state.consecutiveApiFailures = 0;
   state.outageSince = null;
-  saveState(state);
+  saveState(state, agent);
 }

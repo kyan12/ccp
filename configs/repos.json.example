@@ -9,6 +9,7 @@
       "autoMerge": true,
       "mergeMethod": "squash",
       "agent": "claude-code",
+      "agentFallback": "codex",
       "nightly": {
         "enabled": false,
         "branch": "main",

@@ -298,10 +298,108 @@ function preflight(jobId: string): PreflightResult {
   const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   // Resolve the agent driver once so env inspection + failure gate both see
   // the same choice. `findRepoByPath` returns the mapping (if any) for the
-  // repo path; RepoMapping.agent is read off that.
+  // repo path; RepoMapping.agent / agentFallback are read off that.
+  //
+  // Fallback wiring (PR B): when the primary driver's circuit breaker is
+  // open AND the repo has opted into `agentFallback`, resolveAgent swaps us
+  // to the fallback driver here. The swap is logged to worker.log so the
+  // operator sees why a job ran on the non-default agent.
   const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
   const mappingAgent = (mapping && typeof mapping === 'object' ? (mapping as { agent?: string }).agent : undefined);
-  const resolution = resolveAgent(packet, mappingAgent ? { agent: mappingAgent } : null);
+  const mappingFallback = (mapping && typeof mapping === 'object' ? (mapping as { agentFallback?: string }).agentFallback : undefined);
+  const {
+    getOutageStatus: getOutageStatusForAgent,
+    isRateLimited: isRateLimitedForAgent,
+  } = require('./outage') as typeof import('./outage');
+  // "Circuit" here means "don't dispatch to this driver right now" — that
+  // covers both the consecutive-failure breaker (outage=true) AND the
+  // provider's own rate-limit window (paused=true). Rate-limit failures
+  // don't increment the outage counter (they're matched by the separate
+  // rateLimit regex bucket), so without this second check a
+  // rate-limited driver would pass the per-job defer gate and get
+  // dispatched every cycle until the window expires. resolveAgent uses
+  // the same predicate for the primary-vs-fallback swap so fallback is
+  // triggered by rate limits too, not just API errors.
+  const checkCircuit = (name: string): boolean => {
+    try {
+      if (getOutageStatusForAgent(name)?.outage) return true;
+    } catch { /* fall through */ }
+    try {
+      if (isRateLimitedForAgent(name)?.paused) return true;
+    } catch { /* fall through */ }
+    return false;
+  };
+  const resolution = resolveAgent(
+    packet,
+    (mappingAgent || mappingFallback)
+      ? { agent: mappingAgent, agentFallback: mappingFallback }
+      : null,
+    { checkCircuit },
+  );
+  if (resolution.fellBackDueToOutage && resolution.primaryDriver) {
+    appendLog(
+      jobId,
+      `[${nowIso()}] agent-fallback: primary '${resolution.primaryDriver.name}' circuit open → dispatching via fallback '${resolution.driver.name}'`,
+    );
+  }
+  // Per-job defer gate (PR B): if the resolved driver's circuit is open
+  // (including cases where fallback resolved back to the same circuit-open
+  // driver), tell the supervisor to skip this cycle instead of burning
+  // quota on a known-failing agent. The scheduler now only blocks dispatch
+  // globally when ALL agents are out, so this per-job deferral is what
+  // preserves the "don't hammer a dead API" semantics for repos pinned to
+  // a specific agent with no viable alternative.
+  const resolvedCircuitOpen = checkCircuit(resolution.driver.name);
+  // Explicit packet-level overrides bypass the defer gate: an operator
+  // who sets `packet.agent` is deliberately forcing a dispatch to that
+  // driver (documented in docs/agents.md as the escape hatch for
+  // driving the probe cycle on a circuit-open provider). resolveAgent
+  // already preserves packet choice over fallback at
+  // src/lib/agents/index.ts:140; this mirrors that precedence here so
+  // the explicit choice isn't silently demoted to a deferral.
+  if (resolvedCircuitOpen && resolution.source !== 'packet') {
+    const label = resolution.driver.label || resolution.driver.name;
+    // Narrow the defer reason so operators see whether we're waiting on an
+    // outage circuit vs. a rate-limit window. isRateLimited takes
+    // precedence in the message when both are true because the reset
+    // time is more actionable than the outage-since timestamp.
+    let cause = 'circuit open';
+    try {
+      const rl = isRateLimitedForAgent(resolution.driver.name);
+      if (rl?.paused) {
+        const resetStr = rl.resetAt
+          ? new Date(rl.resetAt).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' })
+          : null;
+        cause = resetStr ? `rate-limited until ${resetStr} ET` : 'rate-limited';
+      }
+    } catch { /* keep default cause */ }
+    // Three cases for the reason string:
+    //   1. fellBackDueToOutage=true → we swapped to fallback successfully
+    //      but the fallback's circuit is now also open (rare, usually a
+    //      second consecutive provider failure).
+    //   2. mappingFallback is configured → resolveAgent evaluated the
+    //      swap but kept the primary because BOTH circuits are open
+    //      (see src/lib/agents/index.ts:154-160). Operators need to see
+    //      both driver names here so they don't waste time adding
+    //      fallback config that already exists.
+    //   3. No fallback configured → the original single-agent message.
+    const deferReason = resolution.fellBackDueToOutage
+      ? `both primary and fallback ('${label}') unavailable (${cause}) — deferring`
+      : mappingFallback
+        ? `primary '${resolution.driver.name}' and fallback '${mappingFallback}' both unavailable (${cause}) — deferring`
+        : `${label} ${cause} — deferring (no fallback configured for this repo)`;
+    appendLog(jobId, `[${nowIso()}] agent-defer: ${deferReason}`);
+    return {
+      ok: false,
+      deferred: true,
+      deferReason,
+      tmux: '',
+      claude: '',
+      agent: resolution.driver.name,
+      failures: [],
+      environment: inspectEnvironment(packet.repo, resolution.driver),
+    };
+  }
   const agentPf = resolution.driver.preflight();
   const env = inspectEnvironment(packet.repo, resolution.driver);
   const failures: string[] = [];
@@ -1232,26 +1330,38 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   });
   if (whLog) appendLog(jobId, `[${nowIso()}] ${whLog}`);
 
-  // Outage circuit breaker: detect API failures and trigger outage mode
-  const wasApiFailure = (exitCode !== 0 || ['blocked', 'harness-failure'].includes(finalState)) && isApiOutageLog(logText);
-  const { enteredOutage } = recordJobOutcome(wasApiFailure);
+  // Outage circuit breaker: detect API failures and trigger outage mode.
+  // Per-agent (PR B): log + state file are keyed by whichever driver actually
+  // ran the job (pf.agent). Falls back to the packet's configured agent so
+  // circuit flips happen even when preflight didn't stash agent on status.
+  // status.agent is stamped at dispatch time (startJob → saveStatus), so it
+  // reflects the driver that actually ran — including post-fallback swaps.
+  // packet.agent is the static configuration fallback; 'claude-code' is the
+  // ultimate default.
+  const activeAgent = status.agent || packet.agent || 'claude-code';
+  const activeDriverLabel = (getAgent(activeAgent) || claudeCodeDriver).label;
+  const wasApiFailure = (exitCode !== 0 || ['blocked', 'harness-failure'].includes(finalState)) && isApiOutageLog(logText, activeAgent);
+  const { enteredOutage } = recordJobOutcome(wasApiFailure, activeAgent);
   if (enteredOutage) {
     const outagePct = packet.ticket_id || jobId;
-    const alertMsg = `⚠️ OUTAGE DETECTED — Anthropic API is returning errors. Pausing all job dispatch until it recovers. Last job: ${outagePct}`;
+    const alertMsg = `⚠️ OUTAGE DETECTED — ${activeDriverLabel} API is returning errors. Pausing dispatch for this agent until it recovers. Last job: ${outagePct}`;
     sendDiscordMessage(DISCORD_ERRORS_CHANNEL, alertMsg);
-    appendLog(jobId, `[${nowIso()}] outage mode activated`);
+    appendLog(jobId, `[${nowIso()}] outage mode activated for agent '${activeAgent}'`);
   }
 
-  // Rate limit detection: if worker hit usage limits, pause until reset time
+  // Rate limit detection: if worker hit usage limits, pause until reset time.
+  // Rate-limit state stays on the active agent's circuit; only Anthropic's
+  // wall-clock reset phrasing is currently parseable, so Codex jobs will
+  // generally take the generic API-error path above instead.
   const { detectRateLimit: detectRL, recordRateLimit } = require('./outage');
   const rateLimit = detectRL(logText);
   if (rateLimit) {
-    recordRateLimit(rateLimit.resetAt, rateLimit.reason);
+    recordRateLimit(rateLimit.resetAt, rateLimit.reason, activeAgent);
     const resetDate = new Date(rateLimit.resetAt);
     const resetStr = resetDate.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
-    const alertMsg = `⏸️ RATE LIMITED — Claude usage limit hit. Pausing all dispatch until ${resetStr} ET. Last job: ${packet.ticket_id || jobId}`;
+    const alertMsg = `⏸️ RATE LIMITED — ${activeDriverLabel} usage limit hit. Pausing dispatch for this agent until ${resetStr} ET. Last job: ${packet.ticket_id || jobId}`;
     sendDiscordMessage(DISCORD_ERRORS_CHANNEL, alertMsg);
-    appendLog(jobId, `[${nowIso()}] rate limit detected — pausing until ${rateLimit.resetAt}`);
+    appendLog(jobId, `[${nowIso()}] rate limit detected for '${activeAgent}' — pausing until ${rateLimit.resetAt}`);
   }
 
   return { ok: true, state: finalState, exitCode, result, linear };
@@ -1413,6 +1523,17 @@ function startJob(jobId: string): Record<string, unknown> {
   });
   appendLog(jobId, `[${nowIso()}] preflight start`);
   const pf = preflight(jobId);
+  if (pf.deferred) {
+    // Restore queued so the next cycle picks it up again once the
+    // circuit closes. No blocker, no tmux session, no alert.
+    const reason = pf.deferReason || 'agent circuit open — deferring';
+    appendLog(jobId, `[${nowIso()}] preflight deferred: ${reason}`);
+    saveStatus(jobId, {
+      state: 'queued',
+      last_output_excerpt: safeExcerpt(reason),
+    });
+    return { ok: false, deferred: true, reason, packet, environment: pf.environment };
+  }
   if (!pf.ok) {
     const reason = pf.failures.join('; ');
     markBlocked(jobId, reason);
@@ -1425,6 +1546,11 @@ function startJob(jobId: string): Record<string, unknown> {
     saveStatus(jobId, {
       state: 'running',
       tmux_session: session,
+      // Stamp the resolved driver name so finalizeJob's per-agent circuit
+      // breaker attributes outcomes to whichever agent actually ran —
+      // including post-fallback swaps where pf.agent differs from the
+      // packet's configured agent. See comment block in finalizeJob.
+      agent: pf.agent,
       last_heartbeat_at: nowIso(),
       last_output_excerpt: 'tmux worker started',
       exit_code: null,
@@ -1506,20 +1632,42 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
 
   // Check peak-hour scheduling + outage state before dispatching new jobs
   const { canDispatchJobs } = require('./scheduling');
-  const { runOutageProbe: probeOutage, getOutageStatus } = require('./outage');
+  const {
+    runOutageProbe: probeOutage,
+    getOutageStatus,
+    getAllOutageStatuses,
+  } = require('./outage') as typeof import('./outage');
   const scheduleCheck = canDispatchJobs();
   (summary as unknown as Record<string, unknown>).scheduling = scheduleCheck;
 
-  // During outage: probe the API each cycle and auto-resume when it recovers
-  if (!scheduleCheck.allowed && scheduleCheck.reason.includes('outage')) {
-    const probe = probeOutage();
-    if (probe.nowRecovered) {
-      const outageDuration = probe.state.outageSince
-        ? Math.round((Date.now() - new Date(probe.state.outageSince).getTime()) / 60000)
-        : null;
-      const msg = `✅ Anthropic API recovered — resuming job dispatch${outageDuration ? ` (outage lasted ~${outageDuration} min)` : ''}.`;
-      sendDiscordMessage(DISCORD_ERRORS_CHANNEL, msg);
+  // Per-agent probe (PR B): probe every driver currently flagged as out,
+  // not just claude-code. Each driver's probe hits its own health endpoint
+  // so Anthropic and OpenAI recoveries are detected independently. We
+  // emit a Discord note for each recovery so operators know which
+  // provider came back. Runs every cycle whether or not the global
+  // dispatch gate is open — a healthy driver's dispatch shouldn't delay
+  // another driver's recovery detection.
+  try {
+    const statuses = getAllOutageStatuses();
+    for (const [agentName, st] of Object.entries(statuses)) {
+      if (!st.outage) continue;
+      // Capture outageSince from the pre-probe snapshot: runOutageProbe
+      // clears state.outageSince on recovery before returning, so
+      // probe.state.outageSince is always null on the recovery branch
+      // (pre-existing bug in the old single-agent path that would have
+      // silently dropped the duration — caught on PR #39 review).
+      const previousOutageSince = st.outageSince || null;
+      const probe = probeOutage(agentName);
+      if (probe.nowRecovered) {
+        const outageDuration = previousOutageSince
+          ? Math.round((Date.now() - new Date(previousOutageSince).getTime()) / 60000)
+          : null;
+        const msg = `✅ ${agentName} API recovered — resuming job dispatch${outageDuration ? ` (outage lasted ~${outageDuration} min)` : ''}.`;
+        sendDiscordMessage(DISCORD_ERRORS_CHANNEL, msg);
+      }
     }
+  } catch (err) {
+    console.error(`[ccp] per-agent outage probe failed: ${(err as Error).message}`);
   }
 
   if (!scheduleCheck.allowed && queued.length > 0) {
@@ -1547,7 +1695,18 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
         continue;
       }
       try {
-        summary.started.push({ job_id: job.job_id, ...startJob(job.job_id) });
+        const result = startJob(job.job_id);
+        if ((result as { deferred?: boolean }).deferred) {
+          // Per-job outage deferral — keep the job in queued and surface
+          // in the skipped list so ops can see the reason without the
+          // job being marked blocked.
+          summary.skipped.push({
+            job_id: job.job_id,
+            reason: (result as { reason?: string }).reason || 'agent circuit open',
+          });
+          continue;
+        }
+        summary.started.push({ job_id: job.job_id, ...result });
         if (packet.repo) busyRepos.add(packet.repo);
         started++;
       } catch (error) {
