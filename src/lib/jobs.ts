@@ -13,6 +13,7 @@ import type { AgentDriver } from './agents';
 import { runValidation, summarizeReport, shouldGateOnValidation, buildValidationBlocker } from './validator';
 const { findRepoByPath } = require('./repos');
 const { loadRepoMemory } = require('./memory');
+const { isWorktreeEnabled, getParallelJobLimit, acquireWorktree, releaseWorktree } = require('./worktree');
 const { inspectDiscordTransport, hasDiscordTransport, sendDiscordMessage, createDiscordThread } = require('./discord');
 const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./linear');
 const { dispatchLinearIssues } = require('./linear-dispatch');
@@ -993,6 +994,7 @@ function runPostWorkerValidation(
   packet: JobPacket,
   result: JobResult,
   finalState: string,
+  workdir: string,
 ): ValidationReport | null {
   if (String(process.env.CCP_VALIDATION_ENABLED || 'true').toLowerCase() === 'false') {
     return null;
@@ -1010,7 +1012,7 @@ function runPostWorkerValidation(
 
   const logFile = path.join(jobDir(jobId), 'validation.log');
   try {
-    fs.writeFileSync(logFile, `[${nowIso()}] validator start — job=${jobId} repo=${packet.repo}\n`);
+    fs.writeFileSync(logFile, `[${nowIso()}] validator start — job=${jobId} repo=${workdir}\n`);
   } catch {
     // non-fatal
   }
@@ -1022,7 +1024,7 @@ function runPostWorkerValidation(
 
   try {
     return runValidation({
-      repoPath: packet.repo,
+      repoPath: workdir,
       config: mapping.validation,
       logFile,
       commit: result.commit && result.commit !== 'none' ? result.commit : null,
@@ -1063,7 +1065,13 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const exitCodeMatch = logText.match(/WORKER_EXIT_CODE:\s*(\d+)/);
   const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : (status.exit_code ?? 0);
   const provisionalState = exitCode === 0 ? (summary.state || 'coded') : (summary.state || 'failed');
-  const proof = inspectRepoProof(packet.repo, summary.commit || 'none');
+  // Phase 3: operate on the per-job worktree if one was allocated, else
+  // fall back to packet.repo (pre-Phase-3 behavior). Every repo-path
+  // consumer below — inspectRepoProof, cleanRepoIfDirty, resolveOwnerRepo,
+  // validator — reads from this single source of truth so the cd target
+  // is consistent across the whole finalize path.
+  const workdir = status.workdir || packet.repo;
+  const proof = inspectRepoProof(workdir, summary.commit || 'none');
   const hasSummaryOutput = !!(summary.state || summary.summary || summary.commit);
 
   // Classification priority:
@@ -1097,17 +1105,17 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
 
   // If the job is blocked/dirty-repo due to dirty repo state, clean it up immediately so
   // subsequent jobs don't inherit dirty working tree (e.g. from API 500 mid-run)
-  if ((finalState === 'blocked' || finalState === 'dirty-repo') && proof.dirty && packet.repo) {
-    const cleanResult = cleanRepoIfDirty(packet.repo, proof);
+  if ((finalState === 'blocked' || finalState === 'dirty-repo') && proof.dirty && workdir) {
+    const cleanResult = cleanRepoIfDirty(workdir, proof);
     appendLog(jobId, `[${nowIso()}] repo cleanup: ${cleanResult}`);
   }
 
   // Fallback: if no PR URL found in logs but branch was pushed, check GitHub for an open PR
   let prUrl: string | null = summary.pr_url || inferPrUrlFromPacket(packet) || null;
-  if (!prUrl && proof.pushed && proof.branch && proof.branch !== 'main' && proof.branch !== 'master' && packet.repo) {
+  if (!prUrl && proof.pushed && proof.branch && proof.branch !== 'main' && proof.branch !== 'master' && workdir) {
     const gh = commandExists('gh');
     if (gh) {
-      const ownerRepo = resolveOwnerRepo(packet.repo);
+      const ownerRepo = resolveOwnerRepo(workdir);
       if (ownerRepo) {
         const prCheck = run(gh, ['pr', 'view', proof.branch, '--repo', ownerRepo, '--json', 'url', '-q', '.url']);
         if (prCheck.status === 0 && prCheck.stdout.trim().startsWith('https://')) {
@@ -1146,7 +1154,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   //             job to `blocked` with blocker_type='validation-failed' and a
   //             `__valfix` remediation job is spawned below.
   // See docs/validation.md. Gate with CCP_VALIDATION_ENABLED=false to disable globally.
-  const validationReport = runPostWorkerValidation(jobId, packet, result, finalState);
+  const validationReport = runPostWorkerValidation(jobId, packet, result, finalState, workdir || '');
   let validationGated = false;
   if (validationReport) {
     result.validation = validationReport;
@@ -1382,6 +1390,20 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     appendLog(jobId, `[${nowIso()}] rate limit detected for '${activeAgent}' — pausing until ${rateLimit.resetAt}`);
   }
 
+  // Phase 3: tear down the per-job worktree now that proof inspection,
+  // cleanup, validation, PR review, remediation, and notifications have
+  // all completed. We intentionally do this AFTER everything else —
+  // every upstream step needs access to the worker's working tree, so
+  // releasing earlier would invalidate subsequent git reads. Failure
+  // to release is logged but does not change the job's outcome.
+  if (status.workdir) {
+    const releaseResult = releaseWorktree(status.workdir, packet.repo);
+    appendLog(
+      jobId,
+      `[${nowIso()}] worktree release: ${releaseResult.ok ? 'ok' : 'failed'} — ${releaseResult.detail}`,
+    );
+  }
+
   return { ok: true, state: finalState, exitCode, result, linear };
 }
 
@@ -1411,6 +1433,35 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
 
   const logFile = path.join(jobDir(jobId), 'worker.log');
   const promptFile = path.join(jobDir(jobId), 'prompt.txt');
+
+  // Phase 3: if this repo opts into worktrees, allocate one now and
+  // use its path as the cd target. Falls back to packet.repo on
+  // allocation failure so a transient git issue doesn't brick the
+  // job — downstream per-repo serial gate still prevents concurrent
+  // workers from colliding on localPath. Stash the resolved workdir
+  // on JobStatus so finalizeJob / reconcileJob survive supervisor
+  // restarts mid-job.
+  const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
+  let workdir: string | null = null;
+  if (mapping && isWorktreeEnabled(mapping)) {
+    try {
+      const acquired = acquireWorktree(mapping, jobId);
+      workdir = acquired.path;
+      appendLog(
+        jobId,
+        `[${nowIso()}] worktree ${acquired.reused ? 'reused' : 'acquired'}: ${acquired.path}`,
+      );
+    } catch (err) {
+      appendLog(
+        jobId,
+        `[${nowIso()}] worktree acquire failed — falling back to localPath: ${(err as Error).message}`,
+      );
+    }
+  }
+  if (workdir) {
+    saveStatus(jobId, { workdir });
+  }
+  const repoPathForWorker = workdir || packet.repo!;
   // Load per-repo memory (Phase 5a). loadRepoMemory returns null when
   // no memory file is configured or present, in which case buildPrompt
   // skips the memory section entirely. Surface the resolved path +
@@ -1437,7 +1488,7 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
   const agent: AgentDriver = (pf.agent && getAgent(pf.agent)) || claudeCodeDriver;
   const agentCommand = agent.buildCommand({
     promptPath: promptFile,
-    repoPath: packet.repo!,
+    repoPath: repoPathForWorker,
     packet,
     bin: pf.claude,
   });
@@ -1454,7 +1505,7 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
     `export GIT_COMMITTER_NAME=${shellQuote(gitUser.name)}`,
     `export GIT_COMMITTER_EMAIL=${shellQuote(gitUser.email)}`,
     ...extraEnv,
-    `cd ${shellQuote(packet.repo!)}`,
+    `cd ${shellQuote(repoPathForWorker)}`,
     // Ensure repo is on main with latest code before worker starts
     // (prevents stale branch issues and accidental branching from feature branches)
     packet.working_branch ? null : 'git checkout main 2>/dev/null || true',
@@ -1649,12 +1700,16 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
     .filter((job) => job.state === 'queued')
     .sort((a, b) => (a.updated_at > b.updated_at ? 1 : -1));
 
-  // Build set of repos that already have a running job (for per-repo serial enforcement)
-  const busyRepos = new Set<string>();
+  // Phase 3: count-based per-repo gate. Each repo has its own parallel
+  // capacity derived from `mapping.parallelJobs` (default 1 — matches
+  // pre-Phase-3 serial behavior). We count concurrent jobs keyed by
+  // packet.repo (the canonical localPath), which is stable across
+  // worktree-enabled and non-worktree repos.
+  const busyRepoCounts = new Map<string, number>();
   for (const job of activeRunning) {
     try {
       const packet = readJson(packetPath(job.job_id)) as unknown as JobPacket;
-      if (packet.repo) busyRepos.add(packet.repo);
+      if (packet.repo) busyRepoCounts.set(packet.repo, (busyRepoCounts.get(packet.repo) || 0) + 1);
     } catch (err) {
       console.error(`[ccp] failed to read packet for running job ${job.job_id}: ${(err as Error).message}`);
     }
@@ -1720,9 +1775,17 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
         summary.errors.push({ job_id: job.job_id, action: 'read_packet', error: (err as Error).message });
         continue;
       }
-      if (packet.repo && busyRepos.has(packet.repo)) {
-        summary.skipped.push({ job_id: job.job_id, reason: `repo busy: ${path.basename(packet.repo)}` });
-        continue;
+      if (packet.repo) {
+        const repoMapping = findRepoByPath(packet.repo);
+        const repoLimit = getParallelJobLimit(repoMapping);
+        const running = busyRepoCounts.get(packet.repo) || 0;
+        if (running >= repoLimit) {
+          summary.skipped.push({
+            job_id: job.job_id,
+            reason: `repo busy: ${path.basename(packet.repo)}${repoLimit > 1 ? ` (${running}/${repoLimit})` : ''}`,
+          });
+          continue;
+        }
       }
       try {
         const result = startJob(job.job_id);
@@ -1737,7 +1800,7 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
           continue;
         }
         summary.started.push({ job_id: job.job_id, ...result });
-        if (packet.repo) busyRepos.add(packet.repo);
+        if (packet.repo) busyRepoCounts.set(packet.repo, (busyRepoCounts.get(packet.repo) || 0) + 1);
         started++;
       } catch (error) {
         summary.errors.push({ job_id: job.job_id, action: 'start', error: (error as Error).message });
