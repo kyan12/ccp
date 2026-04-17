@@ -220,7 +220,11 @@ function jobsByState(): Record<string, JobStatus[]> {
   return buckets;
 }
 
-function inspectEnvironment(repo: string | null, agent: AgentDriver): Record<string, unknown> {
+function inspectEnvironment(repo: string | null, agent?: AgentDriver): Record<string, unknown> {
+  // `doctor` / `phase0` CLI commands call this without a resolved driver;
+  // default to the registry-resolved agent (honours CCP_AGENT) so diagnostic
+  // commands keep working without requiring a packet/mapping.
+  if (!agent) agent = resolveAgent(null, null).driver;
   const tmux = commandExists('tmux');
   const git = commandExists('git');
   const node = commandExists('node');
