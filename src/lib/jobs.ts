@@ -445,6 +445,11 @@ function maybeEnqueueValidationRemediation(
     kind: 'bug',
     label: 'validation-fix',
     review_feedback: feedback,
+    // Clear inherited PR review comments — this is a validation-fix task, not a
+    // review-fix task. Leaving them set would cause buildPrompt to instruct the
+    // agent to also "address each review comment individually" + emit an
+    // AddressedComments block, which is irrelevant here and splits attention.
+    reviewComments: undefined,
     working_branch: result.branch && result.branch !== 'unknown' ? result.branch : packet.working_branch || null,
     base_branch: packet.base_branch || 'main',
     acceptance_criteria: [
@@ -468,7 +473,10 @@ function maybeEnqueueValidationRemediation(
 function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result: JobResult, prReview: PRReviewResult & { skipped?: boolean }): RemediationResult {
   const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
   if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
-  if (/__deployfix|__reviewfix/.test(jobId)) return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
+  // Include __valfix so a Phase 2b validation remediation PR that picks up a
+  // blocking review doesn't cascade into a __valfix__reviewfix job — one layer
+  // of auto-remediation per original job id, period.
+  if (/__deployfix|__reviewfix|__valfix/.test(jobId)) return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
   if (!prReview?.ok || prReview.disposition !== 'block') return { ok: false, skipped: true, reason: 'no blocking PR review' };
   const remediationSuffix = prReview.blockerType === 'deploy' ? '__deployfix' : '__reviewfix';
   const remediationJobId = `${jobId}${remediationSuffix}`;
