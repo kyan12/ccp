@@ -1459,6 +1459,11 @@ function startJob(jobId: string): Record<string, unknown> {
     saveStatus(jobId, {
       state: 'running',
       tmux_session: session,
+      // Stamp the resolved driver name so finalizeJob's per-agent circuit
+      // breaker attributes outcomes to whichever agent actually ran —
+      // including post-fallback swaps where pf.agent differs from the
+      // packet's configured agent. See comment block in finalizeJob.
+      agent: pf.agent,
       last_heartbeat_at: nowIso(),
       last_output_excerpt: 'tmux worker started',
       exit_code: null,
