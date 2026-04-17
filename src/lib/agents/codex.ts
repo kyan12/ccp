@@ -109,26 +109,42 @@ export const codexDriver: AgentDriver = {
   },
 
   probe(): AgentProbeResult {
-    // Cheapest possible "is the CLI usable" check. A full round-trip via
-    // `codex exec` would pull the default model and consume real quota —
-    // not worth it for a circuit-breaker recovery probe that runs every
-    // supervisor cycle. `codex --version` exits non-zero when the binary
-    // is missing or the install is corrupt, which is all we need here.
+    // Real API round-trip, mirroring the claude-code driver. `--version`
+    // alone is useless here — the binary being installed tells us nothing
+    // about whether the OpenAI API is reachable, so a version-only probe
+    // would clear the circuit on every cycle during an actual OpenAI
+    // outage and oscillate the "recovered" alert.
     //
-    // Future work: once `codex login status` stabilizes its non-zero
-    // exit codes, layer an auth check on top.
+    // We pipe a 6-token prompt ("Reply with the word PONG only.") into
+    // `codex exec` and grep the output for PONG, same pattern as the
+    // claude driver. This does consume real quota (~1 completion per
+    // supervisor cycle while the circuit is open) but that's the cost of
+    // an honest recovery signal. An outage probe that can never see
+    // outages is worse than one that costs a few pennies to run.
+    //
+    // First check the binary exists so we emit a useful detail message
+    // for install problems rather than surfacing whatever spawnSync
+    // reports when the executable is absent.
     const { bin } = resolveCodexBinary();
-    const probeBin = bin || 'codex';
-    const result = spawnSync(probeBin, ['--version'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
-    const ok = result.status === 0 && !!(result.stdout || '').trim();
+    if (!bin) {
+      return {
+        ok: false,
+        detail: 'codex not found on PATH — install via `npm i -g @openai/codex`',
+      };
+    }
+    const result = spawnSync(
+      bin,
+      ['exec', '--color', 'never', '--skip-git-repo-check', 'Reply with the word PONG only.'],
+      { encoding: 'utf8', timeout: 30000 },
+    );
+    const stdout = result.stdout || '';
+    const stderr = result.stderr || '';
+    const ok = result.status === 0 && /PONG/i.test(stdout);
     return {
       ok,
       detail: ok
         ? undefined
-        : (result.stderr || result.stdout || 'codex --version failed').slice(0, 200),
+        : (stderr || stdout || 'codex probe failed').slice(0, 200),
     };
   },
 

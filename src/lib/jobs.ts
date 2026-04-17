@@ -1600,10 +1600,16 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
     const statuses = getAllOutageStatuses();
     for (const [agentName, st] of Object.entries(statuses)) {
       if (!st.outage) continue;
+      // Capture outageSince from the pre-probe snapshot: runOutageProbe
+      // clears state.outageSince on recovery before returning, so
+      // probe.state.outageSince is always null on the recovery branch
+      // (pre-existing bug in the old single-agent path that would have
+      // silently dropped the duration — caught on PR #39 review).
+      const previousOutageSince = st.outageSince || null;
       const probe = probeOutage(agentName);
       if (probe.nowRecovered) {
-        const outageDuration = probe.state.outageSince
-          ? Math.round((Date.now() - new Date(probe.state.outageSince).getTime()) / 60000)
+        const outageDuration = previousOutageSince
+          ? Math.round((Date.now() - new Date(previousOutageSince).getTime()) / 60000)
           : null;
         const msg = `✅ ${agentName} API recovered — resuming job dispatch${outageDuration ? ` (outage lasted ~${outageDuration} min)` : ''}.`;
         sendDiscordMessage(DISCORD_ERRORS_CHANNEL, msg);
