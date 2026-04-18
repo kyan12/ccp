@@ -11,6 +11,12 @@
       "agent": "claude-code",
       "agentFallback": "codex",
       "memoryFile": ".ccp/memory.md",
+      "memoryCompaction": {
+        "enabled": false,
+        "maxBytes": 16384,
+        "targetBytes": 8192,
+        "timeoutSec": 300
+      },
       "worktree": true,
       "parallelJobs": 2,
       "planner": {

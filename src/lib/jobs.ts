@@ -1570,6 +1570,33 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
     saveStatus(jobId, { workdir });
   }
   const repoPathForWorker = workdir || packet.repo!;
+  // Phase 5c: if the repo opted into memoryCompaction and the memory
+  // file has grown past its configured cap, compact it BEFORE the
+  // loader reads it so the worker sees the dense rewrite instead of
+  // the truncated-at-16KB original. Every failure mode is best-effort
+  // logging only — compaction never blocks dispatch.
+  try {
+    const { shouldCompact, resolveCompactionConfig, compactMemory } =
+      require('./memory-compaction') as typeof import('./memory-compaction');
+    const compCfg = resolveCompactionConfig(mapping?.memoryCompaction);
+    const decision = shouldCompact(packet, compCfg);
+    if (decision.shouldCompact) {
+      appendLog(
+        jobId,
+        `[${nowIso()}] memory compaction triggered: ${decision.reason}`,
+      );
+      const outcome = compactMemory({ packet, repo: mapping, config: compCfg });
+      appendLog(
+        jobId,
+        `[${nowIso()}] memory compaction ${outcome.status}: ${outcome.detail || ''}`,
+      );
+    }
+  } catch (err) {
+    appendLog(
+      jobId,
+      `[${nowIso()}] memory compaction skipped (internal error): ${(err as Error).message}`,
+    );
+  }
   // Load per-repo memory (Phase 5a). loadRepoMemory returns null when
   // no memory file is configured or present, in which case buildPrompt
   // skips the memory section entirely. Surface the resolved path +

@@ -24,7 +24,7 @@
   },
   "scripts": {
     "build": "tsc && cp -r src/dashboard dist/",
-    "test": "tsc && node dist/lib/jobs.test.js && node dist/lib/config.test.js && node dist/lib/webhook-callback.test.js && node dist/lib/pr-comments.test.js && node dist/lib/pr-review.test.js && node dist/lib/validator.test.js && node dist/lib/agents.test.js && node dist/lib/outage.test.js && node dist/lib/linear-dispatch.test.js && node dist/lib/memory.test.js && node dist/lib/worktree.test.js && node dist/lib/planner.test.js && node dist/lib/smoke.test.js && node dist/lib/playwright-smoke.test.js && node dist/lib/smoke-remediation.test.js"
+    "test": "tsc && node dist/lib/jobs.test.js && node dist/lib/config.test.js && node dist/lib/webhook-callback.test.js && node dist/lib/pr-comments.test.js && node dist/lib/pr-review.test.js && node dist/lib/validator.test.js && node dist/lib/agents.test.js && node dist/lib/outage.test.js && node dist/lib/linear-dispatch.test.js && node dist/lib/memory.test.js && node dist/lib/worktree.test.js && node dist/lib/planner.test.js && node dist/lib/smoke.test.js && node dist/lib/playwright-smoke.test.js && node dist/lib/smoke-remediation.test.js && node dist/lib/memory-compaction.test.js"
   },
   "bin": {
     "ccp-supervisor": "dist/bin/supervisor.js",
