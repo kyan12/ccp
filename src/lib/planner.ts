@@ -33,9 +33,8 @@
  */
 
 import fs = require('fs');
-import path = require('path');
 import { spawnSync } from 'child_process';
-import type { JobPacket, PlannerConfig, RepoMapping } from '../types';
+import type { JobPacket, RepoMapping } from '../types';
 import type { AgentDriver } from './agents/types';
 
 /**
@@ -288,7 +287,13 @@ export function runPlanner(opts: RunPlannerOptions): PlannerResult {
     maxBuffer: 64 * 1024 * 1024, // 64MB — plenty of head-room, hard cap comes from MAX_PLAN_BYTES below
   });
   const durationMs = Date.now() - start;
-  const timedOut = result.signal === 'SIGTERM' || result.error?.name === 'ETIMEDOUT' || (result.status === null && result.signal != null);
+  // Node spawnSync timeouts surface as error.code === 'ETIMEDOUT' (name is always 'Error');
+  // SIGTERM covers the default-kill path but we also need the code check for processes that trap
+  // SIGTERM and exit with their own status — matches the pattern in validator.ts.
+  const timedOut =
+    result.signal === 'SIGTERM' ||
+    (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' ||
+    (result.status === null && result.signal != null);
   if (timedOut) {
     return {
       ok: false,
