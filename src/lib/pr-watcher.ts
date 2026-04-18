@@ -4,7 +4,7 @@ import { spawnSync } from 'child_process';
 import type { JobStatus, JobResult, JobPacket, PRReviewResult, PrWatcherCycleResult, RunResult, SmokeResult } from '../types';
 const { reviewPr } = require('./pr-review');
 const { findRepoByPath } = require('./repos');
-const { runHttpSmoke } = require('./smoke');
+const { runSmoke } = require('./smoke');
 const {
   JOBS_DIR,
   listJobs,
@@ -405,7 +405,13 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
       const smokeCfg = mapping && mapping.smoke ? mapping.smoke : undefined;
       if (smokeCfg && smokeCfg.enabled) {
         try {
-          const smokeResult: SmokeResult = await runHttpSmoke(previewUrlForSmoke, smokeCfg);
+          // Dispatch between the HTTP runner (PR B) and the Playwright
+          // runner (PR C) based on `smokeCfg.runner`. `runSmoke` maps
+          // the selection internally; the caller just handles a
+          // uniform `SmokeResult`.
+          const smokeResult: SmokeResult = await runSmoke(previewUrlForSmoke, smokeCfg, {
+            playwrightOptions: { jobId },
+          });
           // Persist to status.integrations.smoke (always — including
           // failures, so dashboards see the last run).
           const cur = loadStatus(jobId);
