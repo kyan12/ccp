@@ -59,7 +59,7 @@
         "enabled": false,
         "retryAfterSec": 600,
         "maxRetries": 2,
-        "eligibleTypes": ["validation-failed", "smoke-failed", "pr-check-failed"],
+        "eligibleTypes": ["validation-failed", "smoke-failed", "pr-check-failed", "ambiguity-transient"],
         "usePlannerRefresh": false
       }
     }

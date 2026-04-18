@@ -1238,6 +1238,19 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     }
   }
 
+  // Phase 6b: classify the catch-all "ambiguity" bucket into
+  // `ambiguity-operator` (needs a human) vs `ambiguity-transient`
+  // (environmental noise — watchdog can retry) based on the blocker
+  // text. Only fires when the job is actually blocked and no more
+  // specific blocker_type is set later (validation-failed,
+  // smoke-failed, or a pr-review blockerType override below).
+  const resolvedBlocker = inferredBlocker || (summary.blocker && summary.blocker !== 'none' ? summary.blocker : null);
+  let initialBlockerType: string | null = null;
+  if (finalState === 'blocked' && resolvedBlocker) {
+    const { classifyAmbiguityOrDefault } = require('./blocker-classifier') as typeof import('./blocker-classifier');
+    initialBlockerType = classifyAmbiguityOrDefault(resolvedBlocker);
+  }
+
   const result: JobResult = {
     job_id: jobId,
     state: finalState,
@@ -1247,8 +1260,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     pr_url: prUrl,
     prod: finalState === 'blocked' ? 'no' : (summary.prod || 'no'),
     verified: finalState === 'blocked' ? 'not yet' : (summary.verified || 'not yet'),
-    blocker: inferredBlocker || (summary.blocker && summary.blocker !== 'none' ? summary.blocker : null),
-    blocker_type: null,
+    blocker: resolvedBlocker,
+    blocker_type: initialBlockerType,
     failed_checks: [],
     risk: summary.risk || null,
     summary: summary.summary || null,
@@ -1304,9 +1317,12 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const prReview = maybeReviewPr(jobId, result);
   if (prReview?.ok) {
     // Preserve the validation blocker if we set one \u2014 a green PR-review disposition
-    // must not silently erase a local validation failure.
+    // must not silently erase a local validation failure. Likewise, preserve a
+    // Phase 6b ambiguity classification (`ambiguity-operator`/`ambiguity-transient`)
+    // when pr-review has nothing stronger to say \u2014 a green-but-silent review
+    // must not regress a classified ambiguity back to null.
     if (!validationGated) {
-      result.blocker_type = prReview.blockerType || null;
+      result.blocker_type = prReview.blockerType || result.blocker_type || null;
       result.failed_checks = prReview.failedChecks || [];
     } else if (prReview.blockerType) {
       // PR review found its own blocker on top of the validation failure: keep
