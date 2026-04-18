@@ -231,6 +231,12 @@ export interface PrReviewIntegration {
   autoMergeEnabled?: boolean;
   watchedAt?: string;
   reason?: string;
+  /**
+   * Phase 4 (PR A): mirrors `PRReviewResult.previewUrl`. Persisted by the
+   * pr-watcher cycle AND by `finalizeJob`'s spread of `PRReviewResult`
+   * into the integration record. Null when no preview is detected yet.
+   */
+  previewUrl?: string | null;
 }
 
 export interface JobIntegrations {
