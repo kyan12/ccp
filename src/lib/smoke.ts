@@ -66,13 +66,20 @@ export type HttpFetcher = (
  */
 export function resolveSmokeConfig(config: SmokeConfig | undefined): Required<SmokeConfig> {
   const c = config || {};
+  // Filter non-integers AND guard against the filtered array being empty.
+  // A raw config like `expectStatus: ['200']` (stringified by a JSON typo)
+  // would previously resolve to `[]`, making every HTTP response fail
+  // with `kind: 'status'` and an unhelpful empty `expected one of ` message.
+  // Fall back to DEFAULT_SMOKE_STATUS in that case.
+  let resolvedExpectStatus: number[] = DEFAULT_SMOKE_STATUS;
+  if (Array.isArray(c.expectStatus) && c.expectStatus.length) {
+    const filtered = c.expectStatus.filter((n) => Number.isInteger(n));
+    if (filtered.length) resolvedExpectStatus = filtered;
+  }
   const resolved: Required<SmokeConfig> = {
     enabled: c.enabled === true,
     path: typeof c.path === 'string' && c.path.length ? c.path : DEFAULT_SMOKE_PATH,
-    expectStatus:
-      Array.isArray(c.expectStatus) && c.expectStatus.length
-        ? c.expectStatus.filter((n) => Number.isInteger(n))
-        : DEFAULT_SMOKE_STATUS,
+    expectStatus: resolvedExpectStatus,
     titleRegex: typeof c.titleRegex === 'string' ? c.titleRegex : '',
     timeoutSec:
       typeof c.timeoutSec === 'number' && c.timeoutSec > 0
@@ -284,7 +291,28 @@ export async function runHttpSmoke(
   }
 
   if (cfg.titleRegex) {
-    const re = new RegExp(cfg.titleRegex, 'i');
+    // Compiling the regex can throw SyntaxError on bad patterns (e.g. "[")
+    // from a misconfigured repos.json. The runner's contract is that
+    // every failure produces a SmokeResult — so catch and map to
+    // `kind: 'unknown'` rather than letting the exception escape.
+    let re: RegExp;
+    try {
+      re = new RegExp(cfg.titleRegex, 'i');
+    } catch (e) {
+      return {
+        ok: false,
+        url,
+        status: response.status,
+        title,
+        durationMs,
+        finishedAt: nowIso(),
+        failure: {
+          kind: 'unknown',
+          message: `invalid titleRegex /${cfg.titleRegex}/: ${(e as Error).message}`,
+          bodyExcerpt: truncateBodyExcerpt(response.body),
+        },
+      };
+    }
     if (!title || !re.test(title)) {
       return {
         ok: false,

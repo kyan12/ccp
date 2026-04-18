@@ -98,6 +98,20 @@ console.log('Test: resolveSmokeConfig — rejects invalid fields gracefully');
   assert(r.userAgent === DEFAULT_SMOKE_USER_AGENT, 'empty UA → default');
 }
 
+console.log('Test: resolveSmokeConfig — all-invalid expectStatus falls back to default (Devin Review #44)');
+{
+  // Every entry is invalid — this used to resolve to [] and make every
+  // HTTP response fail with a `kind: 'status'` and empty message.
+  const r = resolveSmokeConfig({
+    enabled: true,
+    expectStatus: ['200', 'oops', 1.5, null] as unknown as number[],
+  });
+  assert(
+    r.expectStatus.length === 1 && r.expectStatus[0] === 200,
+    'all-invalid expectStatus → DEFAULT_SMOKE_STATUS',
+  );
+}
+
 // --------------------------------------------------------------------
 // joinPreviewUrl
 // --------------------------------------------------------------------
@@ -376,6 +390,26 @@ async function runAll(): Promise<void> {
       (r.failure?.message || '').includes('unexpected'),
       'thrown message preserved',
     );
+  }
+
+  console.log('Test: runHttpSmoke — invalid titleRegex maps to failure (Devin Review #44)');
+  {
+    const m = makeFetcher({ status: 200, body: '<html><title>ok</title></html>' });
+    // '[' is an unterminated character class — SyntaxError from new RegExp.
+    // Previously propagated out of runHttpSmoke; now should be mapped to
+    // a SmokeResult with failure kind `unknown`.
+    const r: SmokeResult = await runHttpSmoke(
+      'https://app.vercel.app',
+      { enabled: true, titleRegex: '[' },
+      m.fetcher,
+    );
+    await asyncAssert(r.ok === false, 'ok=false on invalid regex');
+    await asyncAssert(r.failure?.kind === 'unknown', 'kind=unknown');
+    await asyncAssert(
+      (r.failure?.message || '').includes('invalid titleRegex'),
+      'message labels the cause',
+    );
+    await asyncAssert(r.status === 200, 'status still echoed on regex failure');
   }
 
   console.log('Test: runHttpSmoke — case-insensitive title regex');
