@@ -1,6 +1,62 @@
 import type { ChecksSummary, CheckInfo, PRClassification, PRReviewResult } from '../types';
 import { run, commandExists, parsePrUrl } from './shell';
 
+/**
+ * Phase 4 (PR A): Vercel preview URL extractor.
+ *
+ * Two sources, in preference order:
+ *   1. Vercel bot PR comments (canonical — Vercel posts the exact preview URL
+ *      once the deployment is ready, e.g. "Preview: https://my-app-abc.vercel.app").
+ *   2. A Vercel-named check whose `detailsUrl` points to a *.vercel.app host
+ *      (some integrations put the preview URL there; most point to
+ *      vercel.com/... dashboard URLs, which we filter out).
+ *
+ * We scan comments newest-first so redeploys (new PR push → new preview URL)
+ * pick up the latest one rather than the first one Vercel ever posted.
+ *
+ * Known limitations (documented rather than fixed here to keep PR scope tight):
+ *   - Custom domains (my-app.example.com instead of my-app-abc.vercel.app)
+ *     aren't auto-detected. Future PRs will let repos override the regex.
+ *   - Netlify / Cloudflare Pages / Railway / Render aren't supported yet —
+ *     same future-PR story.
+ */
+const VERCEL_PREVIEW_URL_RE = /(https?:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*\.vercel\.app(?:\/[^\s<>"')\]]*)?)/g;
+const VERCEL_COMMENT_AUTHOR_RE = /^(vercel(?:\[bot\])?|vercel-bot)$/i;
+const VERCEL_DASHBOARD_URL_RE = /^https?:\/\/vercel\.com\//i;
+
+interface PrComment {
+  author?: { login?: string | null } | null;
+  body?: string | null;
+}
+
+export function extractPreviewUrl(params: {
+  checks: CheckInfo[];
+  comments?: PrComment[] | null;
+}): string | null {
+  // 1. Prefer Vercel bot comments — scanning newest-first so we pick up the
+  //    latest deployment rather than the first Vercel ever posted.
+  const comments = Array.isArray(params.comments) ? params.comments : [];
+  for (let i = comments.length - 1; i >= 0; i--) {
+    const c = comments[i];
+    const login = c?.author?.login || '';
+    if (!VERCEL_COMMENT_AUTHOR_RE.test(login)) continue;
+    const body = c?.body || '';
+    // Reset regex state between calls (global flag carries lastIndex).
+    VERCEL_PREVIEW_URL_RE.lastIndex = 0;
+    const match = VERCEL_PREVIEW_URL_RE.exec(body);
+    if (match && match[1]) return match[1];
+  }
+  // 2. Fallback: a Vercel-named check whose URL is an actual *.vercel.app
+  //    preview (not a vercel.com dashboard link).
+  for (const chk of params.checks || []) {
+    if (!chk || !chk.url) continue;
+    if (!/vercel/i.test(chk.name || '')) continue;
+    if (VERCEL_DASHBOARD_URL_RE.test(chk.url)) continue;
+    if (/\.vercel\.app(?:\/|$)/i.test(chk.url)) return chk.url;
+  }
+  return null;
+}
+
 function ghJson(args: string[]): Record<string, unknown> {
   const gh = commandExists('gh') || 'gh';
   const out = run(gh, args);
@@ -90,13 +146,22 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }: { prUrl:
   const pr = ghJson([
     'pr', 'view', String(ref.number),
     '--repo', ref.ownerRepo,
-    '--json', 'number,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefName,baseRefName,url,title'
+    // Phase 4 (PR A): `comments` is included so the preview-URL extractor can
+    // parse Vercel bot comments. `gh pr view --json comments` returns the full
+    // comment thread including author login + body, which is everything the
+    // extractor needs.
+    '--json', 'number,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefName,baseRefName,url,title,comments'
   ]);
   const analysis = classifyPr(pr);
   const alreadyMerged = String(pr.state).toUpperCase() === 'MERGED';
+  const previewUrl = extractPreviewUrl({
+    checks: analysis.checks.checks,
+    comments: (pr.comments as PrComment[] | undefined) || [],
+  });
   const result: PRReviewResult = {
     ok: true,
     prUrl: pr.url as string,
+    previewUrl,
     ownerRepo: ref.ownerRepo,
     number: pr.number as number,
     title: pr.title as string,
@@ -162,6 +227,7 @@ module.exports = {
   parsePrUrl,
   reviewPr,
   classifyPr,
+  extractPreviewUrl,
 };
 
 export { parsePrUrl, reviewPr, classifyPr };

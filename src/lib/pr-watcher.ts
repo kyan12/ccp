@@ -357,9 +357,36 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
           merged: review.merged,
           autoMergeEnabled: review.autoMergeEnabled,
           watchedAt: nowIso(),
+          // Phase 4 (PR A): carry the preview URL forward so the dashboard
+          // and later phases (browser smoke, __deployfix) can find it
+          // without re-running `gh pr view`.
+          previewUrl: review.previewUrl ?? null,
         },
       },
     });
+
+    // Phase 4 (PR A): mirror the preview URL onto result.json. The result
+    // file is the supervisor's stable per-job record, so downstream
+    // consumers (webhook callbacks, remediation jobs) don't need to load
+    // status.json to find it. Only write on change to avoid churn.
+    if (review.previewUrl && result.preview_url !== review.previewUrl) {
+      try {
+        const rPath = resultPath(jobId);
+        const fresh: JobResult = readJson(rPath);
+        fresh.preview_url = review.previewUrl;
+        fs.writeFileSync(rPath, JSON.stringify(fresh, null, 2));
+        appendLog(
+          jobId,
+          `[${nowIso()}] pr-watcher: preview URL detected \u2014 ${review.previewUrl}`,
+        );
+      } catch (e) {
+        // Best-effort — a write failure here must not block the watcher
+        // cycle. The URL is still on status.integrations.prReview.
+        process.stderr.write(
+          `[pr-watcher] failed to persist preview_url for ${jobId}: ${(e as Error).message}\n`,
+        );
+      }
+    }
 
     // Post disposition changes to the job's Discord thread if one exists
     if (dispositionChanged && current.discord_thread_id) {
