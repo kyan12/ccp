@@ -104,11 +104,19 @@ export interface BlockerDistribution {
 
 export interface AutoUnblockPerType {
   priorBlockerType: string;
+  /** Sum of `status.autoUnblock.attempts` across parents in this bucket. */
   attempted: number;
   recovered: number;
   stillBlocked: number;
   pending: number;
-  /** `recovered / attempted`, null when `attempted === 0`. */
+  /**
+   * `recovered / (recovered + stillBlocked + pending)` — i.e. fraction of
+   * parent jobs in this bucket that reached a recovered state. Null when
+   * no parents have attempted a retry yet. Uses parent count (not attempt
+   * count) as the denominator so the rate is consistent with the top-level
+   * `recoveryRate` and isn't suppressed by parents that required multiple
+   * attempts before recovering.
+   */
   recoveryRate: number | null;
 }
 
@@ -414,7 +422,13 @@ function tallyAutoUnblock(jobs: JobStatus[], io: TelemetryIo): AutoUnblockTeleme
   }
 
   for (const row of byPrior.values()) {
-    row.recoveryRate = row.attempted > 0 ? row.recovered / row.attempted : null;
+    // Denominator is per-bucket parent count (recovered+stillBlocked+pending),
+    // NOT total attempts — those are different units. Using attempts would
+    // systematically underreport the rate for buckets that require multiple
+    // retries per parent (e.g. a parent with attempts=3 that recovers would
+    // look like 1/3 = 33 % instead of 100 %).
+    const perTypeParents = row.recovered + row.stillBlocked + row.pending;
+    row.recoveryRate = perTypeParents > 0 ? row.recovered / perTypeParents : null;
   }
 
   const sortedByType: AutoUnblockPerType[] = [...byPrior.values()].sort(

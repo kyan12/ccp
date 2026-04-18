@@ -59,9 +59,9 @@ Auto-unblock (Phase 6a/6b watchdog):
   attempt stats:
     avg=1.56  p50=1  p95=3  max=3
   by prior blocker_type:
-    ambiguity-transient       attempted=6 recovered=5 stillBlocked=0 rate=83.3%
-    validation-failed         attempted=5 recovered=1 stillBlocked=2 rate=20.0%
-    smoke-failed              attempted=3 recovered=0 stillBlocked=0 rate=0.0%
+    ambiguity-transient       attempted=7 recovered=3 stillBlocked=0 rate=75.0%
+    validation-failed         attempted=5 recovered=1 stillBlocked=2 rate=33.3%
+    smoke-failed              attempted=2 recovered=2 stillBlocked=0 rate=100.0%
 ```
 
 ## JSON schema
@@ -91,6 +91,10 @@ interface TelemetrySummary {
       recovered: number;
       stillBlocked: number;
       pending: number;
+      // recovered / (recovered + stillBlocked + pending) — i.e. share of
+      // parents in this bucket that recovered. Null when the bucket has
+      // no parents. Uses parent count (not attempt count) as the
+      // denominator, consistent with the top-level recoveryRate.
       recoveryRate: number | null;
     }[];
     attemptStats: {
