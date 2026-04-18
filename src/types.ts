@@ -52,6 +52,24 @@ export interface RepoMapping {
    * and split the file up.
    */
   memoryFile?: string;
+  /**
+   * Phase 3: when true, each job runs in its own `git worktree` instead of
+   * the canonical `localPath` checkout. The worktree lives under
+   *   <CCP_ROOT>/worktrees/<mapping.key>/<job_id>
+   * and is destroyed when the job finalises. Opt-in because it changes
+   * the on-disk shape of the repo (two checkouts instead of one) and
+   * downstream finalize steps must cope with a path that isn't
+   * `localPath`. When false (default), jobs use `localPath` directly —
+   * same behavior as before Phase 3.
+   */
+  worktree?: boolean;
+  /**
+   * Phase 3: max number of jobs the supervisor will run concurrently
+   * against this repo. Default 1 (serial, matches pre-Phase-3 behavior).
+   * Values > 1 only take effect when `worktree: true` — otherwise the
+   * worktrees would collide on the single `localPath` checkout.
+   */
+  parallelJobs?: number;
 }
 
 // ── Validation ──
@@ -210,6 +228,15 @@ export interface JobStatus {
   exit_code: number | null;
   /** Resolved agent driver name for this job (set at dispatch time). */
   agent?: string;
+  /**
+   * Phase 3: filesystem path the job is actually running against. When
+   * the repo is worktree-enabled this is the worktree path (`<ROOT>/
+   * worktrees/<mapping.key>/<job_id>`); otherwise it's absent and
+   * `packet.repo` is authoritative. Stored on status so finalizeJob /
+   * validator / cleanup can all find the right working tree after
+   * the supervisor restarts.
+   */
+  workdir?: string | null;
   notifications?: JobNotifications;
   integrations?: JobIntegrations;
   discord_thread_id?: string | null;

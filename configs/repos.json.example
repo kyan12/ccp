@@ -11,6 +11,8 @@
       "agent": "claude-code",
       "agentFallback": "codex",
       "memoryFile": ".ccp/memory.md",
+      "worktree": true,
+      "parallelJobs": 2,
       "nightly": {
         "enabled": false,
         "branch": "main",
