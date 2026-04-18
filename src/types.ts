@@ -332,12 +332,20 @@ export interface AutoUnblockConfig {
   maxRetries?: number;
   /**
    * Which `blocker_type` values are eligible for auto-retry. Default:
-   * `['validation-failed', 'smoke-failed', 'pr-check-failed']`. Pure
-   * operator-clarification ambiguity should NOT be in this list —
-   * ambiguity blockers require a human, and retrying them just burns
-   * tokens. The circuit-breaker `agent-outage` / `rate-limited`
-   * blockers are also intentionally excluded (they're handled by the
-   * outage probe).
+   * `['validation-failed', 'smoke-failed', 'pr-check-failed',
+   * 'ambiguity-transient']`.
+   *
+   * Phase 6b split the legacy catch-all `ambiguity` bucket into two:
+   * - `ambiguity-operator`: worker is waiting on a human (missing
+   *   credential, design decision, unclear spec, `please clarify`).
+   *   NEVER put this in `eligibleTypes` — retrying without a human
+   *   answer just burns tokens.
+   * - `ambiguity-transient`: environmental noise (rate limits, ETIMEDOUT,
+   *   HTTP 503, git lock contention). Safe to auto-retry after the
+   *   cool-down; usually passes on the next attempt.
+   *
+   * The circuit-breaker `agent-outage` / `rate-limited` blockers are
+   * also intentionally excluded (handled by the outage probe).
    */
   eligibleTypes?: string[];
   /**
@@ -612,6 +620,27 @@ export interface JobResult {
   prod: string;
   verified: string;
   blocker: string | null;
+  /**
+   * Machine-readable bucket for `blocker`. Known values:
+   * - `'validation-failed'` (Phase 2b): static validator reported a
+   *   required-step failure.
+   * - `'smoke-failed'` (Phase 4 PR D): post-deploy smoke check failed.
+   * - `'pr-check-failed'`: CI reported red on the generated PR.
+   * - `'ambiguity-operator'` (Phase 6b): worker asked for human input
+   *   (missing credential, design decision, "please clarify"). Never
+   *   auto-retried by the Phase 6a watchdog.
+   * - `'ambiguity-transient'` (Phase 6b): environmental noise (rate
+   *   limit, ETIMEDOUT, HTTP 503, git lock contention). Watchdog-
+   *   eligible by default.
+   * - `'ambiguity'` (legacy, pre-Phase 6b): catch-all from older jobs;
+   *   treated as operator-ambiguity by the watchdog for safety.
+   * - `'agent-outage'` / `'rate-limited'`: handled by the outage
+   *   circuit breaker; never auto-retried here.
+   *
+   * The classifier in `src/lib/blocker-classifier.ts` splits
+   * `ambiguity` into `-operator`/`-transient` at finalize time based on
+   * the `blocker` text.
+   */
   blocker_type?: string | null;
   failed_checks?: CheckInfo[];
   risk?: string | null;

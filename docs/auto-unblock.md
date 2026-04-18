@@ -121,11 +121,13 @@ Per repo in `configs/repos.json`:
                                      // remediation is slow to finish
     "maxRetries": 2,                 // 3 total attempts per parent
     "eligibleTypes": [               // which blocker_type values are
-      "validation-failed",           // auto-retried. Intentionally
-      "smoke-failed",                // excludes "ambiguity" (operator
-      "pr-check-failed"              // input required) and
-    ],                               // "agent-outage"/"rate-limited"
-                                     // (handled by the outage circuit).
+      "validation-failed",           // auto-retried. See the Phase 6b
+      "smoke-failed",                // "Ambiguity split" section for
+      "pr-check-failed",             // why `ambiguity-transient` is in
+      "ambiguity-transient"          // and `ambiguity-operator` is not.
+    ],                               // Also excludes "agent-outage"/
+                                     // "rate-limited" (outage circuit
+                                     // owns those).
     "usePlannerRefresh": false       // advisory metadata for jobs.ts;
                                      // when true AND Phase 5b planner
                                      // is enabled for the repo, the
@@ -232,11 +234,56 @@ genuinely stuck job) while recovering from the flaky middle — "the
 staging deploy hadn't finished", "the test suite happened to catch a
 transient DB state", "the pull request CI hadn't propagated yet".
 
-## Why `ambiguity` is NOT eligible
+## Ambiguity split (Phase 6b)
 
-Ambiguity blockers mean the worker asked for operator input — a missing
-design decision, an unclear acceptance criterion, a missing credential.
-Retrying the same prompt without answering the question burns tokens
-and may push a low-quality guess. Splitting ambiguity into
-`ambiguity-operator` vs `ambiguity-transient` subclasses is tracked
-for a later phase; until then, the watchdog leaves them alone.
+The original ambiguity bucket was a catch-all for "worker gave up for a
+reason that isn't validation/smoke/pr-check". In practice that bucket
+lumped together two very different signals:
+
+1. **Operator input required** — the worker asked a human for a design
+   decision, credential, clarification on an acceptance criterion, or
+   similar. Retrying the same prompt without answering the question
+   burns tokens and may push a low-quality guess.
+2. **Transient environmental noise** — a rate-limited API call, a
+   network hiccup, a git lock held by another process, a 503 from a
+   third-party, a preview deploy that hadn't finished propagating.
+   Re-running the same prompt a few minutes later almost always
+   succeeds.
+
+Phase 6b splits them at finalize time via
+[`src/lib/blocker-classifier.ts`](../src/lib/blocker-classifier.ts).
+When `finalizeJob` lands in `blocked` and no more-specific gate
+(validation / smoke / pr-review) has already set a `blocker_type`, the
+classifier scans the resolved blocker text:
+
+| Classifier output     | Meaning                                          | Watchdog-eligible? |
+|-----------------------|--------------------------------------------------|--------------------|
+| `ambiguity-operator`  | Operator phrase matched (e.g. "please clarify", "missing API key", "HTTP 401", "waiting for input") | **No** — needs a human |
+| `ambiguity-transient` | Transient phrase matched (e.g. "rate limit", "ETIMEDOUT", "HTTP 503", "index.lock", "too many requests") | **Yes** — watchdog retries |
+| _uncertain_           | Neither pattern matched                           | **No** — safely defaults to `ambiguity-operator` |
+
+**Tie-breaker**: if BOTH an operator phrase AND a transient phrase are
+present in the same blocker text, operator wins. Better to bother the
+human than silently retry on a real question.
+
+The default `eligibleTypes` list therefore includes
+`ambiguity-transient`. `ambiguity-operator` is NOT in the default list
+and should never be — by definition the worker needs a human to answer
+something, and an auto-retry cannot produce that answer.
+
+### Back-compat
+
+Older result.json files whose `blocker_type` is literal `'ambiguity'`
+(no suffix) are treated as operator-ambiguity by the watchdog
+(conservative — they predate the split and nobody can retro-actively
+reclassify the underlying text). New blocked jobs finalize with a
+specific suffix. Operators don't need to do anything to migrate.
+
+### Tuning the classifier
+
+The pattern list is in `src/lib/blocker-classifier.ts` and is covered
+by hermetic unit tests in `src/lib/blocker-classifier.test.ts`. If a
+blocker repeatedly misclassifies (e.g. a new provider's rate-limit
+message isn't caught), add the regex to `TRANSIENT_PATTERNS` or
+`OPERATOR_PATTERNS` and a matching test case to the fixtures. The
+classifier is pure, synchronous, and has no external dependencies.

@@ -54,10 +54,23 @@ import type {
 /** Defaults approved by the operator for Phase 6a. */
 export const DEFAULT_AUTO_UNBLOCK_RETRY_AFTER_SEC = 600; // 10 min
 export const DEFAULT_AUTO_UNBLOCK_MAX_RETRIES = 2;
+/**
+ * Blocker types the watchdog will auto-retry by default.
+ *
+ * Phase 6a: `validation-failed`, `smoke-failed`, `pr-check-failed` \u2014
+ *   structured failures with a reproducible signal.
+ * Phase 6b: `ambiguity-transient` \u2014 environmental noise (rate limits,
+ *   network hiccups, git lock contention, 5xx upstreams) classified by
+ *   `src/lib/blocker-classifier.ts`. Crucially, `ambiguity-operator`
+ *   (worker asked a human a question) is NOT in this list and never
+ *   should be \u2014 operator-input blockers need a human answer, not a
+ *   silent retry.
+ */
 export const DEFAULT_AUTO_UNBLOCK_ELIGIBLE_TYPES = [
   'validation-failed',
   'smoke-failed',
   'pr-check-failed',
+  'ambiguity-transient',
 ];
 
 /**
