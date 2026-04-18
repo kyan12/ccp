@@ -54,6 +54,13 @@
           { "name": "test", "cmd": "npm test -- --run", "timeoutSec": 900 },
           { "name": "build", "cmd": "npm run build", "timeoutSec": 600 }
         ]
+      },
+      "autoUnblock": {
+        "enabled": false,
+        "retryAfterSec": 600,
+        "maxRetries": 2,
+        "eligibleTypes": ["validation-failed", "smoke-failed", "pr-check-failed"],
+        "usePlannerRefresh": false
       }
     }
   ]
