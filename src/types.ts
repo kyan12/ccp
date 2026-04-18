@@ -105,6 +105,20 @@ export interface RepoMapping {
    * something sensible.
    */
   smoke?: SmokeConfig;
+  /**
+   * Phase 6a: optional watchdog that auto-retries certain `blocked` jobs
+   * after a cool-down window. When a job lands in `blocked` with a
+   * retry-eligible `blocker_type` and the configured `retryAfterSec`
+   * has elapsed, the supervisor spawns a `__autoretry<N>` child job on
+   * the same branch with a refined prompt. Bounded by `maxRetries` so a
+   * genuinely stuck job never loops forever.
+   *
+   * Opt-in per repo. Default disabled — no repo auto-enables retries.
+   * The existing one-shot `__valfix` / `__deployfix` / `__reviewfix`
+   * remediations still fire immediately; this watchdog is the fallback
+   * when those first-pass remediations themselves land in `blocked`.
+   */
+  autoUnblock?: AutoUnblockConfig;
 }
 
 /**
@@ -293,6 +307,81 @@ export interface MemoryCompactionConfig {
   agent?: string;
 }
 
+/**
+ * Phase 6a: auto-unblock watchdog. When a job lands in `blocked` with a
+ * retry-eligible `blocker_type`, the supervisor cycle re-queues it as a
+ * `__autoretry<N>` child after `retryAfterSec`, up to `maxRetries` times.
+ * Opt-in per repo; see `RepoMapping.autoUnblock`.
+ */
+export interface AutoUnblockConfig {
+  /** If false or omitted, watchdog never runs. Default: false. */
+  enabled?: boolean;
+  /**
+   * Seconds the job must have been in `blocked` (measured from the
+   * status's `updated_at`) before the watchdog will spawn a retry.
+   * Default: 600 (10 minutes). Prevents the watchdog from tripping
+   * before the one-shot `__valfix` / `__deployfix` remediation has
+   * had a chance to land its own fix.
+   */
+  retryAfterSec?: number;
+  /**
+   * Maximum number of auto-retries per original job. Default: 2, i.e.
+   * 3 total attempts (original + 2 watchdog retries). Once exhausted,
+   * the job stays in `blocked` and the watchdog stops touching it.
+   */
+  maxRetries?: number;
+  /**
+   * Which `blocker_type` values are eligible for auto-retry. Default:
+   * `['validation-failed', 'smoke-failed', 'pr-check-failed']`. Pure
+   * operator-clarification ambiguity should NOT be in this list —
+   * ambiguity blockers require a human, and retrying them just burns
+   * tokens. The circuit-breaker `agent-outage` / `rate-limited`
+   * blockers are also intentionally excluded (they're handled by the
+   * outage probe).
+   */
+  eligibleTypes?: string[];
+  /**
+   * When true AND Phase 5b planner is enabled for the repo, the
+   * retry packet triggers a fresh planner pass with the prior
+   * blocker's feedback as context. Default: false (cheaper — retry
+   * reuses the original goal with an appended failure footer).
+   */
+  usePlannerRefresh?: boolean;
+}
+
+/**
+ * Phase 6a: record of a single watchdog-driven retry attempt, persisted
+ * on the parent job's status so operators can see every retry's reason
+ * and outcome without crawling the jobs directory.
+ */
+export interface AutoUnblockAttempt {
+  /** ISO timestamp at which the watchdog spawned the child job. */
+  at: string;
+  /** Child job id (parent id + `__autoretry<N>`). */
+  childJobId: string;
+  /** The blocker_type that triggered the retry. */
+  priorBlockerType: string;
+  /** The blocker detail text copied into the child's refined prompt. */
+  priorBlockerDetail?: string;
+  /** Attempt number (1-indexed, matches the suffix). */
+  attemptNumber: number;
+}
+
+/**
+ * Phase 6a: auto-unblock state tracked on the parent JobStatus.
+ */
+export interface AutoUnblockState {
+  attempts: number;
+  lastAttemptAt?: string;
+  history?: AutoUnblockAttempt[];
+  /**
+   * True once the watchdog has hit `maxRetries` and stopped spawning
+   * new retries. Flips only once per job so the "exhausted" Discord
+   * ping doesn't fire on every subsequent supervisor cycle.
+   */
+  exhausted?: boolean;
+}
+
 // ── Validation ──
 
 /** A single post-worker validation step (typecheck, test, build, etc.). */
@@ -474,6 +563,13 @@ export interface JobStatus {
   notifications?: JobNotifications;
   integrations?: JobIntegrations;
   discord_thread_id?: string | null;
+  /**
+   * Phase 6a: watchdog retry state. Populated only after the first
+   * auto-unblock retry has been spawned for this job; absent otherwise.
+   * Parent jobs accumulate history here; each child `__autoretryN`
+   * job tracks its own (independent) state the same way.
+   */
+  autoUnblock?: AutoUnblockState;
 }
 
 // ── Job result ──
@@ -719,6 +815,18 @@ export interface SupervisorCycleSummary {
   prWatcher?: unknown;
   archived?: string[];
   snapshot?: unknown;
+  /**
+   * Phase 6a: summary of the auto-unblock watchdog pass for this cycle.
+   * Absent when the watchdog hasn't run (e.g. an error before the
+   * tick). Individual retry spawns are recorded on each parent job's
+   * status as well so operators can query per-job history.
+   */
+  autoUnblock?: {
+    scanned: number;
+    retried: Array<{ parent: string; child: string; attempt: number; blockerType: string }>;
+    skipped: Array<{ job_id: string; reason: string }>;
+    errors: Array<{ job_id?: string; error: string }>;
+  };
 }
 
 // ── Preflight ──

@@ -574,7 +574,11 @@ function maybeEnqueueValidationRemediation(
 ): RemediationResult {
   const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
   if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
-  if (/__deployfix|__reviewfix|__valfix/.test(jobId)) {
+  // Depth guard: skip if the job is already a remediation/retry child
+  // (valfix/deployfix/reviewfix/autoretry). Phase 6a auto-unblock uses
+  // the same guard so we never cascade a watchdog retry into another
+  // one-shot remediation.
+  if (/__deployfix|__reviewfix|__valfix|__autoretry/.test(jobId)) {
     return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
   }
   if (result.blocker_type !== 'validation-failed') {
@@ -644,7 +648,7 @@ function maybeEnqueueValidationRemediation(
  * PR-review "deploy" blockerType that already spawns the same shape of job
  * — a repo operator sees one class of remediation for "deployment broke".
  *
- * Depth guard: `__deployfix|__reviewfix|__valfix` in the job ID short-
+ * Depth guard: `__deployfix|__reviewfix|__valfix|__autoretry` in the job ID short-
  * circuits, so a smoke-failed remediation won't cascade into a second
  * __deployfix on the same original ticket.
  */
@@ -655,7 +659,7 @@ function maybeEnqueueSmokeRemediation(
 ): RemediationResult {
   const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
   if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
-  if (/__deployfix|__reviewfix|__valfix/.test(jobId)) {
+  if (/__deployfix|__reviewfix|__valfix|__autoretry/.test(jobId)) {
     return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
   }
   if (result.blocker_type !== 'smoke-failed') {
@@ -729,7 +733,7 @@ function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result:
   // Include __valfix so a Phase 2b validation remediation PR that picks up a
   // blocking review doesn't cascade into a __valfix__reviewfix job — one layer
   // of auto-remediation per original job id, period.
-  if (/__deployfix|__reviewfix|__valfix/.test(jobId)) return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
+  if (/__deployfix|__reviewfix|__valfix|__autoretry/.test(jobId)) return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
   if (!prReview?.ok || prReview.disposition !== 'block') return { ok: false, skipped: true, reason: 'no blocking PR review' };
   const remediationSuffix = prReview.blockerType === 'deploy' ? '__deployfix' : '__reviewfix';
   const remediationJobId = `${jobId}${remediationSuffix}`;
@@ -1860,6 +1864,45 @@ function startJob(jobId: string): Record<string, unknown> {
   }
 }
 
+/**
+ * Phase 6a: adapter that exposes the supervisor's filesystem/Discord IO
+ * to the auto-unblock watchdog through its injected `JobsIo` interface.
+ * Kept as a factory rather than a module constant so tests that stub
+ * individual functions don't need to reach into jobs.ts internals.
+ */
+function buildAutoUnblockIo(): import('./auto-unblock').JobsIo {
+  return {
+    listBlockedJobs: () => listJobs().filter((j) => j.state === 'blocked'),
+    loadPacket: (jobId: string) => readJson(packetPath(jobId)) as unknown as JobPacket,
+    loadResult: (jobId: string) => {
+      const p = resultPath(jobId);
+      if (!fs.existsSync(p)) return null;
+      try { return readJson(p) as unknown as JobResult; } catch { return null; }
+    },
+    createJob: (packet: JobPacket) => {
+      const { jobId } = createJob(packet);
+      return { jobId };
+    },
+    jobExists: (jobId: string) => fs.existsSync(statusPath(jobId)),
+    saveAutoUnblockState: (jobId, state) => {
+      saveStatus(jobId, { autoUnblock: state } as Partial<JobStatus>);
+    },
+    appendLog: (jobId, line) => {
+      try { appendLog(jobId, line); } catch (e) { console.error(`[ccp] auto-unblock appendLog failed for ${jobId}: ${(e as Error).message}`); }
+    },
+    resolveRepoConfig: (packet: JobPacket) => {
+      if (!packet.repo) return null;
+      const mapping = findRepoByPath(packet.repo);
+      return mapping?.autoUnblock || null;
+    },
+    notifyExhausted: ({ parentJobId, ticketId, blockerType, attempts }) => {
+      const ticketPart = ticketId ? ` (${ticketId})` : '';
+      const msg = `⚠️ Auto-unblock exhausted for ${parentJobId}${ticketPart} after ${attempts} retries; blocker_type=${blockerType}. Operator intervention needed.`;
+      try { sendDiscordMessage(DISCORD_ERRORS_CHANNEL, msg); } catch (e) { console.error(`[ccp] auto-unblock notify failed: ${(e as Error).message}`); }
+    },
+  };
+}
+
 async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Promise<SupervisorCycleSummary> {
   const maxConcurrent = Number.isFinite(Number(options.maxConcurrent)) ? Number(options.maxConcurrent) : 1;
   const summary: SupervisorCycleSummary = {
@@ -1954,6 +1997,20 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
     }
   } catch (err) {
     console.error(`[ccp] per-agent outage probe failed: ${(err as Error).message}`);
+  }
+
+  // Phase 6a: auto-unblock watchdog. Scan every blocked job and, for
+  // those with a retry-eligible blocker_type whose cool-down has
+  // elapsed, spawn a `__autoretry<N>` child job on the same branch.
+  // Wrapped in try/catch so any bug here never blocks dispatch (the
+  // watchdog is a best-effort assist, not a hard-path operation).
+  try {
+    const { tickAutoUnblock } = require('./auto-unblock') as typeof import('./auto-unblock');
+    summary.autoUnblock = tickAutoUnblock({
+      io: buildAutoUnblockIo(),
+    });
+  } catch (error) {
+    summary.errors.push({ action: 'auto-unblock', error: (error as Error).message });
   }
 
   if (!scheduleCheck.allowed && queued.length > 0) {
