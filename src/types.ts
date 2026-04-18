@@ -124,6 +124,54 @@ export interface SmokeConfig {
   timeoutSec?: number;
   /** User-Agent header. Default: `ccp-smoke/0.1`. */
   userAgent?: string;
+  /**
+   * Phase 4 (PR C): which runner to use. `http` is the dependency-free
+   * fetch-based runner from PR B. `playwright` spawns a headless browser
+   * in a subprocess and can evaluate JS assertions, wait for full page
+   * load strategies, and capture a screenshot on failure. Default: `http`.
+   *
+   * Picking `playwright` requires `npm i -D playwright` on the supervisor
+   * host AND `npx playwright install <browser>`. When the package is
+   * missing the runner returns a `kind: 'unknown'` result with a clear
+   * install-instructions message — it does NOT crash the watcher cycle.
+   */
+  runner?: 'http' | 'playwright';
+  /**
+   * Playwright-runner-specific options. Ignored when `runner === 'http'`.
+   * Kept in its own sub-object so the flat HTTP-runner config stays
+   * forward-compatible.
+   */
+  playwright?: PlaywrightSmokeConfig;
+}
+
+/**
+ * Phase 4 (PR C): Playwright-runner-specific options. All fields
+ * optional; sensible defaults are applied by `resolvePlaywrightConfig`.
+ */
+export interface PlaywrightSmokeConfig {
+  /** Browser engine. Default: `chromium`. */
+  browser?: 'chromium' | 'firefox' | 'webkit';
+  /**
+   * Which load event to wait for before running assertions.
+   * Default: `load` (matches Playwright's own default).
+   */
+  waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit';
+  /** Viewport for the page. Default: 1280x800. */
+  viewport?: { width: number; height: number };
+  /**
+   * Optional JavaScript expression evaluated inside `page.evaluate()`.
+   * Must return truthy for the smoke to pass; falsy returns produce a
+   * `kind: 'title'` failure (reused for "assertion failure" so we
+   * don't churn the `SmokeResult.failure.kind` enum in this PR).
+   *
+   * Example: `"!document.body.innerText.includes('Application error')"`
+   */
+  assertExpression?: string;
+  /**
+   * When true, the runner captures a PNG of the page on any failure
+   * and writes it to `jobs/<id>/smoke-failure.png`. Default: true.
+   */
+  screenshotOnFailure?: boolean;
 }
 
 /**

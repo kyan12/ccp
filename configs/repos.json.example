@@ -19,11 +19,19 @@
       },
       "smoke": {
         "enabled": false,
+        "runner": "http",
         "path": "/",
         "expectStatus": [200],
         "titleRegex": "My App",
         "timeoutSec": 15,
-        "userAgent": "ccp-smoke/0.1"
+        "userAgent": "ccp-smoke/0.1",
+        "playwright": {
+          "browser": "chromium",
+          "waitUntil": "load",
+          "viewport": { "width": 1280, "height": 800 },
+          "assertExpression": "!document.body.innerText.includes('Application error')",
+          "screenshotOnFailure": true
+        }
       },
       "nightly": {
         "enabled": false,

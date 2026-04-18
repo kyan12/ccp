@@ -30,6 +30,7 @@
  */
 
 import type { SmokeConfig, SmokeResult } from '../types';
+import type { PlaywrightExecutor, RunPlaywrightSmokeOptions } from './playwright-smoke';
 
 // Defaults — exported for tests and downstream consumers.
 export const DEFAULT_SMOKE_PATH = '/';
@@ -89,6 +90,14 @@ export function resolveSmokeConfig(config: SmokeConfig | undefined): Required<Sm
       typeof c.userAgent === 'string' && c.userAgent.length
         ? c.userAgent
         : DEFAULT_SMOKE_USER_AGENT,
+    // Phase 4 PR C: runner defaults to 'http' so repos that set
+    // `smoke.enabled: true` without an explicit runner keep the
+    // dependency-free fetch behavior from PR B.
+    runner: c.runner === 'playwright' ? 'playwright' : 'http',
+    // Phase 4 PR C: playwright sub-config is kept raw here — the
+    // Playwright orchestrator does its own `resolvePlaywrightConfig`
+    // pass so the defaults live with the runner that needs them.
+    playwright: c.playwright || {},
   };
   return resolved;
 }
@@ -342,6 +351,49 @@ export async function runHttpSmoke(
   };
 }
 
+/**
+ * Phase 4 (PR C): dispatcher that picks between the HTTP runner (PR B)
+ * and the Playwright runner (PR C) based on `SmokeConfig.runner`.
+ *
+ * The dispatcher is the single call-site the watcher should use — it
+ * lets us add new runners later (remote, dockerized, etc.) without
+ * churning pr-watcher. Both runners produce the same `SmokeResult`
+ * shape, so callers never branch on which runner ran.
+ *
+ * Test seam: all runner implementations are optionally overridable via
+ * `deps`, so unit tests can force-route to a fake runner without a
+ * browser or subprocess.
+ */
+export interface RunSmokeDeps {
+  /** Override the HTTP fetcher (used by the HTTP runner). */
+  httpFetcher?: HttpFetcher;
+  /** Override the Playwright executor (used by the Playwright runner). */
+  playwrightExecutor?: PlaywrightExecutor;
+  /** Options forwarded to the Playwright runner (e.g. jobId). */
+  playwrightOptions?: RunPlaywrightSmokeOptions;
+}
+
+export async function runSmoke(
+  previewUrl: string | null | undefined,
+  rawConfig: SmokeConfig | undefined,
+  deps: RunSmokeDeps = {},
+): Promise<SmokeResult> {
+  const runner = rawConfig && rawConfig.runner === 'playwright' ? 'playwright' : 'http';
+  if (runner === 'playwright') {
+    // Lazy require so smoke.test.ts and the HTTP runner don't pull the
+    // Playwright orchestrator's extra exports into every consumer.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { runPlaywrightSmoke } = require('./playwright-smoke');
+    return runPlaywrightSmoke(
+      previewUrl,
+      rawConfig,
+      deps.playwrightExecutor,
+      deps.playwrightOptions || {},
+    );
+  }
+  return runHttpSmoke(previewUrl, rawConfig, deps.httpFetcher);
+}
+
 module.exports = {
   DEFAULT_SMOKE_PATH,
   DEFAULT_SMOKE_STATUS,
@@ -353,5 +405,6 @@ module.exports = {
   extractTitle,
   truncateBodyExcerpt,
   runHttpSmoke,
+  runSmoke,
   defaultFetcher,
 };

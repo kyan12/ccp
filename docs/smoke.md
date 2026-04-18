@@ -1,9 +1,18 @@
-# Preview-URL Smoke Tests (Phase 4 PR B)
+# Preview-URL Smoke Tests (Phase 4 PR B + PR C)
 
 After the [preview-URL extractor](./preview-url.md) detects a PR's Vercel
-deployment URL, the supervisor can run a lightweight HTTP smoke test
-against it. Failures are persisted and logged but — in this PR — do
-**not** gate the job state. Phase 4 PR D will promote this to a gate.
+deployment URL, the supervisor can run a lightweight smoke test against
+it. Two runners are supported:
+
+- `http` (default, from PR B) — a dependency-free `fetch` that checks
+  status + optional `<title>` regex.
+- `playwright` (PR C) — launches a real headless browser (Chromium /
+  Firefox / WebKit), navigates to the preview URL, and optionally
+  evaluates a JS expression inside the page.
+
+Failures from **either** runner are persisted and logged but — in this
+PR — do **not** gate the job state. Phase 4 PR D will promote this to a
+gate.
 
 ## What it does
 
@@ -37,6 +46,7 @@ Opt in per repo via `configs/repos.json`:
       "localPath": "/srv/repos/my-app",
       "smoke": {
         "enabled": true,
+        "runner": "http",
         "path": "/api/health",
         "expectStatus": [200, 204],
         "titleRegex": "My App",
@@ -56,6 +66,83 @@ Opt in per repo via `configs/repos.json`:
 | `titleRegex`   | *(none)*         | Optional; applied to first `<title>` element, case-insensitive. |
 | `timeoutSec`   | `15`             | Wall clock, enforced via `AbortController`.                |
 | `userAgent`    | `ccp-smoke/0.1`  | Forwarded as `User-Agent` header.                          |
+| `runner`       | `http`           | `http` or `playwright`. See below for the Playwright runner. |
+| `playwright`   | `{}`             | Sub-config passed to the Playwright runner when `runner:'playwright'`. |
+
+## Playwright runner (PR C)
+
+When `runner: "playwright"`, the supervisor spawns a short-lived Node
+subprocess (`dist/lib/playwright-smoke-runner.js`) that:
+
+1. `require('playwright')` lazily (the package is optional — see
+   [Installing Playwright](#installing-playwright) below).
+2. Launches the configured browser engine.
+3. Creates a page with the configured viewport + `User-Agent`.
+4. `page.goto(previewUrl+path, { waitUntil })` within
+   `timeoutSec * 1000` ms.
+5. Asserts `response.status()` is in `expectStatus`.
+6. Extracts `page.title()` and applies the optional `titleRegex`.
+7. Optionally evaluates `assertExpression` inside `page.evaluate()`.
+   A falsy return value is recorded as a `kind: 'title'` failure
+   (reused so the `SmokeResult.failure.kind` enum stays stable).
+8. On any failure, if `screenshotOnFailure` is true (default) and the
+   supervisor provided `playwrightOptions.jobId`, saves a PNG to
+   `jobs/<jobId>/smoke-failure.png` and populates
+   `SmokeResult.failure.screenshotPath`.
+
+Config shape:
+
+```json
+{
+  "smoke": {
+    "enabled": true,
+    "runner": "playwright",
+    "path": "/",
+    "expectStatus": [200],
+    "titleRegex": "My App",
+    "timeoutSec": 30,
+    "userAgent": "ccp-smoke/0.1 (+playwright)",
+    "playwright": {
+      "browser": "chromium",
+      "waitUntil": "load",
+      "viewport": { "width": 1280, "height": 800 },
+      "assertExpression": "!document.body.innerText.includes('Application error')",
+      "screenshotOnFailure": true
+    }
+  }
+}
+```
+
+| `playwright.*` field   | Default              | Notes                                                             |
+| ---------------------- | -------------------- | ----------------------------------------------------------------- |
+| `browser`              | `chromium`           | One of `chromium`, `firefox`, `webkit`.                           |
+| `waitUntil`            | `load`               | Playwright's page-goto wait strategy.                             |
+| `viewport`             | `{1280,800}`         | Width/height in CSS pixels.                                       |
+| `assertExpression`     | *(none)*             | JS expression evaluated inside `page.evaluate()`; must be truthy. |
+| `screenshotOnFailure`  | `true`               | Saves `jobs/<jobId>/smoke-failure.png` on any failure.            |
+
+### Installing Playwright
+
+Playwright is **opt-in**; the supervisor compiles and runs fine without
+it. If you flip a repo to `runner: "playwright"` without installing the
+package, the first cycle will emit a `kind: 'unknown'` failure with an
+actionable message. To install:
+
+```bash
+# in the CCP supervisor checkout
+npm i playwright
+npx playwright install chromium
+```
+
+You only need the browser engine(s) you reference in `playwright.browser`.
+
+### Isolation
+
+Playwright runs in a short-lived subprocess spawned per smoke check and
+exits after emitting a single JSON object on stdout. The supervisor
+never imports `playwright` or holds a browser context between cycles,
+so a misbehaving renderer can't leak into the long-running daemon.
+
 
 ## Failure kinds
 
@@ -106,20 +193,23 @@ if (result.smoke && result.smoke.ok === false) {
 ## Known limitations
 
 - Only supports a **single URL** per repo. Multi-URL checks arrive in a
-  later PR — typically not needed until Playwright (PR C) lands.
+  later PR.
 - No auth. If the preview requires Vercel SSO or a Vercel bypass secret
   (`vercel-automation-bypass-secret`), the smoke will hit the login
-  wall. Header support is a PR C follow-up.
-- Body is read with a cap of ~16KB — enough for the `<title>` regex but
-  not for full-body assertions.
+  wall. Header support is a PR D follow-up.
+- The HTTP runner reads the body with a cap of ~16KB — enough for the
+  `<title>` regex but not for full-body assertions. The Playwright
+  runner has no such cap since assertions run inside the browser.
 
 ## Rollout
 
-1. Land this PR (gate off — safe to merge; no repo automatically gains
-   smoke since `enabled` defaults to false).
-2. Flip `smoke.enabled: true` on one repo in `configs/repos.json`.
+1. Land PR B (HTTP runner) — gate off; no repo automatically gains
+   smoke since `enabled` defaults to false.
+2. Flip `smoke.enabled: true` (and optionally `runner: "playwright"`) on
+   one repo in `configs/repos.json`.
 3. Watch `worker.log` for `pr-watcher: smoke …` lines on the next
    cycle. Confirm pass/fail accuracy against your repo's expected
    behavior.
-4. Repeat for additional repos. Land PR C (Playwright) when HTTP
-   checks become insufficient.
+4. Repeat for additional repos. Land PR D (gate + `__deployfix`
+   remediation) when smoke results are trusted enough to drive the job
+   state machine.
