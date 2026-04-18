@@ -290,6 +290,14 @@ export interface JobResult {
   branch?: string;
   pushed?: string;
   pr_url?: string | null;
+  /**
+   * Phase 4 (PR A): PR's live preview deployment URL (extracted from the
+   * Vercel bot comment or Vercel checks). Populated by the pr-watcher cycle
+   * when a preview is detected; null when no preview exists yet. Mirrors
+   * `integrations.prReview.previewUrl` on the status so downstream tools can
+   * discover it without loading status.json.
+   */
+  preview_url?: string | null;
   prod: string;
   verified: string;
   blocker: string | null;
@@ -334,6 +342,14 @@ export interface PRClassification {
 export interface PRReviewResult {
   ok: boolean;
   prUrl: string;
+  /**
+   * Phase 4 (PR A): the PR's live preview deployment URL (currently extracted
+   * from Vercel bot comments + Vercel checks). Null when the PR has no
+   * preview deployment yet, or the extractor couldn't recognise one.
+   * Informational in this PR; later Phase 4 PRs will feed this URL into a
+   * browser smoke runner.
+   */
+  previewUrl?: string | null;
   ownerRepo: string;
   number: number;
   title: string;
