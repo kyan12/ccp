@@ -180,5 +180,8 @@ export type {
   AgentPreflight,
   AgentProbeResult,
   AgentFailurePatterns,
+  AgentUsage,
+  AgentUsageParseContext,
 } from './types';
 export { claudeCodeDriver, codexDriver };
+export { parseClaudeUsage, parseCodexUsage } from './usage';

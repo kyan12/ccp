@@ -9,7 +9,7 @@ import type {
 } from '../types';
 import { run, commandExists, shellQuote } from './shell';
 import { resolveAgent, getAgent, claudeCodeDriver } from './agents';
-import type { AgentDriver } from './agents';
+import type { AgentDriver, AgentUsage } from './agents';
 import { runValidation, summarizeReport, shouldGateOnValidation, buildValidationBlocker } from './validator';
 import { buildSmokeBlocker } from './smoke';
 const { findRepoByPath } = require('./repos');
@@ -67,6 +67,24 @@ function gitIdentity(): { name: string; email: string } {
 function safeExcerpt(text: string, max: number = 500): string {
   if (!text) return '';
   return text.length <= max ? text : text.slice(-max);
+}
+
+/**
+ * Format an AgentUsage sample for the worker.log one-liner the
+ * finalize path emits when the driver's parseUsage returned a hit.
+ * Kept compact so a grep for "agent usage:" shows one line per job.
+ */
+function summarizeUsageForLog(u: AgentUsage): string {
+  const parts: string[] = [`agent=${u.agent}`];
+  if (u.model) parts.push(`model=${u.model}`);
+  if (u.inputTokens != null) parts.push(`in=${u.inputTokens}`);
+  if (u.outputTokens != null) parts.push(`out=${u.outputTokens}`);
+  if (u.cachedInputTokens != null) parts.push(`cache_read=${u.cachedInputTokens}`);
+  if (u.cacheCreationTokens != null) parts.push(`cache_write=${u.cacheCreationTokens}`);
+  if (u.totalTokens != null) parts.push(`total=${u.totalTokens}`);
+  if (u.costUsd != null) parts.push(`cost=$${u.costUsd.toFixed(4)}`);
+  if (u.source) parts.push(`source=${u.source}`);
+  return parts.join(' ');
 }
 
 function makeJobId(): string {
@@ -1173,6 +1191,27 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const status = loadStatus(jobId);
   const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   const logText = fs.readFileSync(path.join(jobDir(jobId), 'worker.log'), 'utf8');
+
+  // Phase 6e: capture per-agent token / cost usage from the worker
+  // log's self-report before we touch the state machine. This is
+  // purely observational — a null return (CLI didn't surface usage,
+  // or the parser choked on malformed input) just leaves the job
+  // without a `usage` field. Driver parseUsage() implementations are
+  // contractually total, but we wrap defensively anyway so a future
+  // driver bug can't block finalize.
+  const driverForUsage = getAgent(status.agent || packet.agent || 'claude-code') || claudeCodeDriver;
+  let capturedUsage: AgentUsage | null = null;
+  try {
+    capturedUsage = driverForUsage.parseUsage
+      ? driverForUsage.parseUsage({ jobDir: jobDir(jobId), workerLog: logText })
+      : null;
+  } catch (err) {
+    appendLog(
+      jobId,
+      `[${nowIso()}] parseUsage threw (non-fatal): ${(err as Error).message}`,
+    );
+    capturedUsage = null;
+  }
   const summary = parseSummary(logText);
   const exitCodeMatch = logText.match(/WORKER_EXIT_CODE:\s*(\d+)/);
   const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : (status.exit_code ?? 0);
@@ -1271,6 +1310,13 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     proof,
     updated_at: nowIso(),
   };
+  if (capturedUsage) {
+    result.usage = capturedUsage;
+    appendLog(
+      jobId,
+      `[${nowIso()}] agent usage: ${summarizeUsageForLog(capturedUsage)}`,
+    );
+  }
 
   // Post-worker static validation.
   //   Phase 2a: attach the report to result.json for visibility (always on).
@@ -1306,13 +1352,15 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   writeJson(resultPath(jobId), result);
   const started = status.started_at ? new Date(status.started_at).getTime() : Date.now();
   const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
-  saveStatus(jobId, {
+  const statusPatch: Partial<JobStatus> = {
     state: finalState,
     elapsed_sec: elapsed,
     exit_code: exitCode,
     last_heartbeat_at: nowIso(),
     last_output_excerpt: safeExcerpt(logText),
-  });
+  };
+  if (capturedUsage) statusPatch.usage = capturedUsage;
+  saveStatus(jobId, statusPatch);
 
   const prReview = maybeReviewPr(jobId, result);
   if (prReview?.ok) {

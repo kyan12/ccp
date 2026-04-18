@@ -870,6 +870,250 @@ t('generatedAt matches injected now', () => {
   assert.strictEqual(s.generatedAt, NOW.toISOString());
 });
 
+// ── Phase 6e: per-agent cost rollup ──
+
+function mkUsage(overrides: Partial<import('./agents/types').AgentUsage> = {}): import('./agents/types').AgentUsage {
+  return {
+    agent: 'claude-code',
+    capturedAt: '2025-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+t('cost: empty fixtures → empty rollup', () => {
+  const { io } = mkIo();
+  const s = collectTelemetry({ io, now: NOW });
+  assert.deepStrictEqual(s.cost, {
+    jobsWithUsage: 0,
+    totalTokens: 0,
+    totalCostUsd: 0,
+    jobsWithCost: 0,
+    byAgent: [],
+  });
+});
+
+t('cost: jobs with status.usage only are aggregated per agent', () => {
+  const statuses = [
+    mkStatus({
+      job_id: 'JC1',
+      agent: 'claude-code',
+      state: 'verified',
+      updated_at: '2025-01-30T00:00:00.000Z',
+      usage: mkUsage({ inputTokens: 100, outputTokens: 50, costUsd: 0.01 }),
+    }),
+    mkStatus({
+      job_id: 'JC2',
+      agent: 'claude-code',
+      state: 'done',
+      updated_at: '2025-01-30T01:00:00.000Z',
+      usage: mkUsage({ inputTokens: 300, outputTokens: 200, costUsd: 0.05 }),
+    }),
+    mkStatus({
+      job_id: 'JX1',
+      agent: 'codex',
+      state: 'done',
+      updated_at: '2025-01-30T02:00:00.000Z',
+      usage: mkUsage({ agent: 'codex', inputTokens: 2000, outputTokens: 800 }),
+    }),
+  ];
+  const { io } = mkIo({ jobs: statuses });
+  const s = collectTelemetry({ io, now: NOW });
+  assert.strictEqual(s.cost.jobsWithUsage, 3);
+  assert.strictEqual(s.cost.jobsWithCost, 2);
+  assert.strictEqual(Math.round(s.cost.totalCostUsd * 10000), 600);
+
+  const rows = s.cost.byAgent;
+  assert.strictEqual(rows.length, 2);
+  // sort: claude-code has cost so it comes first
+  assert.strictEqual(rows[0].agent, 'claude-code');
+  assert.strictEqual(rows[0].jobCount, 2);
+  assert.strictEqual(rows[0].jobsWithUsage, 2);
+  assert.strictEqual(rows[0].totalInputTokens, 400);
+  assert.strictEqual(rows[0].totalOutputTokens, 250);
+  assert.strictEqual(rows[0].totalTokens, 650);
+  assert.strictEqual(rows[0].jobsWithCost, 2);
+  assert.strictEqual(Math.round(rows[0].totalCostUsd * 10000), 600);
+  assert.ok(rows[0].avgCostPerJob !== null && Math.abs(rows[0].avgCostPerJob - 0.03) < 1e-9);
+
+  assert.strictEqual(rows[1].agent, 'codex');
+  assert.strictEqual(rows[1].totalInputTokens, 2000);
+  assert.strictEqual(rows[1].jobsWithCost, 0);
+  assert.strictEqual(rows[1].totalCostUsd, 0);
+  assert.strictEqual(rows[1].avgCostPerJob, null);
+});
+
+t('cost: falls back to result.usage when status.usage is absent', () => {
+  const statuses = [
+    mkStatus({
+      job_id: 'JR1',
+      agent: 'claude-code',
+      state: 'done',
+      updated_at: '2025-01-30T00:00:00.000Z',
+    }),
+  ];
+  const results = {
+    JR1: { ...mkResult({ job_id: 'JR1', state: 'done', blocker_type: 'none' }), usage: mkUsage({ inputTokens: 42, outputTokens: 17, costUsd: 0.002 }) } as JobResult,
+  };
+  const { io } = mkIo({ jobs: statuses, results });
+  const s = collectTelemetry({ io, now: NOW });
+  assert.strictEqual(s.cost.jobsWithUsage, 1);
+  assert.strictEqual(s.cost.byAgent[0].totalInputTokens, 42);
+  assert.strictEqual(s.cost.byAgent[0].totalOutputTokens, 17);
+  assert.ok(Math.abs(s.cost.byAgent[0].totalCostUsd - 0.002) < 1e-9);
+});
+
+t('cost: jobs without usage still counted in jobCount but not sums', () => {
+  const statuses = [
+    mkStatus({
+      job_id: 'JN1',
+      agent: 'claude-code',
+      state: 'done',
+      updated_at: '2025-01-30T00:00:00.000Z',
+    }),
+    mkStatus({
+      job_id: 'JU1',
+      agent: 'claude-code',
+      state: 'done',
+      updated_at: '2025-01-30T01:00:00.000Z',
+      usage: mkUsage({ inputTokens: 10, outputTokens: 20, costUsd: 0.001 }),
+    }),
+  ];
+  const { io } = mkIo({ jobs: statuses });
+  const s = collectTelemetry({ io, now: NOW });
+  const row = s.cost.byAgent[0];
+  assert.strictEqual(row.jobCount, 2, 'both counted in jobCount');
+  assert.strictEqual(row.jobsWithUsage, 1, 'only one has usage');
+  assert.strictEqual(row.totalInputTokens, 10);
+  assert.strictEqual(row.totalTokens, 30);
+});
+
+t('cost: totalTokens falls back to input+output+cache sum when totalTokens absent', () => {
+  const statuses = [
+    mkStatus({
+      job_id: 'JS1',
+      agent: 'codex',
+      state: 'done',
+      updated_at: '2025-01-30T00:00:00.000Z',
+      usage: mkUsage({ agent: 'codex', inputTokens: 100, outputTokens: 200, cachedInputTokens: 50 }),
+    }),
+  ];
+  const { io } = mkIo({ jobs: statuses });
+  const s = collectTelemetry({ io, now: NOW });
+  assert.strictEqual(s.cost.byAgent[0].totalTokens, 350);
+});
+
+t('cost: explicit usage.totalTokens preferred over sum', () => {
+  const statuses = [
+    mkStatus({
+      job_id: 'JP1',
+      agent: 'codex',
+      state: 'done',
+      updated_at: '2025-01-30T00:00:00.000Z',
+      // totalTokens explicitly set to NOT match input+output (sanity check
+      // that the parser's reported total wins over our fallback sum).
+      usage: mkUsage({ agent: 'codex', inputTokens: 100, outputTokens: 200, totalTokens: 999 }),
+    }),
+  ];
+  const { io } = mkIo({ jobs: statuses });
+  const s = collectTelemetry({ io, now: NOW });
+  assert.strictEqual(s.cost.byAgent[0].totalTokens, 999);
+});
+
+t('cost: agent field missing on status falls back to usage.agent', () => {
+  const statuses = [
+    mkStatus({
+      job_id: 'JF1',
+      agent: undefined,
+      state: 'done',
+      updated_at: '2025-01-30T00:00:00.000Z',
+    }),
+  ];
+  const results = {
+    JF1: { ...mkResult({ job_id: 'JF1', state: 'done', blocker_type: 'none' }), usage: mkUsage({ agent: 'codex', inputTokens: 5, outputTokens: 5 }) } as JobResult,
+  };
+  const { io } = mkIo({ jobs: statuses, results });
+  const s = collectTelemetry({ io, now: NOW });
+  // pickJobAgent falls back to result.usage.agent
+  assert.strictEqual(s.cost.byAgent[0].agent, 'codex');
+});
+
+t('cost: out-of-window usage is filtered out', () => {
+  const statuses = [
+    mkStatus({
+      job_id: 'JOLD',
+      agent: 'claude-code',
+      state: 'done',
+      updated_at: '2024-01-01T00:00:00.000Z', // well outside default 7d window
+      usage: mkUsage({ inputTokens: 10000, costUsd: 99 }),
+    }),
+    mkStatus({
+      job_id: 'JNEW',
+      agent: 'claude-code',
+      state: 'done',
+      updated_at: '2025-01-31T00:00:00.000Z',
+      usage: mkUsage({ inputTokens: 10, costUsd: 0.01 }),
+    }),
+  ];
+  const { io } = mkIo({ jobs: statuses });
+  const s = collectTelemetry({ io, now: NOW });
+  assert.strictEqual(s.cost.jobsWithUsage, 1);
+  assert.strictEqual(s.cost.byAgent[0].totalInputTokens, 10);
+  assert.ok(Math.abs(s.cost.byAgent[0].totalCostUsd - 0.01) < 1e-9);
+});
+
+t('cost: sort is desc by totalCostUsd, ties by totalTokens then agent', () => {
+  const statuses = [
+    mkStatus({
+      job_id: 'JA1',
+      agent: 'claude-code',
+      state: 'done',
+      updated_at: '2025-01-30T00:00:00.000Z',
+      usage: mkUsage({ inputTokens: 1, outputTokens: 1, costUsd: 0.01 }),
+    }),
+    mkStatus({
+      job_id: 'JB1',
+      agent: 'codex',
+      state: 'done',
+      updated_at: '2025-01-30T01:00:00.000Z',
+      usage: mkUsage({ agent: 'codex', inputTokens: 1000, outputTokens: 1000 }),
+    }),
+    mkStatus({
+      job_id: 'JC1',
+      agent: 'claude-code-v2',
+      state: 'done',
+      updated_at: '2025-01-30T02:00:00.000Z',
+      usage: mkUsage({ agent: 'claude-code-v2', inputTokens: 500, outputTokens: 500, costUsd: 0.02 }),
+    }),
+  ];
+  const { io } = mkIo({ jobs: statuses });
+  const s = collectTelemetry({ io, now: NOW });
+  const order = s.cost.byAgent.map((r) => r.agent);
+  assert.deepStrictEqual(order, ['claude-code-v2', 'claude-code', 'codex']);
+});
+
+t('cost: renderTelemetry surfaces byAgent section', () => {
+  const statuses = [
+    mkStatus({
+      job_id: 'JR1',
+      agent: 'claude-code',
+      state: 'done',
+      updated_at: '2025-01-30T00:00:00.000Z',
+      usage: mkUsage({ inputTokens: 100, outputTokens: 50, costUsd: 0.05 }),
+    }),
+  ];
+  const { io } = mkIo({ jobs: statuses });
+  const text = renderTelemetry(collectTelemetry({ io, now: NOW }));
+  assert.match(text, /Cost \(Phase 6e per-agent accounting\):/);
+  assert.match(text, /claude-code/);
+  assert.match(text, /cost=\$0\.0500/);
+});
+
+t('cost: renderTelemetry shows "no per-agent samples" when empty', () => {
+  const { io } = mkIo();
+  const text = renderTelemetry(collectTelemetry({ io, now: NOW }));
+  assert.match(text, /\(no per-agent samples\)/);
+});
+
 // ── Runner ─────────────────────────────────────────────────────────
 
 let failed = 0;

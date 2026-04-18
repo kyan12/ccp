@@ -68,6 +68,63 @@ export interface AgentFailurePatterns {
   rateLimit: RegExp[];
 }
 
+export interface AgentUsageParseContext {
+  /** Absolute path to the per-job directory (jobs/<id>). */
+  jobDir: string;
+  /** Full contents of worker.log at finalize time. */
+  workerLog: string;
+}
+
+/**
+ * Per-job token / cost accounting captured from the agent CLI's own
+ * self-report after the worker exits. Phase 6e (per-agent cost
+ * accounting) persists this onto `status.usage` and `result.usage` so
+ * the telemetry rollup can tally per-agent spend without re-parsing
+ * worker logs.
+ *
+ * Fields are all optional because different CLIs surface different
+ * subsets: Claude Code in `--output-format=json` mode emits every
+ * field; default text mode emits nothing; Codex in `exec` mode emits
+ * token counts but not a dollar cost. A `null` parseUsage() return is
+ * the signal for "no usable data in this log" — callers persist that
+ * as an absent `usage` field and the telemetry aggregate skips the
+ * job from per-agent token / cost sums.
+ */
+export interface AgentUsage {
+  /** Driver name at capture time (e.g. 'claude-code'). */
+  agent: string;
+  /** Model identifier reported by the CLI, when available. */
+  model?: string | null;
+  /** Prompt / input tokens for this run. */
+  inputTokens?: number;
+  /** Completion / output tokens for this run. */
+  outputTokens?: number;
+  /** Cache-read input tokens (Anthropic / OpenAI prompt-cache hits). */
+  cachedInputTokens?: number;
+  /** Cache-write input tokens, where the CLI reports it separately. */
+  cacheCreationTokens?: number;
+  /** Total tokens across every category (input+output+cache). */
+  totalTokens?: number;
+  /**
+   * USD cost as reported by the CLI. Null/absent when the CLI
+   * doesn't surface a cost (e.g. Codex's JSONL rollout emits tokens
+   * only). Downstream consumers can compute cost from tokens and a
+   * pricing table when needed, but that logic lives outside this
+   * shape so operators can't conflate "CLI said X" with "our
+   * estimate said X".
+   */
+  costUsd?: number;
+  /** ISO timestamp when the parser captured this sample. */
+  capturedAt: string;
+  /**
+   * Optional small opaque provenance string (CLI version, rollout
+   * file name, etc.) so support can trace a specific number back to
+   * the exact log/file it came from. Keep short — this is persisted
+   * on every result.json.
+   */
+  source?: string;
+}
+
 export interface AgentDriver {
   /** Stable short identifier used in configs and logs. */
   name: string;
@@ -81,4 +138,12 @@ export interface AgentDriver {
   probe(): AgentProbeResult;
   /** Regex sets for detecting provider API failures. */
   failurePatterns: AgentFailurePatterns;
+  /**
+   * Phase 6e: extract token / cost usage from the worker log (and
+   * any driver-specific sidecar files in `ctx.jobDir`). Returns null
+   * when the log contains no usable signal — the finalize path then
+   * persists no `usage` field. Must be total: never throws on
+   * malformed input, never blocks finalize.
+   */
+  parseUsage?(ctx: AgentUsageParseContext): AgentUsage | null;
 }

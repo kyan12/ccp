@@ -22,7 +22,10 @@ import type {
   AgentDriver,
   AgentPreflight,
   AgentProbeResult,
+  AgentUsage,
+  AgentUsageParseContext,
 } from './types';
+import { parseClaudeUsage } from './usage';
 
 const CLAUDE_API_ERROR_PATTERNS: RegExp[] = [
   /API Error: 5\d\d\b/i,
@@ -98,5 +101,19 @@ export const claudeCodeDriver: AgentDriver = {
   failurePatterns: {
     apiError: CLAUDE_API_ERROR_PATTERNS,
     rateLimit: CLAUDE_RATE_LIMIT_PATTERNS,
+  },
+
+  parseUsage(ctx: AgentUsageParseContext): AgentUsage | null {
+    // Claude's default `--print` text output does not include cost
+    // information. Operators who want per-job cost must switch the
+    // worker command to `--output-format=json` (or `stream-json`);
+    // when that output is present in the log, this parser extracts
+    // the canonical `total_cost_usd` + `usage` block. Default text
+    // mode returns null — see docs/cost-accounting.md.
+    try {
+      return parseClaudeUsage(ctx.workerLog, 'claude-code');
+    } catch {
+      return null;
+    }
   },
 };
