@@ -1927,6 +1927,28 @@ function buildAutoUnblockIo(): import('./auto-unblock').JobsIo {
   };
 }
 
+/**
+ * Phase 6d: adapter that exposes the supervisor's filesystem IO to the
+ * telemetry aggregator through its injected `TelemetryIo` interface.
+ * Tolerant of missing / malformed `status.json` / `result.json` files
+ * so one corrupt job never breaks the whole summary.
+ */
+function buildTelemetryIo(): import('./telemetry').TelemetryIo {
+  return {
+    listJobs: () => listJobs(),
+    loadResult: (jobId: string) => {
+      const p = resultPath(jobId);
+      if (!fs.existsSync(p)) return null;
+      try { return readJson(p) as unknown as JobResult; } catch { return null; }
+    },
+    loadStatus: (jobId: string) => {
+      const p = statusPath(jobId);
+      if (!fs.existsSync(p)) return null;
+      try { return loadStatus(jobId); } catch { return null; }
+    },
+  };
+}
+
 async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Promise<SupervisorCycleSummary> {
   const maxConcurrent = Number.isFinite(Number(options.maxConcurrent)) ? Number(options.maxConcurrent) : 1;
   const summary: SupervisorCycleSummary = {
@@ -2174,6 +2196,7 @@ module.exports = {
   ROOT,
   JOBS_DIR,
   buildPrompt,
+  buildTelemetryIo,
   isNoOpOutcome,
   inferBlockedReason,
   extractWorkerFailureContext,
@@ -2210,6 +2233,7 @@ export {
   ROOT,
   JOBS_DIR,
   buildPrompt,
+  buildTelemetryIo,
   isNoOpOutcome,
   inferBlockedReason,
   extractWorkerFailureContext,
