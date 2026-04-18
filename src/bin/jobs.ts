@@ -15,10 +15,11 @@ const {
   reconcileJob,
   inspectEnvironment,
   interruptJob,
+  buildTelemetryIo,
 } = require('../lib/jobs');
 
 function usage(): void {
-  console.log(`jobs <command> [args]\n\nCommands:\n  enqueue <packet.json>\n  start <job_id>\n  list\n  status\n  show <job_id>\n  tail <job_id>\n  result <job_id>\n  interrupt <job_id>\n  retry <job_id>\n  reconcile <job_id|all>\n  doctor [repo]\n  phase0 [repo]\n  compact-memory <repoKey> [--force]`);
+  console.log(`jobs <command> [args]\n\nCommands:\n  enqueue <packet.json>\n  start <job_id>\n  list\n  status\n  show <job_id>\n  tail <job_id>\n  result <job_id>\n  interrupt <job_id>\n  retry <job_id>\n  reconcile <job_id|all>\n  doctor [repo]\n  phase0 [repo]\n  compact-memory <repoKey> [--force]\n  telemetry [--days N] [--json]`);
 }
 
 function die(msg: string, code: number = 1): never {
@@ -153,6 +154,26 @@ async function main(): Promise<void> {
       const outcome = compactMemory({ packet, repo: mapping, config: effective });
       console.log(JSON.stringify(outcome, null, 2));
       process.exit(outcome.ok ? 0 : 3);
+      break;
+    }
+    case 'telemetry': {
+      // Phase 6d: point-in-time blocker + auto-unblock snapshot over a
+      // rolling window. Human-readable by default; JSON with --json so
+      // the dashboard or a cron job can pipe to jq.
+      const daysIdx = args.indexOf('--days');
+      const daysRaw = daysIdx >= 0 ? Number(args[daysIdx + 1]) : undefined;
+      const windowDays =
+        typeof daysRaw === 'number' && Number.isFinite(daysRaw) && daysRaw > 0
+          ? daysRaw
+          : undefined;
+      const asJson = args.includes('--json');
+      const { collectTelemetry, renderTelemetry } = require('../lib/telemetry');
+      const summary = collectTelemetry({ io: buildTelemetryIo(), windowDays });
+      if (asJson) {
+        console.log(JSON.stringify(summary, null, 2));
+      } else {
+        console.log(renderTelemetry(summary));
+      }
       break;
     }
     default:
