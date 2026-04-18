@@ -226,7 +226,12 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 function pickNumber(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   if (typeof v === 'string') {
-    const n = Number(v.replace(/,/g, '').trim());
+    const cleaned = v.replace(/,/g, '').trim();
+    // Number('') === 0 in JS, which would silently fabricate a
+    // zero-valued usage record from an empty JSON string. Treat
+    // an empty-after-strip as absent instead.
+    if (cleaned === '') return null;
+    const n = Number(cleaned);
     return Number.isFinite(n) ? n : null;
   }
   return null;

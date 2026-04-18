@@ -490,6 +490,17 @@ console.log('\nTest: parseClaudeUsage: usage with string-typed numbers still par
   assert(u !== null && u.outputTokens === 1200, 'output coerces comma-separated string');
 }
 
+console.log('\nTest: parseClaudeUsage: empty-string numeric fields are absent (not 0)');
+{
+  // Regression: pickNumber("") used to return 0 because Number("") === 0.
+  // Empty / whitespace-only strings must coerce to null so an empty usage
+  // block doesn't silently fabricate a zero-token record.
+  const log = '{"type":"result","total_cost_usd":"","usage":{"input_tokens":"","output_tokens":"   ","cache_read_input_tokens":",,,"}}';
+  const u = parseClaudeUsage(log, 'claude-code', fixedClock);
+  // Every numeric field is empty → no useful signal → parser returns null.
+  assert(u === null, 'all-empty usage returns null (no zero fabrication)');
+}
+
 console.log('\nTest: parseClaudeUsage: non-numeric values are skipped');
 {
   const log = '{"type":"result","total_cost_usd":"not-a-number","usage":{"input_tokens":"NaN","output_tokens":42}}';
