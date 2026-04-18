@@ -70,6 +70,33 @@ export interface RepoMapping {
    * worktrees would collide on the single `localPath` checkout.
    */
   parallelJobs?: number;
+  /**
+   * Phase 5b: optional pre-worker planning pass. When `enabled: true`,
+   * the supervisor runs a short planning prompt through the resolved
+   * agent before dispatching the main worker, then injects the plan
+   * into the worker's prompt. Opt-in per repo because the pass costs
+   * an extra round-trip (~1 planning prompt + 1 completion) per job.
+   * Skipped automatically for remediation jobs and branch-continuation
+   * jobs — they already have explicit feedback and a plan would be
+   * redundant.
+   */
+  planner?: PlannerConfig;
+}
+
+/**
+ * Phase 5b: per-repo planner configuration. Kept as its own type so
+ * future fields (agent override, prompt template path, etc.) can be
+ * added without churning `RepoMapping`.
+ */
+export interface PlannerConfig {
+  /** If false or omitted, the planner step is skipped. Default: false. */
+  enabled?: boolean;
+  /**
+   * Per-planner-pass timeout. Default: 300 (5 minutes). The planner is
+   * run synchronously on the supervisor host so a runaway agent would
+   * stall the entire dispatch loop; keep this tight.
+   */
+  timeoutSec?: number;
 }
 
 // ── Validation ──

@@ -135,6 +135,46 @@ console.log('\nTest: whitespace-only memory is ignored by buildPrompt');
   assert(!prompt.includes('Repository context'), 'empty memory not rendered');
 }
 
+// ── Test: plan section injection (Phase 5b) ──
+console.log('\nTest: plan parameter injects planner section');
+{
+  const plan = '## Files to touch\n- foo.ts — add endpoint\n\n## Approach\nAdd a handler.';
+  const prompt = buildPrompt(makePacket(), null, plan);
+  assert(
+    prompt.includes('Pre-computed implementation plan'),
+    'contains plan section header',
+  );
+  assert(prompt.includes('--- BEGIN PLAN ---'), 'contains plan begin marker');
+  assert(prompt.includes('--- END PLAN ---'), 'contains plan end marker');
+  assert(prompt.includes('foo.ts'), 'plan body in prompt');
+  // Plan must appear before the ticket goal so it primes approach.
+  const planIdx = prompt.indexOf('--- BEGIN PLAN ---');
+  const goalIdx = prompt.indexOf('Goal: ');
+  assert(planIdx >= 0 && planIdx < goalIdx, 'plan precedes ticket goal');
+}
+
+console.log('\nTest: plan appears AFTER memory and BEFORE ticket goal');
+{
+  const mem = 'Use Volta.';
+  const plan = '## Approach\nLook at neighboring code.';
+  const prompt = buildPrompt(makePacket(), mem, plan);
+  const memIdx = prompt.indexOf('--- BEGIN REPOSITORY MEMORY ---');
+  const planIdx = prompt.indexOf('--- BEGIN PLAN ---');
+  const goalIdx = prompt.indexOf('Goal: ');
+  assert(memIdx >= 0, 'memory present');
+  assert(planIdx >= 0, 'plan present');
+  assert(memIdx < planIdx, 'memory before plan');
+  assert(planIdx < goalIdx, 'plan before goal');
+}
+
+console.log('\nTest: no plan section when plan is absent or whitespace');
+{
+  const noPlan = buildPrompt(makePacket());
+  assert(!noPlan.includes('BEGIN PLAN'), 'omits plan markers when no plan');
+  const blank = buildPrompt(makePacket(), null, '  \n\t');
+  assert(!blank.includes('BEGIN PLAN'), 'whitespace plan not rendered');
+}
+
 // ── Test: review feedback prompt still works ──
 console.log('\nTest: review feedback preserved');
 {

@@ -13,6 +13,10 @@
       "memoryFile": ".ccp/memory.md",
       "worktree": true,
       "parallelJobs": 2,
+      "planner": {
+        "enabled": false,
+        "timeoutSec": 300
+      },
       "nightly": {
         "enabled": false,
         "branch": "main",

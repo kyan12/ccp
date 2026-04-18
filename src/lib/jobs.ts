@@ -14,6 +14,7 @@ import { runValidation, summarizeReport, shouldGateOnValidation, buildValidation
 const { findRepoByPath } = require('./repos');
 const { loadRepoMemory } = require('./memory');
 const { isWorktreeEnabled, getParallelJobLimit, acquireWorktree, releaseWorktree } = require('./worktree');
+const { runPlanner } = require('./planner');
 const { inspectDiscordTransport, hasDiscordTransport, sendDiscordMessage, createDiscordThread } = require('./discord');
 const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./linear');
 const { dispatchLinearIssues } = require('./linear-dispatch');
@@ -446,7 +447,7 @@ function markBlocked(jobId: string, reason: string): void {
   });
 }
 
-function buildPrompt(packet: JobPacket, memory?: string | null): string {
+function buildPrompt(packet: JobPacket, memory?: string | null, plan?: string | null): string {
   const bits: string[] = [];
   // Repository memory goes first so the agent reads project conventions
   // BEFORE the ticket goal — same mental order a human developer would
@@ -462,6 +463,22 @@ function buildPrompt(packet: JobPacket, memory?: string | null): string {
         '--- BEGIN REPOSITORY MEMORY ---',
         memory.trim(),
         '--- END REPOSITORY MEMORY ---',
+      ].join('\n'),
+    );
+  }
+  // Phase 5b: pre-worker plan. Goes AFTER memory (so the agent reads
+  // durable project conventions first) and BEFORE the ticket goal (so
+  // it primes the agent's approach before they read acceptance
+  // criteria). Marked as a suggestion, not a mandate — the agent is
+  // free to deviate if the plan is wrong once they see the code, but
+  // the scaffolding usually saves re-discovery work.
+  if (plan && plan.trim()) {
+    bits.push(
+      [
+        'Pre-computed implementation plan (from a planner pass — treat as a strong suggestion, deviate if you find a better approach once you read the code):',
+        '--- BEGIN PLAN ---',
+        plan.trim(),
+        '--- END PLAN ---',
       ].join('\n'),
     );
   }
@@ -1474,7 +1491,28 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
       `[${nowIso()}] repo memory loaded: ${memory.path} (${Buffer.byteLength(memory.content, 'utf8')} bytes${memory.truncated ? ', truncated' : ''})`,
     );
   }
-  fs.writeFileSync(promptFile, buildPrompt(packet, memory?.content));
+  // Phase 5b: optional pre-worker planner pass. Runs synchronously
+  // through the resolved agent with a planning-only prompt. Skipped
+  // automatically for remediation / continuation jobs and for repos
+  // that haven't opted in — see planner.ts for the full skip matrix.
+  // Any failure is logged and the worker continues without a plan.
+  const agent: AgentDriver = (pf.agent && getAgent(pf.agent)) || claudeCodeDriver;
+  const plannerResult = runPlanner({
+    jobId,
+    packet,
+    mapping,
+    agent,
+    bin: pf.claude,
+    workdir: repoPathForWorker,
+    planPromptPath: path.join(jobDir(jobId), 'plan.prompt.txt'),
+    planOutPath: path.join(jobDir(jobId), 'plan.md'),
+    memory: memory?.content || null,
+  });
+  appendLog(
+    jobId,
+    `[${nowIso()}] planner: ${plannerResult.ok ? 'ok' : plannerResult.timedOut ? 'timed-out' : 'skipped'} \u2014 ${plannerResult.reason}`,
+  );
+  fs.writeFileSync(promptFile, buildPrompt(packet, memory?.content, plannerResult.ok ? plannerResult.plan : null));
 
   // Build the agent invocation through the resolved driver. Claude Code's
   // shape is preserved verbatim here (cat prompt | claude --print ...) so
@@ -1482,10 +1520,10 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
   // command shape without touching jobs.ts.
   //
   // preflight() already resolved the agent (pf.agent) and wrote the name +
-  // binary into the PreflightResult. Look the driver up by name instead of
-  // re-resolving, so unknown-agent warnings aren't emitted twice per job and
-  // we don't redundantly scan the repos config again.
-  const agent: AgentDriver = (pf.agent && getAgent(pf.agent)) || claudeCodeDriver;
+  // binary into the PreflightResult. We already resolved the driver a few
+  // lines up for the Phase 5b planner pass; reuse the same instance so the
+  // agent-name log line below matches what the planner actually ran
+  // against.
   const agentCommand = agent.buildCommand({
     promptPath: promptFile,
     repoPath: repoPathForWorker,
