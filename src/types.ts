@@ -53,6 +53,17 @@ export interface RepoMapping {
    */
   memoryFile?: string;
   /**
+   * Phase 5c: optional LLM-driven compaction of the repo memory file.
+   * When the memory file exceeds `maxBytes` and `enabled: true`, the
+   * supervisor asks the configured agent (default: repo's resolved
+   * agent) to summarize the file down to roughly `targetBytes` and
+   * overwrites the file in place — archiving the pre-compaction
+   * content to `.ccp/memory.archive/<ISO>.md` first so nothing is
+   * lost. Opt-in per repo because compaction costs an extra LLM
+   * round-trip and rewrites a file that lives in the repo checkout.
+   */
+  memoryCompaction?: MemoryCompactionConfig;
+  /**
    * Phase 3: when true, each job runs in its own `git worktree` instead of
    * the canonical `localPath` checkout. The worktree lives under
    *   <CCP_ROOT>/worktrees/<mapping.key>/<job_id>
@@ -241,6 +252,45 @@ export interface PlannerConfig {
    * stall the entire dispatch loop; keep this tight.
    */
   timeoutSec?: number;
+}
+
+/**
+ * Phase 5c: LLM-driven memory-file compaction. When the memory file for
+ * a repo grows past `maxBytes`, the supervisor asks an agent to produce
+ * a condensed version and overwrites the file (archiving the original).
+ * Opt-in per repo.
+ */
+export interface MemoryCompactionConfig {
+  /** If false or omitted, compaction never runs. Default: false. */
+  enabled?: boolean;
+  /**
+   * Trigger threshold in bytes. When the memory file's size exceeds this
+   * value, compaction is scheduled on the next dispatch. Default: 16384
+   * (16KB — same as MAX_MEMORY_BYTES, so compaction fires right when the
+   * loader would start truncating).
+   */
+  maxBytes?: number;
+  /**
+   * Target size for the compacted output in bytes. The compactor asks the
+   * agent to aim for this budget; real output may overshoot slightly, so
+   * the caller rejects output larger than `maxBytes` and keeps the
+   * original file. Default: 8192 (roughly half of maxBytes, leaving
+   * plenty of headroom before the next compaction cycle).
+   */
+  targetBytes?: number;
+  /**
+   * Per-compaction subprocess timeout. Default: 300 (5 minutes).
+   * Compaction runs synchronously inside the dispatch path; keep this
+   * tight so a hung agent can't stall the loop.
+   */
+  timeoutSec?: number;
+  /**
+   * Which agent to use for compaction. When unset, the repo's resolved
+   * primary agent (claude-code / codex) handles its own compaction. Set
+   * this explicitly if you want every repo compacted with e.g. Claude
+   * Haiku regardless of which agent does the main coding work.
+   */
+  agent?: string;
 }
 
 // ── Validation ──

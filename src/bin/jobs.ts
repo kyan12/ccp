@@ -18,7 +18,7 @@ const {
 } = require('../lib/jobs');
 
 function usage(): void {
-  console.log(`jobs <command> [args]\n\nCommands:\n  enqueue <packet.json>\n  start <job_id>\n  list\n  status\n  show <job_id>\n  tail <job_id>\n  result <job_id>\n  interrupt <job_id>\n  retry <job_id>\n  reconcile <job_id|all>\n  doctor [repo]\n  phase0 [repo]`);
+  console.log(`jobs <command> [args]\n\nCommands:\n  enqueue <packet.json>\n  start <job_id>\n  list\n  status\n  show <job_id>\n  tail <job_id>\n  result <job_id>\n  interrupt <job_id>\n  retry <job_id>\n  reconcile <job_id|all>\n  doctor [repo]\n  phase0 [repo]\n  compact-memory <repoKey> [--force]`);
 }
 
 function die(msg: string, code: number = 1): never {
@@ -110,6 +110,49 @@ async function main(): Promise<void> {
     case 'phase0': {
       const repo = path.resolve(args[0] || ROOT);
       console.log(JSON.stringify(inspectEnvironment(repo), null, 2));
+      break;
+    }
+    case 'compact-memory': {
+      // Phase 5c: manually run a memory-compaction pass for <repoKey>.
+      // Respects the repo's memoryCompaction config by default; pass
+      // `--force` to override the size-gate and compact regardless.
+      const repoKey = args[0];
+      if (!repoKey) die('usage: jobs compact-memory <repoKey> [--force]');
+      const force = args.includes('--force');
+      const { repoConfig } = require('../lib/repos');
+      const cfg = repoConfig();
+      const mapping = (cfg.mappings || []).find(
+        (m: { key?: string; ownerRepo?: string }) =>
+          m.key === repoKey || m.ownerRepo === repoKey,
+      );
+      if (!mapping) die(`no repo mapping found for '${repoKey}'`);
+      if (!mapping.localPath) die(`mapping for '${repoKey}' has no localPath`);
+      const {
+        compactMemory,
+        resolveCompactionConfig,
+        shouldCompact,
+      } = require('../lib/memory-compaction');
+      const resolved = resolveCompactionConfig(mapping.memoryCompaction);
+      // In --force mode, drop the size gate by setting maxBytes to 1
+      // so any non-empty file triggers compaction.
+      const effective = force ? { ...resolved, enabled: true, maxBytes: 1 } : resolved;
+      const packet = {
+        job_id: `compact_${Date.now()}`,
+        ticket_id: 'MANUAL',
+        repo: mapping.localPath,
+        goal: 'manual memory compaction',
+        source: 'cli',
+        kind: 'task',
+        label: 'manual',
+      };
+      const decision = shouldCompact(packet, effective);
+      if (!decision.shouldCompact) {
+        console.log(JSON.stringify({ ok: false, status: 'skipped', ...decision }, null, 2));
+        process.exit(0);
+      }
+      const outcome = compactMemory({ packet, repo: mapping, config: effective });
+      console.log(JSON.stringify(outcome, null, 2));
+      process.exit(outcome.ok ? 0 : 3);
       break;
     }
     default:
