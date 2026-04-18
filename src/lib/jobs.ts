@@ -1321,10 +1321,18 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     // Phase 6b ambiguity classification (`ambiguity-operator`/`ambiguity-transient`)
     // when pr-review has nothing stronger to say \u2014 a green-but-silent review
     // must not regress a classified ambiguity back to null.
+    //
+    // `prReview.blockerType` defaults to `'none'` (non-empty truthy string)
+    // when the PR has no issues, so treat `'none'` as "nothing to say" when
+    // deciding whether to overwrite a prior classification. Otherwise the
+    // naive `||` chain would clobber `ambiguity-transient` \u2192 `'none'` and
+    // silently disqualify the job from the auto-unblock watchdog.
+    const prBlockerType =
+      prReview.blockerType && prReview.blockerType !== 'none' ? prReview.blockerType : null;
     if (!validationGated) {
-      result.blocker_type = prReview.blockerType || result.blocker_type || null;
+      result.blocker_type = prBlockerType || result.blocker_type || null;
       result.failed_checks = prReview.failedChecks || [];
-    } else if (prReview.blockerType) {
+    } else if (prBlockerType) {
       // PR review found its own blocker on top of the validation failure: keep
       // the validation blocker_type (it's the primary signal locally) but append
       // PR-side failing checks so operators see both.
