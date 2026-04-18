@@ -34,6 +34,7 @@ import type {
   JobResult,
   JobStatus,
 } from '../types';
+import type { AgentUsage } from './agents/types';
 
 /** Default rolling-window size for `collectTelemetry()`. */
 export const DEFAULT_TELEMETRY_WINDOW_DAYS = 7;
@@ -163,6 +164,54 @@ export interface AutoUnblockTelemetry {
   attemptStats: AutoUnblockAttemptStats;
 }
 
+export interface AgentCostRow {
+  /** Driver name as reported on `result.usage.agent`. */
+  agent: string;
+  /** Jobs in the window whose agent resolved to this driver (with or without usage). */
+  jobCount: number;
+  /**
+   * Jobs in the window whose result.usage was captured (i.e. the
+   * driver's parseUsage returned a non-null sample). Used as the
+   * denominator for per-job averages so claude-code's default
+   * no-usage text mode doesn't drag the average down to 0.
+   */
+  jobsWithUsage: number;
+  /** Sum of `result.usage.inputTokens` across jobsWithUsage. */
+  totalInputTokens: number;
+  /** Sum of `result.usage.outputTokens` across jobsWithUsage. */
+  totalOutputTokens: number;
+  /** Sum of `result.usage.cachedInputTokens` across jobsWithUsage. */
+  totalCachedInputTokens: number;
+  /** Sum of `result.usage.totalTokens` across jobsWithUsage. */
+  totalTokens: number;
+  /**
+   * Sum of `result.usage.costUsd` across jobsWithUsage. Only jobs
+   * whose CLI self-reported cost contribute — operators that want
+   * token-based cost estimates apply a pricing table downstream.
+   */
+  totalCostUsd: number;
+  /** Jobs in jobsWithUsage whose usage.costUsd was a finite number. */
+  jobsWithCost: number;
+  /**
+   * `totalCostUsd / jobsWithCost`. Null when no jobs in the bucket
+   * had a reported cost so we don't pretend to know the average.
+   */
+  avgCostPerJob: number | null;
+}
+
+export interface CostTelemetry {
+  /** Jobs in the window whose result.usage was captured. */
+  jobsWithUsage: number;
+  /** Sum of tokens across every driver in the window. */
+  totalTokens: number;
+  /** Sum of reported USD cost across every driver in the window. */
+  totalCostUsd: number;
+  /** Jobs with a finite usage.costUsd across every driver in the window. */
+  jobsWithCost: number;
+  /** Per-agent breakdown, sorted desc by totalCostUsd then totalTokens. */
+  byAgent: AgentCostRow[];
+}
+
 export interface TelemetrySummary {
   /** ISO timestamp of when this snapshot was generated. */
   generatedAt: string;
@@ -173,6 +222,14 @@ export interface TelemetrySummary {
   byState: Record<string, number>;
   blockers: BlockerDistribution;
   autoUnblock: AutoUnblockTelemetry;
+  /**
+   * Phase 6e: per-agent token / cost rollup derived from
+   * `result.usage` across jobs in the window. Operators compare
+   * spend across drivers, tune fallback thresholds, and spot
+   * runaway repos — no new persistence, no new cron: every
+   * invocation re-derives the rollup from on-disk results.
+   */
+  cost: CostTelemetry;
 }
 
 /**
@@ -193,6 +250,7 @@ export function collectTelemetry(options: TelemetryOptions): TelemetrySummary {
   const byState = tallyByState(inWindow);
   const blockers = tallyBlockers(inWindow, options.io);
   const autoUnblock = tallyAutoUnblock(inWindow, options.io);
+  const cost = tallyCost(inWindow, options.io);
 
   return {
     generatedAt: to,
@@ -201,6 +259,7 @@ export function collectTelemetry(options: TelemetryOptions): TelemetrySummary {
     byState,
     blockers,
     autoUnblock,
+    cost,
   };
 }
 
@@ -263,6 +322,32 @@ export function renderTelemetry(summary: TelemetrySummary): string {
           ` recovered=${row.recovered}` +
           ` stillBlocked=${row.stillBlocked}` +
           ` rate=${formatRate(row.recoveryRate)}`,
+      );
+    }
+  }
+  lines.push('');
+
+  lines.push('Cost (Phase 6e per-agent accounting):');
+  const c = summary.cost;
+  lines.push(`  jobs with usage:   ${c.jobsWithUsage} / ${summary.totalJobs}`);
+  lines.push(`  total tokens:      ${c.totalTokens}`);
+  lines.push(`  jobs with cost:    ${c.jobsWithCost}`);
+  lines.push(`  total cost:        ${formatCost(c.totalCostUsd)}`);
+  if (c.byAgent.length === 0) {
+    lines.push('  (no per-agent samples)');
+  } else {
+    lines.push('  by agent:');
+    for (const row of c.byAgent) {
+      lines.push(
+        `    ${row.agent.padEnd(16)}` +
+          ` jobs=${row.jobCount}` +
+          ` withUsage=${row.jobsWithUsage}` +
+          ` in=${row.totalInputTokens}` +
+          ` out=${row.totalOutputTokens}` +
+          ` cache=${row.totalCachedInputTokens}` +
+          ` total=${row.totalTokens}` +
+          ` cost=${formatCost(row.totalCostUsd)}` +
+          ` avg/job=${row.avgCostPerJob == null ? 'n/a' : formatCost(row.avgCostPerJob)}`,
       );
     }
   }
@@ -515,4 +600,140 @@ function percentile(values: number[], p: number): number {
 function formatRate(rate: number | null): string {
   if (rate === null) return 'n/a';
   return `${(rate * 100).toFixed(1)}%`;
+}
+
+/**
+ * Format a USD amount for the human-readable renderTelemetry banner.
+ * Four decimals so a $0.0003 per-job cost still shows something —
+ * Claude Code / Codex bills in tiny increments and rounding to
+ * 2 decimals would erase the signal on short runs.
+ */
+function formatCost(amount: number): string {
+  if (!Number.isFinite(amount)) return '$0.0000';
+  return `$${amount.toFixed(4)}`;
+}
+
+/**
+ * Per-agent token / cost rollup (Phase 6e). Uses `result.usage`
+ * written by `finalizeJob` at the same time blocker_type is written,
+ * so this function re-uses the already-cached `safeLoadResult`
+ * helper and never re-parses worker.log. A job with usage but no
+ * cost still contributes to token totals; a job without usage is
+ * skipped from every sum so claude-code jobs in default text mode
+ * don't drag per-job averages to zero.
+ */
+function tallyCost(jobs: JobStatus[], io: TelemetryIo): CostTelemetry {
+  const byAgent = new Map<string, AgentCostRow>();
+  let jobsWithUsage = 0;
+  let totalTokens = 0;
+  let totalCostUsd = 0;
+  let jobsWithCost = 0;
+
+  for (const job of jobs) {
+    const agent = pickJobAgent(job, io);
+    const row = byAgent.get(agent) || freshAgentRow(agent);
+    row.jobCount++;
+
+    const usage = pickJobUsage(job, io);
+    if (!usage) {
+      byAgent.set(agent, row);
+      continue;
+    }
+    row.jobsWithUsage++;
+    jobsWithUsage++;
+
+    row.totalInputTokens += finite(usage.inputTokens);
+    row.totalOutputTokens += finite(usage.outputTokens);
+    row.totalCachedInputTokens += finite(usage.cachedInputTokens);
+    const jobTotal = pickJobTotalTokens(usage);
+    row.totalTokens += jobTotal;
+    totalTokens += jobTotal;
+
+    if (typeof usage.costUsd === 'number' && Number.isFinite(usage.costUsd)) {
+      row.totalCostUsd += usage.costUsd;
+      row.jobsWithCost++;
+      totalCostUsd += usage.costUsd;
+      jobsWithCost++;
+    }
+
+    byAgent.set(agent, row);
+  }
+
+  for (const row of byAgent.values()) {
+    row.avgCostPerJob = row.jobsWithCost > 0 ? row.totalCostUsd / row.jobsWithCost : null;
+  }
+
+  const sorted = [...byAgent.values()].sort(
+    (a, b) =>
+      b.totalCostUsd - a.totalCostUsd ||
+      b.totalTokens - a.totalTokens ||
+      a.agent.localeCompare(b.agent),
+  );
+
+  return {
+    jobsWithUsage,
+    totalTokens,
+    totalCostUsd,
+    jobsWithCost,
+    byAgent: sorted,
+  };
+}
+
+function pickJobAgent(job: JobStatus, io: TelemetryIo): string {
+  if (typeof job.agent === 'string' && job.agent.length > 0) return job.agent;
+  // Fall back to result.usage.agent (the driver's self-declared name
+  // at parse time); finally bucket as <unknown> so the total still
+  // matches totalJobs.
+  const result = safeLoadResult(io, job.job_id);
+  const usage = pickResultUsage(result);
+  if (usage && typeof usage.agent === 'string' && usage.agent.length > 0) return usage.agent;
+  return '<unknown>';
+}
+
+function pickJobUsage(job: JobStatus, io: TelemetryIo): AgentUsage | null {
+  // Prefer status.usage (written by saveStatus) and fall back to
+  // result.usage so jobs whose status was rewritten by a later
+  // remediation cycle (e.g. __valfix) still surface the captured
+  // sample. Both paths write the same shape, so either is safe.
+  if (job.usage && typeof job.usage === 'object') return job.usage;
+  const result = safeLoadResult(io, job.job_id);
+  return pickResultUsage(result);
+}
+
+function pickResultUsage(result: JobResult | null): AgentUsage | null {
+  if (!result || typeof result !== 'object') return null;
+  const usage = (result as { usage?: unknown }).usage;
+  if (!usage || typeof usage !== 'object') return null;
+  return usage as AgentUsage;
+}
+
+function pickJobTotalTokens(usage: AgentUsage): number {
+  if (typeof usage.totalTokens === 'number' && Number.isFinite(usage.totalTokens)) {
+    return usage.totalTokens;
+  }
+  return (
+    finite(usage.inputTokens) +
+    finite(usage.outputTokens) +
+    finite(usage.cachedInputTokens) +
+    finite(usage.cacheCreationTokens)
+  );
+}
+
+function finite(n: number | undefined | null): number {
+  return typeof n === 'number' && Number.isFinite(n) ? n : 0;
+}
+
+function freshAgentRow(agent: string): AgentCostRow {
+  return {
+    agent,
+    jobCount: 0,
+    jobsWithUsage: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCachedInputTokens: 0,
+    totalTokens: 0,
+    totalCostUsd: 0,
+    jobsWithCost: 0,
+    avgCostPerJob: null,
+  };
 }

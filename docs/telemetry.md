@@ -202,10 +202,18 @@ parent tops out at 2).
    store (S3, Grafana, etc.) if you want time-series instead of
    point-in-time — the file shape is stable and append-safe.
 
+## Per-agent cost rollup (Phase 6e)
+
+Running `ccp-jobs telemetry` also emits a `Cost (Phase 6e per-agent
+accounting):` section summarising token / cost usage per driver
+across the window. Backed by `TelemetrySummary.cost.byAgent`; uses
+`result.usage` written by the finalize path. See
+[cost-accounting.md](./cost-accounting.md) for driver-specific
+parser semantics, opt-in instructions for Claude Code's JSON output
+mode, and the full shape of `CostTelemetry` / `AgentCostRow`.
+
 ## Not in scope (deferred)
 
-- **Per-agent breakdown** (Claude vs Codex). Punted to a separate
-  Phase-1 PR so telemetry stays agent-agnostic.
 - **Alerts / thresholds**. The command prints raw numbers; external
   systems decide what "bad" means.
 - **Time-series persistence**. Derive on demand; cron the JSON form

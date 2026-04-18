@@ -35,7 +35,10 @@ import type {
   AgentDriver,
   AgentPreflight,
   AgentProbeResult,
+  AgentUsage,
+  AgentUsageParseContext,
 } from './types';
+import { parseCodexUsage } from './usage';
 
 // Patterns in worker logs that indicate a transient OpenAI API error
 // (not a code bug in the repo). These are conservative — we don't want
@@ -151,5 +154,19 @@ export const codexDriver: AgentDriver = {
   failurePatterns: {
     apiError: CODEX_API_ERROR_PATTERNS,
     rateLimit: CODEX_RATE_LIMIT_PATTERNS,
+  },
+
+  parseUsage(ctx: AgentUsageParseContext): AgentUsage | null {
+    // Codex's `exec` mode emits either JSONL `turn.completed` events
+    // or a plain-text token summary depending on how the worker was
+    // invoked. Current releases do NOT surface a dollar cost, so the
+    // returned AgentUsage carries token counts only — downstream
+    // consumers that want USD apply a pricing table to the persisted
+    // counts. See docs/cost-accounting.md.
+    try {
+      return parseCodexUsage(ctx.workerLog, 'codex');
+    } catch {
+      return null;
+    }
   },
 };

@@ -9,7 +9,7 @@
  *  - claudeCodeDriver.failurePatterns match the strings outage.ts flagged before
  */
 
-import { resolveAgent, getAgent, listAgents, claudeCodeDriver, codexDriver } from './agents';
+import { resolveAgent, getAgent, listAgents, claudeCodeDriver, codexDriver, parseClaudeUsage, parseCodexUsage } from './agents';
 
 let passed = 0;
 let failed = 0;
@@ -414,6 +414,211 @@ console.log('\nTest: resolveAgent: omitting checkCircuit never triggers fallback
     assert(r.driver === claudeCodeDriver, 'static resolution never swaps');
     assert(r.fellBackDueToOutage === false, 'no outage swap');
   });
+}
+
+// ── Phase 6e: parseClaudeUsage ──
+const fixedClock = (): string => '2026-04-17T05:00:00Z';
+
+console.log('\nTest: parseClaudeUsage: single final JSON object from --output-format=json');
+{
+  const log = [
+    'Starting work on ENG-42 ...',
+    'thinking...',
+    '{"type":"result","subtype":"success","total_cost_usd":0.0432,"usage":{"input_tokens":1250,"output_tokens":780,"cache_read_input_tokens":14000,"cache_creation_input_tokens":200},"model":"claude-sonnet-4-5"}',
+  ].join('\n');
+  const u = parseClaudeUsage(log, 'claude-code', fixedClock);
+  assert(u !== null, 'returns AgentUsage');
+  assert(u!.agent === 'claude-code', 'agent stamped');
+  assert(u!.model === 'claude-sonnet-4-5', 'model picked up');
+  assert(u!.costUsd === 0.0432, 'costUsd extracted');
+  assert(u!.inputTokens === 1250, 'inputTokens extracted');
+  assert(u!.outputTokens === 780, 'outputTokens extracted');
+  assert(u!.cachedInputTokens === 14000, 'cachedInputTokens extracted');
+  assert(u!.cacheCreationTokens === 200, 'cacheCreationTokens extracted');
+  assert(u!.totalTokens === 1250 + 780 + 14000 + 200, 'totalTokens summed');
+  assert(u!.capturedAt === '2026-04-17T05:00:00Z', 'clock used for capturedAt');
+  assert(u!.source === 'claude-code:json', 'source stamped');
+}
+
+console.log('\nTest: parseClaudeUsage: NDJSON stream picks LAST result event');
+{
+  const log = [
+    '{"type":"assistant","usage":{"input_tokens":10,"output_tokens":20}}',
+    '{"type":"assistant","usage":{"input_tokens":30,"output_tokens":40}}',
+    '{"type":"result","total_cost_usd":0.12,"usage":{"input_tokens":100,"output_tokens":200}}',
+  ].join('\n');
+  const u = parseClaudeUsage(log, 'claude-code', fixedClock);
+  assert(u !== null && u.inputTokens === 100, 'last result event wins (cumulative)');
+  assert(u !== null && u.costUsd === 0.12, 'cost from result event');
+}
+
+console.log('\nTest: parseClaudeUsage: log with no cost/usage returns null');
+{
+  const log = 'Worker starting...\nCoded change.\nWORKER_EXIT_CODE: 0\n';
+  assert(parseClaudeUsage(log, 'claude-code', fixedClock) === null, 'text-only log → null');
+}
+
+console.log('\nTest: parseClaudeUsage: malformed JSON blocks return null');
+{
+  const log = 'noise { not "total_cost_usd": json ';
+  assert(parseClaudeUsage(log, 'claude-code', fixedClock) === null, 'unterminated → null');
+}
+
+console.log('\nTest: parseClaudeUsage: total_cost_usd only, no usage block');
+{
+  const log = '{"type":"result","total_cost_usd":0.01}';
+  const u = parseClaudeUsage(log, 'claude-code', fixedClock);
+  assert(u !== null, 'returns AgentUsage when only cost present');
+  assert(u!.costUsd === 0.01, 'cost stamped');
+  assert(u!.inputTokens === undefined, 'no tokens when absent');
+  assert(u!.totalTokens === undefined || u!.totalTokens === 0 || u!.totalTokens === null, 'totalTokens null when no inputs');
+}
+
+console.log('\nTest: parseClaudeUsage: empty string and non-string returns null');
+{
+  assert(parseClaudeUsage('', 'claude-code', fixedClock) === null, 'empty log → null');
+  assert(parseClaudeUsage(null as unknown as string, 'claude-code', fixedClock) === null, 'null log → null');
+  assert(parseClaudeUsage(undefined as unknown as string, 'claude-code', fixedClock) === null, 'undefined log → null');
+}
+
+console.log('\nTest: parseClaudeUsage: usage with string-typed numbers still parses');
+{
+  const log = '{"type":"result","total_cost_usd":"0.05","usage":{"input_tokens":"500","output_tokens":"1,200"}}';
+  const u = parseClaudeUsage(log, 'claude-code', fixedClock);
+  assert(u !== null && u.costUsd === 0.05, 'cost coerced from string');
+  assert(u !== null && u.inputTokens === 500, 'input coerced from string');
+  assert(u !== null && u.outputTokens === 1200, 'output coerces comma-separated string');
+}
+
+console.log('\nTest: parseClaudeUsage: empty-string numeric fields are absent (not 0)');
+{
+  // Regression: pickNumber("") used to return 0 because Number("") === 0.
+  // Empty / whitespace-only strings must coerce to null so an empty usage
+  // block doesn't silently fabricate a zero-token record.
+  const log = '{"type":"result","total_cost_usd":"","usage":{"input_tokens":"","output_tokens":"   ","cache_read_input_tokens":",,,"}}';
+  const u = parseClaudeUsage(log, 'claude-code', fixedClock);
+  // Every numeric field is empty → no useful signal → parser returns null.
+  assert(u === null, 'all-empty usage returns null (no zero fabrication)');
+}
+
+console.log('\nTest: parseClaudeUsage: non-numeric values are skipped');
+{
+  const log = '{"type":"result","total_cost_usd":"not-a-number","usage":{"input_tokens":"NaN","output_tokens":42}}';
+  const u = parseClaudeUsage(log, 'claude-code', fixedClock);
+  assert(u !== null, 'still returns (partial is better than null when any field usable)');
+  assert(u !== null && u.costUsd === undefined, 'bogus cost dropped');
+  assert(u !== null && u.inputTokens === undefined, 'NaN dropped');
+  assert(u !== null && u.outputTokens === 42, 'valid output preserved');
+}
+
+// ── Phase 6e: parseCodexUsage ──
+console.log('\nTest: parseCodexUsage: turn.completed JSONL event');
+{
+  const log = [
+    '{"type":"turn.start"}',
+    '{"type":"turn.completed","usage":{"input_tokens":2000,"output_tokens":500,"cached_input_tokens":10000},"model":"gpt-5"}',
+  ].join('\n');
+  const u = parseCodexUsage(log, 'codex', fixedClock);
+  assert(u !== null, 'returns AgentUsage');
+  assert(u!.agent === 'codex', 'agent=codex');
+  assert(u!.model === 'gpt-5', 'model picked up');
+  assert(u!.inputTokens === 2000, 'inputTokens');
+  assert(u!.outputTokens === 500, 'outputTokens');
+  assert(u!.cachedInputTokens === 10000, 'cachedInputTokens');
+  assert(u!.totalTokens === 2000 + 500 + 10000, 'totalTokens summed');
+  assert(u!.costUsd === undefined, 'no cost (Codex does not self-report USD)');
+  assert(u!.source === 'codex:turn.completed', 'source stamped');
+}
+
+console.log('\nTest: parseCodexUsage: last turn.completed wins when multiple present');
+{
+  const log = [
+    '{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":10}}',
+    '{"type":"turn.completed","usage":{"input_tokens":999,"output_tokens":77}}',
+  ].join('\n');
+  const u = parseCodexUsage(log, 'codex', fixedClock);
+  assert(u !== null && u.inputTokens === 999, 'last event cumulative wins');
+  assert(u !== null && u.outputTokens === 77, 'last output wins');
+}
+
+console.log('\nTest: parseCodexUsage: token_count rollout event');
+{
+  const log = '{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":50,"output_tokens":25,"cached_input_tokens":0}}}}';
+  const u = parseCodexUsage(log, 'codex', fixedClock);
+  assert(u !== null, 'token_count shape parses');
+  assert(u!.inputTokens === 50, 'input');
+  assert(u!.outputTokens === 25, 'output');
+  assert(u!.totalTokens === 75, 'total summed');
+  assert(u!.source === 'codex:token_count', 'source labels rollout shape');
+}
+
+console.log('\nTest: parseCodexUsage: plain-text "tokens used: N in / M out"');
+{
+  const log = [
+    'codex exec starting...',
+    'work done.',
+    'tokens used: 1,234 in / 567 out (cached 890)',
+  ].join('\n');
+  const u = parseCodexUsage(log, 'codex', fixedClock);
+  assert(u !== null, 'text summary parses');
+  assert(u!.inputTokens === 1234, 'input (comma-stripped)');
+  assert(u!.outputTokens === 567, 'output');
+  assert(u!.cachedInputTokens === 890, 'cached');
+  assert(u!.source === 'codex:text-summary', 'text-summary source');
+}
+
+console.log('\nTest: parseCodexUsage: no recognisable signal returns null');
+{
+  assert(parseCodexUsage('Just a worker log', 'codex', fixedClock) === null, 'plain text → null');
+  assert(parseCodexUsage('', 'codex', fixedClock) === null, 'empty → null');
+  assert(parseCodexUsage('{"unrelated":"json"}', 'codex', fixedClock) === null, 'unrelated json → null');
+}
+
+console.log('\nTest: parseCodexUsage: prefers JSONL over text summary');
+{
+  const log = [
+    '{"type":"turn.completed","usage":{"input_tokens":111,"output_tokens":222}}',
+    'tokens used: 9999 in / 9999 out',
+  ].join('\n');
+  const u = parseCodexUsage(log, 'codex', fixedClock);
+  assert(u !== null && u.inputTokens === 111, 'JSONL wins (text form is usually a duplicate summary)');
+}
+
+console.log('\nTest: parseCodexUsage: turn.completed with usage block but no numeric fields');
+{
+  const log = '{"type":"turn.completed","usage":{"input_tokens":"bad","output_tokens":null}}';
+  const u = parseCodexUsage(log, 'codex', fixedClock);
+  // Falls through past the usage-block scan to the text-summary
+  // scan; with no text summary either, returns null.
+  assert(u === null, 'all non-numeric → null (no text summary fallback present)');
+}
+
+// ── parseUsage integration: drivers wire their helper correctly ──
+console.log('\nTest: claudeCodeDriver.parseUsage ties into parseClaudeUsage');
+{
+  const u = claudeCodeDriver.parseUsage!({
+    jobDir: '/tmp/job-x',
+    workerLog: '{"type":"result","total_cost_usd":0.5,"usage":{"input_tokens":1,"output_tokens":2}}',
+  });
+  assert(u !== null && u.agent === 'claude-code', 'driver method returns claude-code usage');
+  assert(u !== null && u.costUsd === 0.5, 'cost pass-through');
+}
+
+console.log('\nTest: codexDriver.parseUsage ties into parseCodexUsage');
+{
+  const u = codexDriver.parseUsage!({
+    jobDir: '/tmp/job-y',
+    workerLog: '{"type":"turn.completed","usage":{"input_tokens":3,"output_tokens":4}}',
+  });
+  assert(u !== null && u.agent === 'codex', 'driver method returns codex usage');
+  assert(u !== null && u.totalTokens === 7, 'tokens summed');
+}
+
+console.log('\nTest: driver parseUsage never throws on malformed input');
+{
+  const pathologic = '{'.repeat(100) + '"type":"result"' + '}'.repeat(50);
+  assert(claudeCodeDriver.parseUsage!({ jobDir: '/', workerLog: pathologic }) === null, 'claude: pathologic → null');
+  assert(codexDriver.parseUsage!({ jobDir: '/', workerLog: pathologic }) === null, 'codex: pathologic → null');
 }
 
 console.log(`\nTotal: ${passed} passed, ${failed} failed`);

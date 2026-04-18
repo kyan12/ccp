@@ -578,6 +578,14 @@ export interface JobStatus {
    * job tracks its own (independent) state the same way.
    */
   autoUnblock?: AutoUnblockState;
+  /**
+   * Phase 6e: per-agent token / cost sample captured from the agent
+   * CLI's self-report at finalize time. Absent when the CLI's output
+   * format doesn't surface usage (Claude's default text `--print`) or
+   * when the parser couldn't recognise any signal. See
+   * `AgentDriver.parseUsage` + `docs/cost-accounting.md`.
+   */
+  usage?: import('./lib/agents/types').AgentUsage;
 }
 
 // ── Job result ──
@@ -650,6 +658,16 @@ export interface JobResult {
   worker_exit_code?: number;
   proof?: RepoProof;
   validation?: ValidationReport;
+  /**
+   * Phase 6e: per-agent token / cost sample captured from the agent
+   * CLI's self-report at finalize time. Mirrors `status.usage` so
+   * downstream consumers (telemetry, dashboard) can read cost off the
+   * stable per-job record without loading status.json. Absent when
+   * the CLI's output format doesn't surface usage (Claude's default
+   * text `--print`) or when the parser couldn't recognise any
+   * signal. See `AgentDriver.parseUsage` + `docs/cost-accounting.md`.
+   */
+  usage?: import('./lib/agents/types').AgentUsage;
   updated_at: string;
 }
 
