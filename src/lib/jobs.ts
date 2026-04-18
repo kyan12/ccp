@@ -1524,9 +1524,33 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
   const scriptFile = path.join(jobDir(jobId), 'worker.sh');
   fs.writeFileSync(scriptFile, shellScript, { mode: 0o755 });
 
-  const out = run(pf.tmux, ['new-session', '-d', '-s', session, 'bash', '-l', scriptFile]);
-  if (out.status !== 0) {
-    throw new Error((out.stderr || out.stdout || 'tmux new-session failed').trim());
+  // Phase 3: any post-acquire failure (tmux new-session, fs write, agent
+  // build throw) must release the worktree we just allocated — otherwise
+  // the job goes to `blocked` via startJob's catch and the worktree
+  // directory leaks forever, since finalizeJob only runs for
+  // state === 'running' jobs. Best-effort release: log and swallow any
+  // secondary failure so the original error still surfaces.
+  try {
+    const out = run(pf.tmux, ['new-session', '-d', '-s', session, 'bash', '-l', scriptFile]);
+    if (out.status !== 0) {
+      throw new Error((out.stderr || out.stdout || 'tmux new-session failed').trim());
+    }
+  } catch (err) {
+    if (workdir) {
+      try {
+        const release = releaseWorktree(workdir, packet.repo);
+        appendLog(
+          jobId,
+          `[${nowIso()}] worktree release (startTmuxWorker failed): ${release.ok ? 'ok' : 'failed'} — ${release.detail}`,
+        );
+      } catch (releaseErr) {
+        appendLog(
+          jobId,
+          `[${nowIso()}] worktree release (startTmuxWorker failed) errored: ${(releaseErr as Error).message}`,
+        );
+      }
+    }
+    throw err;
   }
   return session;
 }
