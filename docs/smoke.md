@@ -1,4 +1,4 @@
-# Preview-URL Smoke Tests (Phase 4 PR B + PR C)
+# Preview-URL Smoke Tests (Phase 4 PRs B–D)
 
 After the [preview-URL extractor](./preview-url.md) detects a PR's Vercel
 deployment URL, the supervisor can run a lightweight smoke test against
@@ -10,9 +10,11 @@ it. Two runners are supported:
   Firefox / WebKit), navigates to the preview URL, and optionally
   evaluates a JS expression inside the page.
 
-Failures from **either** runner are persisted and logged but — in this
-PR — do **not** gate the job state. Phase 4 PR D will promote this to a
-gate.
+**Phase 4 PR D** additionally lets failures gate the job state and
+auto-spawn a `__deployfix` remediation. Gating is **opt-in** per repo
+(`smoke.gate: true`) and defaults off, so upgrading to PR D is
+backwards-compatible — every repo stays informational-only until you
+explicitly flip the flag.
 
 ## What it does
 
@@ -68,6 +70,7 @@ Opt in per repo via `configs/repos.json`:
 | `userAgent`    | `ccp-smoke/0.1`  | Forwarded as `User-Agent` header.                          |
 | `runner`       | `http`           | `http` or `playwright`. See below for the Playwright runner. |
 | `playwright`   | `{}`             | Sub-config passed to the Playwright runner when `runner:'playwright'`. |
+| `gate`         | `false`          | Phase 4 PR D — when true, a failing smoke result blocks the job and spawns `__deployfix`. See [Gating](#gating-phase-4-pr-d). |
 
 ## Playwright runner (PR C)
 
@@ -157,6 +160,51 @@ so a misbehaving renderer can't leak into the long-running daemon.
 | `skipped`  | `smoke.enabled` is false or no preview URL has been detected yet.    |
 | `unknown`  | Catch-all for unexpected exceptions from the fetcher.                |
 
+## Gating (Phase 4 PR D)
+
+When `smoke.gate: true` (per repo) **and** a failing `SmokeResult` is
+produced (`ok: false` and `failure.kind !== 'skipped'`), the pr-watcher
+cycle:
+
+1. Sets `result.state = 'blocked'`,
+   `result.blocker_type = 'smoke-failed'`, `result.prod = 'no'`, and
+   appends a `smoke:<kind>` entry to `result.failed_checks` (deduped
+   against any existing failing-check names from PR-review).
+2. Writes a human-readable `result.blocker` with the failure kind, URL,
+   status, title, and duration.
+3. If `CCP_PR_REMEDIATE_ENABLED` is not `false`, spawns a
+   `__deployfix` remediation job on the **existing PR branch** with the
+   full smoke failure context in `review_feedback`. The remediation's
+   agent is instructed to push fixes to the same branch, not open a new
+   PR.
+
+The remediation depth-guard (`__deployfix|__reviewfix|__valfix` in the
+job ID) prevents a smoke-failed remediation from re-spawning another
+`__deployfix` — one layer of auto-remediation per original ticket.
+
+### Global override
+
+Set `CCP_SMOKE_GATE=true` on the supervisor process to force gating on
+across every repo (useful for a fleet-wide canary), or `=false` to
+hard-disable it regardless of per-repo config. Any ambiguous value
+(`maybe`, `null`, `""`, unset) falls through to the per-repo flag.
+
+### Operator workflow for `blocker_type: 'smoke-failed'`
+
+1. The dashboard surfaces the blocker message and the `smoke:<kind>`
+   failed check, along with the preview URL.
+2. The spawned `__deployfix` job picks up the existing branch and its
+   agent tries to fix the runtime issue — typically a missing env var, a
+   runtime error, or a broken build output.
+3. When `__deployfix` pushes, the next watcher cycle re-runs smoke
+   against the redeployed preview. If it passes, the original job's PR
+   can be merged normally; the `smoke-failed` blocker never auto-clears
+   on its own, so operators explicitly transition the parent job back to
+   `coded`/`done` once the remediation lands and they've re-verified.
+4. If the root cause is external (Vercel outage, third-party API), the
+   remediation agent should leave a precise blocker note rather than
+   flail indefinitely.
+
 ## How to consume
 
 Downstream tools (dashboard, Discord bot, remediation) should read
@@ -210,6 +258,16 @@ if (result.smoke && result.smoke.ok === false) {
 3. Watch `worker.log` for `pr-watcher: smoke …` lines on the next
    cycle. Confirm pass/fail accuracy against your repo's expected
    behavior.
-4. Repeat for additional repos. Land PR D (gate + `__deployfix`
-   remediation) when smoke results are trusted enough to drive the job
-   state machine.
+4. Land PR D (gate + `__deployfix` remediation). Gate stays **off**
+   (`smoke.gate: false` by default) so nothing changes for existing
+   repos.
+5. When smoke results are trusted on a repo, flip `smoke.gate: true`
+   for that repo and redeploy the supervisor. The next failing smoke
+   on that repo will transition its job to
+   `blocked (blocker_type: smoke-failed)` and spawn a `__deployfix`
+   remediation job on the existing PR branch.
+6. (Optional) Set `CCP_SMOKE_GATE=true` globally once every repo is
+   healthy enough to tolerate gating. This is equivalent to setting
+   `smoke.gate: true` on every mapping; `CCP_SMOKE_GATE=false`
+   hard-disables gating fleet-wide and overrides per-repo `gate: true`
+   — useful for a quick kill-switch during provider outages.

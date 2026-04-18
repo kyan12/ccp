@@ -21,7 +21,41 @@ const {
   extractTitle,
   truncateBodyExcerpt,
   runHttpSmoke,
+  shouldGateOnSmoke,
+  buildSmokeBlocker,
 } = smoke;
+
+// Helper: build a passing SmokeResult for gate-tests.
+function mkOkResult(overrides: Partial<SmokeResult> = {}): SmokeResult {
+  return {
+    ok: true,
+    url: 'https://app.vercel.app/',
+    status: 200,
+    title: 'My App',
+    durationMs: 120,
+    finishedAt: '2025-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+// Helper: build a failing SmokeResult for gate-tests.
+function mkFailResult(
+  kind: NonNullable<SmokeResult['failure']>['kind'] = 'status',
+  overrides: Partial<SmokeResult> = {},
+): SmokeResult {
+  return {
+    ok: false,
+    url: 'https://app.vercel.app/',
+    status: 500,
+    durationMs: 180,
+    finishedAt: '2025-01-01T00:00:00.000Z',
+    failure: {
+      kind,
+      message: `example ${kind} failure`,
+    },
+    ...overrides,
+  };
+}
 
 let passed = 0;
 let failed = 0;
@@ -435,6 +469,233 @@ async function runAll(): Promise<void> {
       m.fetcher,
     );
     await asyncAssert(m.calls[0].opts.timeoutMs === 45_000, '45s → 45000ms');
+  }
+
+  // --------------------------------------------------------------------
+  // shouldGateOnSmoke (Phase 4 PR D)
+  // --------------------------------------------------------------------
+  console.log('Test: shouldGateOnSmoke — passing result never gates');
+  {
+    const saved = process.env.CCP_SMOKE_GATE;
+    delete process.env.CCP_SMOKE_GATE;
+    assert(
+      shouldGateOnSmoke({ enabled: true, gate: true }, mkOkResult()) === false,
+      'ok=true does not gate even with gate=true',
+    );
+    if (saved !== undefined) process.env.CCP_SMOKE_GATE = saved;
+  }
+
+  console.log('Test: shouldGateOnSmoke — null/undefined result never gates');
+  {
+    const saved = process.env.CCP_SMOKE_GATE;
+    delete process.env.CCP_SMOKE_GATE;
+    assert(shouldGateOnSmoke({ enabled: true, gate: true }, null) === false, 'null result');
+    assert(shouldGateOnSmoke({ enabled: true, gate: true }, undefined) === false, 'undefined result');
+    if (saved !== undefined) process.env.CCP_SMOKE_GATE = saved;
+  }
+
+  console.log('Test: shouldGateOnSmoke — skipped failure never gates');
+  {
+    const saved = process.env.CCP_SMOKE_GATE;
+    delete process.env.CCP_SMOKE_GATE;
+    const skipped = mkFailResult('skipped');
+    assert(
+      shouldGateOnSmoke({ enabled: true, gate: true }, skipped) === false,
+      'kind:skipped does not gate even with gate=true',
+    );
+    process.env.CCP_SMOKE_GATE = 'true';
+    assert(
+      shouldGateOnSmoke({ enabled: true, gate: true }, skipped) === false,
+      'CCP_SMOKE_GATE=true does not override kind:skipped',
+    );
+    if (saved !== undefined) process.env.CCP_SMOKE_GATE = saved;
+    else delete process.env.CCP_SMOKE_GATE;
+  }
+
+  console.log('Test: shouldGateOnSmoke — per-repo gate triggers on failure');
+  {
+    const saved = process.env.CCP_SMOKE_GATE;
+    delete process.env.CCP_SMOKE_GATE;
+    const fail = mkFailResult('status');
+    assert(shouldGateOnSmoke({ enabled: true, gate: true }, fail) === true, 'gate=true + failing');
+    assert(shouldGateOnSmoke({ enabled: true, gate: false }, fail) === false, 'gate=false + failing');
+    assert(shouldGateOnSmoke({ enabled: true }, fail) === false, 'missing gate defaults to false');
+    assert(shouldGateOnSmoke(null, fail) === false, 'null config does not trigger');
+    assert(shouldGateOnSmoke(undefined, fail) === false, 'undefined config does not trigger');
+    if (saved !== undefined) process.env.CCP_SMOKE_GATE = saved;
+  }
+
+  console.log('Test: shouldGateOnSmoke — global CCP_SMOKE_GATE override');
+  {
+    const saved = process.env.CCP_SMOKE_GATE;
+    const fail = mkFailResult('timeout');
+    process.env.CCP_SMOKE_GATE = 'true';
+    assert(
+      shouldGateOnSmoke({ enabled: true, gate: false }, fail) === true,
+      'CCP_SMOKE_GATE=true overrides per-repo false',
+    );
+    assert(shouldGateOnSmoke(null, fail) === true, 'CCP_SMOKE_GATE=true works with null config');
+    process.env.CCP_SMOKE_GATE = 'false';
+    assert(
+      shouldGateOnSmoke({ enabled: true, gate: true }, fail) === false,
+      'CCP_SMOKE_GATE=false overrides per-repo true',
+    );
+    process.env.CCP_SMOKE_GATE = '1';
+    assert(shouldGateOnSmoke(null, fail) === true, '"1" parses as true');
+    process.env.CCP_SMOKE_GATE = '0';
+    assert(
+      shouldGateOnSmoke({ enabled: true, gate: true }, fail) === false,
+      '"0" parses as false',
+    );
+    process.env.CCP_SMOKE_GATE = 'off';
+    assert(
+      shouldGateOnSmoke({ enabled: true, gate: true }, fail) === false,
+      '"off" parses as false',
+    );
+    process.env.CCP_SMOKE_GATE = 'on';
+    assert(shouldGateOnSmoke(null, fail) === true, '"on" parses as true');
+    process.env.CCP_SMOKE_GATE = 'maybe';
+    assert(
+      shouldGateOnSmoke({ enabled: true, gate: true }, fail) === true,
+      'unknown env value falls back to per-repo (true)',
+    );
+    assert(
+      shouldGateOnSmoke({ enabled: true, gate: false }, fail) === false,
+      'unknown env value falls back to per-repo (false)',
+    );
+    if (saved !== undefined) process.env.CCP_SMOKE_GATE = saved;
+    else delete process.env.CCP_SMOKE_GATE;
+  }
+
+  console.log('Test: shouldGateOnSmoke — resolveSmokeConfig gate defaulting');
+  {
+    const r1 = resolveSmokeConfig({ enabled: true });
+    assert(r1.gate === false, 'missing gate resolves to false');
+    const r2 = resolveSmokeConfig({ enabled: true, gate: true });
+    assert(r2.gate === true, 'gate=true resolves to true');
+    const r3 = resolveSmokeConfig({ enabled: true, gate: false });
+    assert(r3.gate === false, 'gate=false resolves to false');
+    // Non-boolean gate values must not silently enable gating — only strict
+    // `true` resolves to true. This guards against a stringified config
+    // ("gate": "yes") flipping gating on accidentally.
+    const r4 = resolveSmokeConfig({ enabled: true, gate: 'yes' as unknown as boolean });
+    assert(r4.gate === false, 'stringy gate:"yes" resolves to false (not silently enabled)');
+  }
+
+  // --------------------------------------------------------------------
+  // buildSmokeBlocker (Phase 4 PR D)
+  // --------------------------------------------------------------------
+  console.log('Test: buildSmokeBlocker — status failure carries kind + status + url');
+  {
+    const r = mkFailResult('status', {
+      status: 502,
+      failure: { kind: 'status', message: 'expected one of 200,302 but got 502' },
+    });
+    const b = buildSmokeBlocker(r);
+    assert(/smoke test failed on preview deployment \(status\)/.test(b.message), 'message header includes kind');
+    assert(/expected one of 200,302 but got 502/.test(b.message), 'message carries runner message');
+    assert(/status=502/.test(b.message), 'status=502 rendered');
+    assert(b.failedChecks.length === 1, 'one failed_check entry');
+    assert(b.failedChecks[0].name === 'smoke:status', 'check name encodes kind');
+    assert(b.failedChecks[0].state === 'FAILURE', 'non-timeout kinds render as FAILURE');
+    assert(b.failedChecks[0].url === r.url, 'failed_check carries the URL');
+    assert(b.feedback.some((l: string) => /Preview-URL smoke test failed against/.test(l)), 'feedback starts with banner');
+    assert(b.feedback.some((l: string) => /Failure kind: `status`/.test(l)), 'feedback includes backticked kind');
+    assert(b.feedback.some((l: string) => /Observed HTTP status: 502/.test(l)), 'feedback carries observed status');
+    assert(
+      b.feedback.some((l: string) => /Push fixes to the existing PR branch/.test(l)),
+      'feedback ends with actionable instruction',
+    );
+  }
+
+  console.log('Test: buildSmokeBlocker — timeout renders as TIMED_OUT');
+  {
+    const r = mkFailResult('timeout', {
+      failure: { kind: 'timeout', message: 'request exceeded 15s' },
+    });
+    const b = buildSmokeBlocker(r);
+    assert(b.failedChecks[0].state === 'TIMED_OUT', 'timeout → TIMED_OUT state');
+    assert(b.failedChecks[0].name === 'smoke:timeout', 'timeout check name');
+  }
+
+  console.log('Test: buildSmokeBlocker — bodyExcerpt forwarded to feedback when present');
+  {
+    const r = mkFailResult('status', {
+      failure: {
+        kind: 'status',
+        message: 'expected one of 200 but got 404',
+        bodyExcerpt: '<html><body>Not Found</body></html>',
+      },
+    });
+    const b = buildSmokeBlocker(r);
+    assert(
+      b.feedback.some((l: string) => /Response body excerpt:/.test(l) && /Not Found/.test(l)),
+      'feedback carries body excerpt',
+    );
+  }
+
+  console.log('Test: buildSmokeBlocker — blank bodyExcerpt omitted from feedback');
+  {
+    const r = mkFailResult('status', {
+      failure: { kind: 'status', message: 'failure', bodyExcerpt: '   \n  ' },
+    });
+    const b = buildSmokeBlocker(r);
+    assert(!b.feedback.some((l: string) => /Response body excerpt:/.test(l)), 'blank excerpt omitted');
+  }
+
+  console.log('Test: buildSmokeBlocker — screenshotPath surfaced when Playwright populates it');
+  {
+    const r = mkFailResult('title', {
+      title: 'ReferenceError',
+      failure: {
+        kind: 'title',
+        message: 'title did not match /My App/i',
+        screenshotPath: '/jobs/abc123/smoke-failure.png',
+      },
+    });
+    const b = buildSmokeBlocker(r);
+    assert(
+      b.feedback.some((l: string) => /Screenshot captured at \/jobs\/abc123\/smoke-failure\.png/.test(l)),
+      'feedback references the screenshot path',
+    );
+    assert(
+      b.feedback.some((l: string) => /Observed <title>: "ReferenceError"/.test(l)),
+      'feedback carries observed title',
+    );
+  }
+
+  console.log('Test: buildSmokeBlocker — missing failure field falls back to kind:unknown');
+  {
+    // Defensive: the runner contract says failure is always set on ok=false,
+    // but a malformed persisted result.json shouldn't crash the builder.
+    const r: SmokeResult = {
+      ok: false,
+      url: 'https://app.vercel.app/',
+      durationMs: 0,
+      finishedAt: '2025-01-01T00:00:00.000Z',
+    };
+    const b = buildSmokeBlocker(r);
+    assert(/\(unknown\): smoke check failed/.test(b.message), 'message falls back to unknown kind + default msg');
+    assert(b.failedChecks[0].name === 'smoke:unknown', 'check name falls back to smoke:unknown');
+    assert(b.failedChecks[0].state === 'FAILURE', 'unknown kind renders as FAILURE (not TIMED_OUT)');
+  }
+
+  console.log('Test: buildSmokeBlocker — empty url placeholder + missing status/title omitted');
+  {
+    const r: SmokeResult = {
+      ok: false,
+      url: '',
+      durationMs: 0,
+      finishedAt: '2025-01-01T00:00:00.000Z',
+      failure: { kind: 'network', message: 'ECONNREFUSED' },
+    };
+    const b = buildSmokeBlocker(r);
+    assert(/\(unknown preview URL\)/.test(b.message), 'empty URL renders as placeholder');
+    assert(!/status=/.test(b.message), 'missing status omitted from message');
+    assert(!/title=/.test(b.message), 'missing title omitted from message');
+    assert(b.failedChecks[0].url === null, 'failed_check URL is null when smoke URL was empty');
+    assert(!b.feedback.some((l: string) => /Observed HTTP status/.test(l)), 'no status feedback line when status missing');
+    assert(!b.feedback.some((l: string) => /Observed <title>/.test(l)), 'no title feedback line when title missing');
   }
 
   console.log(`smoke.test: ${passed} passed, ${failed} failed`);
