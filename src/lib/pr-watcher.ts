@@ -4,7 +4,7 @@ import { spawnSync } from 'child_process';
 import type { JobStatus, JobResult, JobPacket, PRReviewResult, PrWatcherCycleResult, RunResult, SmokeResult } from '../types';
 const { reviewPr } = require('./pr-review');
 const { findRepoByPath } = require('./repos');
-const { runSmoke } = require('./smoke');
+const { runSmoke, shouldGateOnSmoke, buildSmokeBlocker } = require('./smoke');
 const {
   JOBS_DIR,
   listJobs,
@@ -439,6 +439,84 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
             jobId,
             `[${nowIso()}] pr-watcher: smoke ${smokeResult.url} \u2014 ${outcome}`,
           );
+
+          // Phase 4 PR D: gate the job on smoke results when configured.
+          //
+          // Gating is opt-in per repo (`smoke.gate: true`) or globally via
+          // `CCP_SMOKE_GATE=true`. When enabled and the smoke failed, we
+          // demote the job to `blocked` with `blocker_type: 'smoke-failed'`,
+          // record failed_checks so the dashboard surfaces the regression,
+          // and queue a `__deployfix` remediation that reuses the existing
+          // PR branch. The remediation depth guard in
+          // `maybeEnqueueSmokeRemediation` prevents cascades on remediation
+          // job IDs (`__deployfix|__reviewfix|__valfix`).
+          const shouldGate = shouldGateOnSmoke(smokeCfg, smokeResult);
+          if (shouldGate) {
+            const smokeBlocker = buildSmokeBlocker(smokeResult);
+            // Update result.json with blocker + failed_checks + preserve
+            // other fields. Read-modify-write is best-effort — a failure
+            // here must not break the watcher cycle.
+            try {
+              const rPath = resultPath(jobId);
+              const fresh: JobResult = readJson(rPath);
+              fresh.state = 'blocked';
+              fresh.blocker = smokeBlocker.message;
+              fresh.blocker_type = 'smoke-failed';
+              fresh.prod = 'no';
+              fresh.verified = 'not yet';
+              // Merge failed_checks so a prior deploy/review blocker's
+              // failing checks (if any) aren't erased. Dedupe by `name`.
+              const existingChecks = fresh.failed_checks || [];
+              const existingNames = new Set(existingChecks.map((c) => c.name));
+              const merged = [...existingChecks];
+              for (const fc of smokeBlocker.failedChecks) {
+                if (!existingNames.has(fc.name)) merged.push(fc);
+              }
+              fresh.failed_checks = merged;
+              fs.writeFileSync(rPath, JSON.stringify(fresh, null, 2));
+            } catch (e) {
+              process.stderr.write(
+                `[pr-watcher] failed to write smoke blocker for ${jobId}: ${(e as Error).message}\n`,
+              );
+            }
+            saveStatus(jobId, { state: 'blocked' });
+            appendLog(
+              jobId,
+              `[${nowIso()}] pr-watcher: smoke gate \u2014 job transitioned to blocked (blocker_type=smoke-failed)`,
+            );
+            entry.action = 'smoke-gated';
+            entry.stateChange = `${status.state}\u2192blocked`;
+            // Spawn __deployfix remediation (best-effort; guarded by
+            // CCP_PR_REMEDIATE_ENABLED + the depth guard inside).
+            if (remediationEnabled() && !remediationExists(jobId)) {
+              try {
+                const { maybeEnqueueSmokeRemediation } = require('./jobs');
+                // maybeEnqueueSmokeRemediation re-reads result.json via its
+                // `result` arg, so pass a fresh copy that reflects the
+                // blocker_type we just wrote.
+                const fresh: JobResult = readJson(resultPath(jobId));
+                const remResult = maybeEnqueueSmokeRemediation(jobId, packet, fresh);
+                entry.remediation = remResult;
+                if (remResult.ok && !remResult.skipped && DISCORD_STATUS_CHANNEL) {
+                  try {
+                    const repoName = packet.repo ? packet.repo.split('/').pop() : 'unknown';
+                    sendDiscordMessage(
+                      DISCORD_STATUS_CHANNEL,
+                      `\ud83d\udd25 Smoke gate \u2014 ${packet.ticket_id || jobId} | ${repoName} | fix job: ${remResult.job_id}`,
+                    );
+                  } catch (e) {
+                    process.stderr.write(
+                      `[pr-watcher] discord smoke-gate status msg failed: ${(e as Error).message}\n`,
+                    );
+                  }
+                }
+              } catch (e) {
+                process.stderr.write(
+                  `[pr-watcher] smoke remediation enqueue failed for ${jobId}: ${(e as Error).message}\n`,
+                );
+              }
+            }
+          }
         } catch (e) {
           // Defensive — the runner is supposed to translate every failure
           // into a SmokeResult; if it throws, swallow so we don't break

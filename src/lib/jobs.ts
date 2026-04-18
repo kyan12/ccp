@@ -11,6 +11,7 @@ import { run, commandExists, shellQuote } from './shell';
 import { resolveAgent, getAgent, claudeCodeDriver } from './agents';
 import type { AgentDriver } from './agents';
 import { runValidation, summarizeReport, shouldGateOnValidation, buildValidationBlocker } from './validator';
+import { buildSmokeBlocker } from './smoke';
 const { findRepoByPath } = require('./repos');
 const { loadRepoMemory } = require('./memory');
 const { isWorktreeEnabled, getParallelJobLimit, acquireWorktree, releaseWorktree } = require('./worktree');
@@ -630,6 +631,96 @@ function maybeEnqueueValidationRemediation(
   const created = createJob(remediationPacket);
   appendLog(jobId, `[${nowIso()}] validation remediation job queued: ${created.jobId}`);
   return { ok: true, skipped: false, job_id: created.jobId, branch: remediationPacket.working_branch, blockerType: 'validation-failed' };
+}
+
+/**
+ * Phase 4 PR D: if smoke gating promoted the job to `smoke-failed`, spawn
+ * a `__deployfix` remediation job with the SmokeResult details as feedback.
+ * Targets the same branch so the existing PR gets updated in place.
+ *
+ * Gated on `CCP_PR_REMEDIATE_ENABLED` (shared with PR-review and validation
+ * remediation) and the per-repo `smoke.gate` flag that already produced the
+ * blocker. Uses the `__deployfix` suffix to stay coherent with the existing
+ * PR-review "deploy" blockerType that already spawns the same shape of job
+ * — a repo operator sees one class of remediation for "deployment broke".
+ *
+ * Depth guard: `__deployfix|__reviewfix|__valfix` in the job ID short-
+ * circuits, so a smoke-failed remediation won't cascade into a second
+ * __deployfix on the same original ticket.
+ */
+function maybeEnqueueSmokeRemediation(
+  jobId: string,
+  packet: JobPacket,
+  result: JobResult,
+): RemediationResult {
+  const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
+  if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
+  if (/__deployfix|__reviewfix|__valfix/.test(jobId)) {
+    return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
+  }
+  if (result.blocker_type !== 'smoke-failed') {
+    return { ok: false, skipped: true, reason: 'job is not blocked on smoke' };
+  }
+  if (!result.smoke || result.smoke.ok || result.smoke.failure?.kind === 'skipped') {
+    return { ok: false, skipped: true, reason: 'no failing smoke result to remediate' };
+  }
+
+  const remediationJobId = `${jobId}__deployfix`;
+  if (fs.existsSync(statusPath(remediationJobId))) {
+    return { ok: true, skipped: true, reason: 'remediation job already exists', job_id: remediationJobId };
+  }
+
+  const blocker = buildSmokeBlocker(result.smoke);
+  const kind = result.smoke.failure?.kind || 'unknown';
+  const url = result.smoke.url || result.preview_url || '(unknown preview URL)';
+
+  const feedback: string[] = [
+    `Smoke test failed on the preview deployment for ${packet.ticket_id || jobId}.`,
+    `Preview URL: ${url}`,
+    `Failure kind: ${kind}.`,
+    result.pr_url ? `PR: ${result.pr_url}` : `Branch: ${result.branch || 'unknown'}`,
+    'Diagnose why the deployed app is broken (runtime error, missing env var, broken build output, etc.) and push a fix to the existing PR branch.',
+    'Do not create a new PR.',
+    'After pushing, wait for the preview redeploy and re-check the same URL locally.',
+    ...blocker.feedback,
+  ];
+
+  const remediationPacket: JobPacket = {
+    ...packet,
+    job_id: remediationJobId,
+    goal: `Remediate smoke failure (${kind}) for ${packet.ticket_id || jobId}`,
+    source: 'smoke',
+    kind: 'deploy',
+    label: 'deploy',
+    review_feedback: feedback,
+    // Smoke remediation is not a review-fix task; clear inherited review
+    // comments so buildPrompt doesn't instruct the agent to address
+    // unrelated PR-review threads.
+    reviewComments: undefined,
+    working_branch: result.branch && result.branch !== 'unknown' ? result.branch : packet.working_branch || null,
+    base_branch: packet.base_branch || 'main',
+    acceptance_criteria: [
+      ...(packet.acceptance_criteria || []),
+      `Make the preview deployment serve the configured smoke path without the \`${kind}\` failure.`,
+      'Push updates to the existing PR branch.',
+      'Do not create a new PR.',
+    ],
+    verification_steps: [
+      ...(packet.verification_steps || []),
+      'After pushing, re-hit the preview URL + smoke path and confirm the failure is gone.',
+      'If the root cause is external (platform outage, third-party API), leave a precise blocker note explaining why.',
+    ],
+    created_at: nowIso(),
+  };
+  const created = createJob(remediationPacket);
+  appendLog(jobId, `[${nowIso()}] smoke remediation job queued: ${created.jobId}`);
+  return {
+    ok: true,
+    skipped: false,
+    job_id: created.jobId,
+    branch: remediationPacket.working_branch,
+    blockerType: 'smoke-failed',
+  };
 }
 
 function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result: JobResult, prReview: PRReviewResult & { skipped?: boolean }): RemediationResult {
@@ -1996,6 +2087,7 @@ module.exports = {
   inspectEnvironment,
   interruptJob,
   maybeEnqueueReviewRemediation,
+  maybeEnqueueSmokeRemediation,
   maybeReviewPr,
   prReviewPolicy,
   statusPath,
@@ -2031,6 +2123,7 @@ export {
   inspectEnvironment,
   interruptJob,
   maybeEnqueueReviewRemediation,
+  maybeEnqueueSmokeRemediation,
   maybeReviewPr,
   prReviewPolicy,
   statusPath,

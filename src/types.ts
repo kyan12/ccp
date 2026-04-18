@@ -105,6 +105,18 @@ export interface SmokeConfig {
   /** If false or omitted, the smoke step is skipped. Default: false. */
   enabled?: boolean;
   /**
+   * Phase 4 (PR D): when true, a failing smoke result promotes the job to
+   * `blocked` with `blocker_type: 'smoke-failed'` and spawns a `__deployfix`
+   * remediation job. Default: false (Phase 4 PR B/C behavior —
+   * informational only).
+   *
+   * Can be overridden globally with CCP_SMOKE_GATE=true|false. Any falsy
+   * env value hard-disables gating across every repo; any truthy env
+   * value forces gating on even for repos that have `gate: false`. When
+   * the env var is unset (or ambiguous), the per-repo flag wins.
+   */
+  gate?: boolean;
+  /**
    * URL path to probe. Default: `/`. Joined to the preview URL so a repo
    * with a healthcheck at `/api/health` sets `path: '/api/health'`.
    */
@@ -205,6 +217,13 @@ export interface SmokeResult {
     message: string;
     /** First N bytes of the response body (when available). */
     bodyExcerpt?: string;
+    /**
+     * Phase 4 PR C: absolute path to a failure screenshot, produced by
+     * the Playwright runner when `screenshotOnFailure` is true and the
+     * supervisor passed `playwrightOptions.jobId`. Never populated by
+     * the HTTP runner.
+     */
+    screenshotPath?: string;
   };
 }
 

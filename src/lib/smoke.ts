@@ -79,6 +79,10 @@ export function resolveSmokeConfig(config: SmokeConfig | undefined): Required<Sm
   }
   const resolved: Required<SmokeConfig> = {
     enabled: c.enabled === true,
+    // Phase 4 PR D: gate defaults to false. Any non-true value resolves to
+    // false so a stray `gate: "yes"` in repos.json doesn't silently flip
+    // gating on; CCP_SMOKE_GATE=true is the blessed way to force-enable.
+    gate: c.gate === true,
     path: typeof c.path === 'string' && c.path.length ? c.path : DEFAULT_SMOKE_PATH,
     expectStatus: resolvedExpectStatus,
     titleRegex: typeof c.titleRegex === 'string' ? c.titleRegex : '',
@@ -394,6 +398,103 @@ export async function runSmoke(
   return runHttpSmoke(previewUrl, rawConfig, deps.httpFetcher);
 }
 
+/**
+ * Phase 4 PR D: decide whether a failing smoke result should gate the job.
+ *
+ * Returns true iff:
+ *   1. The smoke actually ran (not skipped) AND failed, AND
+ *   2. Gating is enabled — either globally via `CCP_SMOKE_GATE=true`, or
+ *      per-repo via `config.gate === true`. `CCP_SMOKE_GATE=false` hard-
+ *      disables even if per-repo config opts in.
+ *
+ * When `CCP_SMOKE_GATE` is unset (or has an unparseable value), the
+ * per-repo flag wins. Mirrors `shouldGateOnValidation` semantics so
+ * operators only have one mental model for gate decisions.
+ *
+ * Skipped smoke results (`failure.kind === 'skipped'`) never gate —
+ * those come from "smoke disabled" or "no preview URL" states, neither
+ * of which is a regression the agent can be asked to fix.
+ */
+export function shouldGateOnSmoke(
+  config: SmokeConfig | null | undefined,
+  result: SmokeResult | null | undefined,
+): boolean {
+  if (!result) return false;
+  if (result.ok) return false;
+  if (result.failure && result.failure.kind === 'skipped') return false;
+  const envRaw = process.env.CCP_SMOKE_GATE;
+  if (typeof envRaw === 'string' && envRaw.length > 0) {
+    const lower = envRaw.toLowerCase();
+    if (lower === 'false' || lower === '0' || lower === 'off' || lower === 'no') return false;
+    if (lower === 'true' || lower === '1' || lower === 'on' || lower === 'yes') return true;
+    // any other value — fall through to per-repo setting
+  }
+  return !!(config && config.gate === true);
+}
+
+export interface SmokeBlocker {
+  /** Human-readable blocker message for result.blocker. */
+  message: string;
+  /** Synthetic check entries for result.failed_checks. */
+  failedChecks: Array<{ name: string; state: string; url: string | null }>;
+  /** Structured feedback lines to hand to the remediation agent. */
+  feedback: string[];
+}
+
+/**
+ * Build blocker + feedback payloads from a failed SmokeResult. Pure
+ * function — no side effects, safe to unit-test. Callers are expected
+ * to have already decided `shouldGateOnSmoke(...)` is true.
+ *
+ * The `failedChecks` entry uses `name: 'smoke:<kind>'` so it slots into
+ * the same `result.failed_checks` array that PR-review and validation
+ * use, and the dashboard can render all three from a single array
+ * without branching on source.
+ */
+export function buildSmokeBlocker(result: SmokeResult): SmokeBlocker {
+  const kind = result.failure?.kind || 'unknown';
+  const message = result.failure?.message || 'smoke check failed';
+  const url = result.url || '(unknown preview URL)';
+  const status = typeof result.status === 'number' ? ` status=${result.status}` : '';
+  const title = typeof result.title === 'string' ? ` title=${JSON.stringify(result.title)}` : '';
+  const duration = typeof result.durationMs === 'number' ? ` ${result.durationMs}ms` : '';
+
+  const blockerMessage =
+    `smoke test failed on preview deployment (${kind}): ${message}\n` +
+    `  - URL: ${url}${status}${title}${duration}`;
+
+  const failedChecks = [
+    {
+      name: `smoke:${kind}`,
+      state: kind === 'timeout' ? 'TIMED_OUT' : 'FAILURE',
+      url: result.url || null,
+    },
+  ];
+
+  const feedback: string[] = [
+    `Preview-URL smoke test failed against ${url}.`,
+    `Failure kind: \`${kind}\`. Message: ${message}`,
+  ];
+  if (typeof result.status === 'number') {
+    feedback.push(`Observed HTTP status: ${result.status}.`);
+  }
+  if (typeof result.title === 'string' && result.title.length) {
+    feedback.push(`Observed <title>: ${JSON.stringify(result.title)}.`);
+  }
+  if (result.failure?.screenshotPath) {
+    feedback.push(`Screenshot captured at ${result.failure.screenshotPath}.`);
+  }
+  if (typeof result.failure?.bodyExcerpt === 'string' && result.failure.bodyExcerpt.trim().length) {
+    feedback.push(`Response body excerpt:\n${result.failure.bodyExcerpt}`);
+  }
+  feedback.push(
+    'Reproduce locally by hitting the preview URL with the same path and User-Agent, then fix the underlying deploy/runtime issue.',
+    'Push fixes to the existing PR branch — do NOT create a new PR.',
+  );
+
+  return { message: blockerMessage, failedChecks, feedback };
+}
+
 module.exports = {
   DEFAULT_SMOKE_PATH,
   DEFAULT_SMOKE_STATUS,
@@ -407,4 +508,6 @@ module.exports = {
   runHttpSmoke,
   runSmoke,
   defaultFetcher,
+  shouldGateOnSmoke,
+  buildSmokeBlocker,
 };
