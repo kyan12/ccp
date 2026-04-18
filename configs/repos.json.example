@@ -17,6 +17,14 @@
         "enabled": false,
         "timeoutSec": 300
       },
+      "smoke": {
+        "enabled": false,
+        "path": "/",
+        "expectStatus": [200],
+        "titleRegex": "My App",
+        "timeoutSec": 15,
+        "userAgent": "ccp-smoke/0.1"
+      },
       "nightly": {
         "enabled": false,
         "branch": "main",
