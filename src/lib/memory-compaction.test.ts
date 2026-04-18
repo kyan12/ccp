@@ -337,6 +337,15 @@ console.log('\nTest: compactionArgsFor emits agent-appropriate flags');
     assert(codexArgs[0] === 'exec', 'codex uses exec subcommand');
     assert(codexArgs.includes('--skip-git-repo-check'), 'codex skips git-repo check');
     assert(codexArgs.includes('read-only'), 'codex compaction runs read-only sandbox');
+    // Regression: codex exec treats any positional arg as the literal
+    // prompt text. If we append `-` (or anything else) codex ignores the
+    // stdin prompt and replies to "-", producing short nonsense that
+    // would pass our size check and silently corrupt the memory file.
+    assert(
+      !codexArgs.some((a: string) => !a.startsWith('-') && a !== 'exec' && a !== 'never' && a !== 'read-only'),
+      'codex args must not contain a positional prompt arg (would shadow stdin)',
+    );
+    assert(!codexArgs.includes('-'), "codex args must not include bare '-' (treated as literal prompt)");
     const unknown = compactionArgsFor('some-future-agent');
     assert(unknown.includes('--print'), 'unknown agent falls back to --print (claude-style)');
   });

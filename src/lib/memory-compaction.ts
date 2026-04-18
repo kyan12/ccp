@@ -488,6 +488,16 @@ export function compactionArgsFor(agentName: string): string[] {
     case 'claude-code':
       return ['--print', '--permission-mode', 'bypassPermissions'];
     case 'codex':
+      // Match the codex driver's buildCommand() shape, which pipes the
+      // prompt on stdin (`cat prompt | codex exec ...`). We MUST NOT
+      // append a trailing `-` here — codex treats any positional arg
+      // after `exec` as the literal prompt text, so passing `-` would
+      // make the agent reply to the string "-" and ignore our stdin
+      // entirely, then silently overwrite the memory file with whatever
+      // short nonsense it came up with. `read-only` sandbox (vs
+      // workspace-write in the main driver) because the compactor
+      // shouldn't touch the repo — it only rewrites the memory file,
+      // and that write is done by this module, not the agent.
       return [
         'exec',
         '--color',
@@ -495,7 +505,6 @@ export function compactionArgsFor(agentName: string): string[] {
         '--sandbox',
         'read-only',
         '--skip-git-repo-check',
-        '-',
       ];
     default:
       // Unknown driver name — fall back to claude-code's flag shape.
