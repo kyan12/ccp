@@ -1,8 +1,10 @@
 import fs = require('fs');
 import path = require('path');
 import { spawnSync } from 'child_process';
-import type { JobStatus, JobResult, JobPacket, PRReviewResult, PrWatcherCycleResult, RunResult } from '../types';
+import type { JobStatus, JobResult, JobPacket, PRReviewResult, PrWatcherCycleResult, RunResult, SmokeResult } from '../types';
 const { reviewPr } = require('./pr-review');
+const { findRepoByPath } = require('./repos');
+const { runHttpSmoke } = require('./smoke');
 const {
   JOBS_DIR,
   listJobs,
@@ -385,6 +387,60 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
         process.stderr.write(
           `[pr-watcher] failed to persist preview_url for ${jobId}: ${(e as Error).message}\n`,
         );
+      }
+    }
+
+    // Phase 4 (PR B): HTTP smoke test against the preview URL.
+    //
+    // Opt-in per repo (mapping.smoke.enabled). Informational only in this
+    // PR — a failure is persisted + logged but does NOT change the job
+    // state or trigger remediation. PR D wires the gate.
+    //
+    // We resolve the repo mapping by localPath (what's on the packet), so
+    // repos without smoke config, or ones whose mapping can't be found,
+    // silently skip the step.
+    const previewUrlForSmoke = review.previewUrl || result.preview_url || null;
+    if (previewUrlForSmoke) {
+      const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
+      const smokeCfg = mapping && mapping.smoke ? mapping.smoke : undefined;
+      if (smokeCfg && smokeCfg.enabled) {
+        try {
+          const smokeResult: SmokeResult = await runHttpSmoke(previewUrlForSmoke, smokeCfg);
+          // Persist to status.integrations.smoke (always — including
+          // failures, so dashboards see the last run).
+          const cur = loadStatus(jobId);
+          saveStatus(jobId, {
+            integrations: {
+              ...(cur.integrations || {}),
+              smoke: smokeResult,
+            },
+          });
+          // Mirror to result.smoke.
+          try {
+            const rPath = resultPath(jobId);
+            const fresh: JobResult = readJson(rPath);
+            fresh.smoke = smokeResult;
+            fs.writeFileSync(rPath, JSON.stringify(fresh, null, 2));
+          } catch (e) {
+            process.stderr.write(
+              `[pr-watcher] failed to persist smoke result for ${jobId}: ${(e as Error).message}\n`,
+            );
+          }
+          const outcome = smokeResult.ok
+            ? `ok (status=${smokeResult.status ?? '?'}, ${smokeResult.durationMs}ms)`
+            : `fail kind=${smokeResult.failure?.kind} \u2014 ${smokeResult.failure?.message || 'no message'}`;
+          appendLog(
+            jobId,
+            `[${nowIso()}] pr-watcher: smoke ${smokeResult.url} \u2014 ${outcome}`,
+          );
+        } catch (e) {
+          // Defensive — the runner is supposed to translate every failure
+          // into a SmokeResult; if it throws, swallow so we don't break
+          // the watcher cycle for other jobs.
+          process.stderr.write(
+            `[pr-watcher] smoke runner threw for ${jobId}: ${(e as Error).message}\n`,
+          );
+        }
       }
     }
 

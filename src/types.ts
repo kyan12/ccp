@@ -81,6 +81,83 @@ export interface RepoMapping {
    * redundant.
    */
   planner?: PlannerConfig;
+  /**
+   * Phase 4 (PR B): optional HTTP smoke test against the PR's preview
+   * deployment URL. When `enabled: true`, after the pr-watcher resolves
+   * the preview URL the supervisor sends a GET to `url + path`, asserts
+   * the response status is in `expectStatus` (default `[200]`), and
+   * optionally matches a `<title>` regex. Informational in this PR —
+   * failures are logged and persisted but don't gate the job state.
+   *
+   * Opt-in per repo: there's no universal "is this app healthy" probe,
+   * so the repo owner decides whether the default `GET /` returns
+   * something sensible.
+   */
+  smoke?: SmokeConfig;
+}
+
+/**
+ * Phase 4 (PR B): per-repo smoke-test configuration. Kept as its own type
+ * so later PRs can extend it (Playwright spec path, auth header support,
+ * multi-URL checks) without churning `RepoMapping`.
+ */
+export interface SmokeConfig {
+  /** If false or omitted, the smoke step is skipped. Default: false. */
+  enabled?: boolean;
+  /**
+   * URL path to probe. Default: `/`. Joined to the preview URL so a repo
+   * with a healthcheck at `/api/health` sets `path: '/api/health'`.
+   */
+  path?: string;
+  /**
+   * Acceptable HTTP status codes. Default: `[200]`. Sites that redirect
+   * the root to a login page can set `[200, 302]`.
+   */
+  expectStatus?: number[];
+  /**
+   * Optional `<title>` regex. When set, the response body must contain a
+   * `<title>` element whose content matches this pattern. Applied as
+   * `new RegExp(titleRegex, 'i')`.
+   */
+  titleRegex?: string;
+  /** Per-request timeout. Default: 15 (15 seconds). */
+  timeoutSec?: number;
+  /** User-Agent header. Default: `ccp-smoke/0.1`. */
+  userAgent?: string;
+}
+
+/**
+ * Phase 4 (PR B): smoke-test result, persisted on
+ * `status.integrations.smoke` and mirrored onto `JobResult.smoke`.
+ */
+export interface SmokeResult {
+  /** Whether the smoke passed (status + title regex both OK). */
+  ok: boolean;
+  /** The URL that was probed (preview URL + configured path). */
+  url: string;
+  /** HTTP status code, when the request reached the server. */
+  status?: number;
+  /** Extracted `<title>` text, when present and parseable. */
+  title?: string | null;
+  /** Wall-clock duration of the GET request. */
+  durationMs: number;
+  /** ISO timestamp of completion, for dashboard display. */
+  finishedAt: string;
+  /**
+   * When `ok: false`, describes which assertion failed.
+   * `kind: 'timeout'`   → the request exceeded `timeoutSec`.
+   * `kind: 'network'`   → DNS / TCP / TLS / socket error before response.
+   * `kind: 'status'`    → status code not in `expectStatus`.
+   * `kind: 'title'`     → body did not match `titleRegex`.
+   * `kind: 'skipped'`   → smoke config disabled or preview URL missing.
+   * `kind: 'unknown'`   → catch-all for unexpected exceptions.
+   */
+  failure?: {
+    kind: 'timeout' | 'network' | 'status' | 'title' | 'skipped' | 'unknown';
+    message: string;
+    /** First N bytes of the response body (when available). */
+    bodyExcerpt?: string;
+  };
 }
 
 /**
@@ -245,6 +322,13 @@ export interface JobIntegrations {
   remediation?: RemediationResult;
   /** Phase 2b: record of the __valfix remediation spawn attempt (if any). */
   validationRemediation?: RemediationResult;
+  /**
+   * Phase 4 (PR B): most recent smoke-test result for this job's preview
+   * URL. Updated each pr-watcher cycle once the preview URL is known.
+   * Null when smoke is disabled for the repo or no preview has been
+   * detected yet.
+   */
+  smoke?: SmokeResult;
 }
 
 export interface JobStatus {
@@ -304,6 +388,14 @@ export interface JobResult {
    * discover it without loading status.json.
    */
   preview_url?: string | null;
+  /**
+   * Phase 4 (PR B): most recent smoke-test result for this job's preview
+   * URL. Populated by the pr-watcher cycle when smoke is enabled for the
+   * repo AND a preview URL has been detected; absent otherwise. Mirrors
+   * `integrations.smoke` so downstream tools can find it on the stable
+   * per-job record without loading status.json.
+   */
+  smoke?: SmokeResult;
   prod: string;
   verified: string;
   blocker: string | null;
