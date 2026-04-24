@@ -116,7 +116,8 @@ function buildIncidentPacket(kind: string, payload: IntakePayload): JobPacket {
     description = `**Repo:** ${repoOwner}\n\n${description}`;
   }
 
-  return {
+  // Build base packet
+  const packet: JobPacket = {
     job_id: `incident_${Date.now()}`,
     ticket_id: enriched.ticket_id || null,
     repo: enriched.repo || null,
@@ -133,6 +134,18 @@ function buildIncidentPacket(kind: string, payload: IntakePayload): JobPacket {
     verification_steps,
     metadata: { ...normalized.metadata, enriched_description: description },
   };
+
+  // Propagate structured handoff fields when present
+  if (enriched.handoff_id) packet.handoff_id = enriched.handoff_id as string;
+  if (enriched.origin) packet.origin = enriched.origin as string;
+  if (enriched.requestor) packet.requestor = enriched.requestor as string;
+  if (enriched.why_it_matters) packet.why_it_matters = enriched.why_it_matters as string;
+  if (Array.isArray(enriched.context_refs)) packet.context_refs = enriched.context_refs as string[];
+  if (enriched.callback_required != null) packet.callback_required = !!enriched.callback_required;
+  if (enriched.callback_url) packet.callback_url = enriched.callback_url as string;
+  if (Array.isArray(enriched.writeback_required)) packet.writeback_required = enriched.writeback_required as string[];
+
+  return packet;
 }
 
 async function intakeToLinear(kind: string, payload: IntakePayload, options: { autoDispatch?: boolean; autoStart?: boolean; maxConcurrent?: number } = {}): Promise<IntakeToLinearResult> {

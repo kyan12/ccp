@@ -491,6 +491,16 @@ export interface JobPacket {
    * in the resolver. Set via Linear labels, Discord command, or dashboard.
    */
   agent?: string;
+
+  // ── Structured handoff fields (Hermes ↔ Code Crab) ──
+  handoff_id?: string | null;
+  origin?: string;
+  requestor?: string;
+  why_it_matters?: string;
+  context_refs?: string[];
+  callback_required?: boolean;
+  callback_url?: string;
+  writeback_required?: string[];
 }
 
 // ── Job status ──
