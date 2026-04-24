@@ -1,4 +1,4 @@
-import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext } from './jobs';
+import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, classifyHarnesslessSuccess } from './jobs';
 import type { JobPacket, RepoProof } from '../types';
 
 let passed = 0;
@@ -310,11 +310,28 @@ console.log('\nTest: extractWorkerFailureContext');
 // ── Test: harness-failure scenario (exit 0, no summary fields) ──
 console.log('\nTest: harness-failure detection logic');
 {
-  // When parseSummary returns empty (no State, Summary, or Commit), exit 0 → harness-failure
-  // This is tested by verifying hasSummaryOutput logic
+  // When parseSummary returns empty (no State, Summary, or Commit), exit 0 normally → harness-failure
   const emptyResult = { state: undefined, summary: undefined, commit: undefined } as unknown as Record<string, string>;
   const hasSummary = !!(emptyResult.state || emptyResult.summary || emptyResult.commit);
   assert(!hasSummary, 'empty summary detected for harness-failure path');
+
+  const fallback = classifyHarnesslessSuccess({
+    exitCode: 0,
+    hasSummaryOutput: false,
+    prUrl: null,
+    recoveredCommit: null,
+  });
+  assert(fallback.state === 'harness-failure', 'no summary and no PR remains harness-failure');
+
+  const recovered = classifyHarnesslessSuccess({
+    exitCode: 0,
+    hasSummaryOutput: false,
+    prUrl: 'https://github.com/ProteusX-Consulting/proteusx-seo/pull/429',
+    recoveredCommit: '789b8d146c011e1d4634e6db214fe96d60a17765',
+  });
+  assert(recovered.state === 'coded', 'exit 0 + PR + recovered commit is coded, not harness-failure');
+  assert(recovered.blocker === null, 'recovered PR success has no blocker');
+  assert(!!recovered.summary?.includes('Worker exited 0'), 'recovered PR success synthesizes summary');
 
   const validResult = { state: 'coded', summary: 'did work', commit: 'abc1234' };
   const hasValidSummary = !!(validResult.state || validResult.summary || validResult.commit);
