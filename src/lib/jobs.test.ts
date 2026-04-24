@@ -1,5 +1,5 @@
-import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, classifyHarnesslessSuccess } from './jobs';
-import type { JobPacket, RepoProof } from '../types';
+import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, classifyHarnesslessSuccess, buildHandoffReturnPayload, renderHandoffReturnMessage, resolveHandoffReturnTarget } from './jobs';
+import type { JobPacket, JobResult, RepoProof } from '../types';
 
 let passed = 0;
 let failed = 0;
@@ -336,6 +336,90 @@ console.log('\nTest: harness-failure detection logic');
   const validResult = { state: 'coded', summary: 'did work', commit: 'abc1234' };
   const hasValidSummary = !!(validResult.state || validResult.summary || validResult.commit);
   assert(hasValidSummary, 'valid summary not mistaken for harness-failure');
+}
+
+// ── Test: structured handoff return payloads ──
+console.log('\nTest: buildHandoffReturnPayload maps completed handoff result');
+{
+  const packet = makePacket({
+    handoff_id: 'hc_business_559',
+    callback_required: true,
+    callback_url: 'http://127.0.0.1:8644/webhooks/code-crab-completion',
+    metadata: {
+      origin_channel_id: 'business-channel',
+      origin_thread_id: 'business-thread',
+      origin_message_id: 'business-message',
+    },
+  });
+  const result = {
+    job_id: 'linear_pro_559',
+    state: 'coded',
+    commit: 'abc1234567890',
+    branch: 'feat/handoff',
+    pushed: 'yes',
+    pr_url: 'https://github.com/kyan12/ccp/pull/53',
+    prod: 'no',
+    verified: 'handoff tests passed',
+    blocker: null,
+    failed_checks: [],
+    summary: 'Return path implemented',
+  } as unknown as JobResult;
+
+  const opts = buildHandoffReturnPayload(packet, result);
+  assert(opts !== null, 'builds return payload for handoff packet');
+  assert(opts?.status === 'done', 'coded result maps to done return status');
+  assert(opts?.summary === 'Return path implemented', 'uses job summary');
+  assert(opts?.artifacts?.pr === 'https://github.com/kyan12/ccp/pull/53', 'includes PR artifact');
+  assert(opts?.origin.thread_id === 'business-thread', 'includes origin thread for Business Crab return');
+  assert(resolveHandoffReturnTarget(packet) === 'business-thread', 'returns to origin thread before channel');
+  assert(opts?.artifacts?.commit === 'abc1234567890', 'includes commit artifact');
+  assert(opts?.verification?.results === 'handoff tests passed', 'includes verification results');
+  assert(opts?.needs_kevin === false, 'completed handoff does not need Kevin');
+}
+
+console.log('\nTest: buildHandoffReturnPayload maps blocked handoff result');
+{
+  const packet = makePacket({ handoff_id: 'hc_blocked_001', callback_required: true });
+  const result = {
+    job_id: 'linear_pro_559',
+    state: 'blocked',
+    commit: 'none',
+    branch: 'feat/handoff',
+    pushed: 'no',
+    pr_url: null,
+    prod: 'no',
+    verified: 'not yet',
+    blocker: 'Origin credentials are missing',
+    failed_checks: [],
+    summary: null,
+  } as unknown as JobResult;
+
+  const opts = buildHandoffReturnPayload(packet, result);
+  assert(opts?.status === 'blocked', 'blocked result maps to blocked return status');
+  assert(opts?.needs_kevin === true, 'blocked handoff asks for Kevin');
+  assert(!!opts?.summary.includes('Origin credentials are missing'), 'blocked return summarizes blocker');
+  assert(!!opts?.next_recommended_action?.includes('Origin credentials are missing'), 'blocked return carries next action');
+  assert(renderHandoffReturnMessage(opts!).includes('Needs Kevin'), 'blocked return message marks Kevin action');
+}
+
+console.log('\nTest: buildHandoffReturnPayload skips non-handoff jobs');
+{
+  const packet = makePacket();
+  const result = {
+    job_id: 'regular_job',
+    state: 'coded',
+    commit: 'abc1234',
+    branch: 'main',
+    pushed: 'yes',
+    pr_url: null,
+    prod: 'no',
+    verified: 'tests passed',
+    blocker: null,
+    failed_checks: [],
+    summary: 'done',
+  } as unknown as JobResult;
+  assert(buildHandoffReturnPayload(packet, result) === null, 'returns null without handoff_id');
+  assert(resolveHandoffReturnTarget(packet) === null, 'no return target without handoff_id');
 }
 
 // ── Summary ──

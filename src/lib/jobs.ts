@@ -23,6 +23,7 @@ const { reviewPr } = require('./pr-review');
 const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = require('./outage');
 const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
+const { extractHandoffId } = require('./handoff-callback');
 const { fetchPrReviewComments, postRemediationComments } = require('./pr-comments');
 // Lazy-require to avoid circular dependency (pr-watcher imports from jobs)
 let _runPrWatcherCycle: (() => Promise<PrWatcherCycleResult>) | undefined;
@@ -968,6 +969,116 @@ function recoverPrMetadata(prUrl: string | null, repoPath: string | null): { com
   }
 }
 
+interface HandoffReturnPayload {
+  handoff_id: string;
+  status: 'done' | 'blocked' | 'failed';
+  summary: string;
+  artifacts: {
+    pr: string;
+    commit: string;
+    branch: string;
+    logs: string;
+  };
+  verification: {
+    results: string;
+  };
+  needs_kevin: boolean;
+  next_recommended_action: string;
+  origin: {
+    channel_id: string;
+    thread_id: string;
+    message_id: string;
+  };
+}
+
+function buildHandoffReturnPayload(packet: JobPacket, result: JobResult): HandoffReturnPayload | null {
+  const handoffId = extractHandoffId(packet);
+  if (!handoffId) return null;
+
+  const meta = (packet.metadata as Record<string, unknown>) || {};
+  const state = result.state || 'failed';
+  const status = state === 'failed'
+    ? 'failed'
+    : ['blocked', 'dirty-repo', 'harness-failure'].includes(state)
+      ? 'blocked'
+      : 'done';
+  const needsKevin = status !== 'done' || !!result.blocker;
+  const summary = result.summary
+    || result.blocker
+    || `CCP job ${result.job_id || packet.job_id || packet.ticket_id || 'unknown'} finished with state ${state}.`;
+  const verificationResults = result.verified && result.verified !== 'not yet'
+    ? result.verified
+    : (result.failed_checks?.length
+      ? `failed checks: ${result.failed_checks.map((c: { name?: string }) => c.name || 'unknown').join(', ')}`
+      : 'not reported');
+
+  return {
+    handoff_id: handoffId,
+    status,
+    summary,
+    artifacts: {
+      pr: result.pr_url || '',
+      commit: result.commit && result.commit !== 'none' ? result.commit : '',
+      branch: result.branch || '',
+      logs: packet.job_id ? `ccp job ${packet.job_id}` : '',
+    },
+    verification: {
+      results: verificationResults,
+    },
+    needs_kevin: needsKevin,
+    next_recommended_action: needsKevin ? (result.blocker || 'Review CCP job logs and retry or unblock manually.') : '',
+    origin: {
+      channel_id: (meta.origin_channel_id as string) || '',
+      thread_id: (meta.origin_thread_id as string) || '',
+      message_id: (meta.origin_message_id as string) || '',
+    },
+  };
+}
+
+function renderHandoffReturnMessage(payload: HandoffReturnPayload): string {
+  const parts = [`**Handoff ${payload.handoff_id}** — status: **${payload.status}**`];
+  if (payload.summary) parts.push(`
+${payload.summary}`);
+
+  const artifacts: string[] = [];
+  if (payload.artifacts.pr) artifacts.push(`PR: ${payload.artifacts.pr}`);
+  if (payload.artifacts.branch) artifacts.push(`Branch: \`${payload.artifacts.branch}\``);
+  if (payload.artifacts.commit) artifacts.push(`Commit: \`${payload.artifacts.commit.slice(0, 12)}\``);
+  if (artifacts.length) parts.push(`
+**Artifacts:** ${artifacts.join(' | ')}`);
+
+  if (payload.verification.results) parts.push(`
+**Verification:** ${payload.verification.results}`);
+  if (payload.needs_kevin) {
+    parts.push(`
+:warning: **Needs Kevin** — ${payload.next_recommended_action || 'review required'}`);
+  } else if (payload.next_recommended_action) {
+    parts.push(`
+**Next:** ${payload.next_recommended_action}`);
+  }
+  return parts.join('\n');
+}
+
+function resolveHandoffReturnTarget(packet: JobPacket): string | null {
+  if (!extractHandoffId(packet)) return null;
+  const meta = (packet.metadata as Record<string, unknown>) || {};
+  return ((meta.origin_thread_id as string) || (meta.origin_channel_id as string) || null);
+}
+
+function postStructuredHandoffReturn(jobId: string, packet: JobPacket, result: JobResult): void {
+  const payload = buildHandoffReturnPayload(packet, result);
+  if (!payload) return;
+
+  const target = resolveHandoffReturnTarget(packet);
+  if (!target) {
+    appendLog(jobId, `[${nowIso()}] handoff return skipped: no origin_thread_id or origin_channel_id for ${payload.handoff_id}`);
+    return;
+  }
+
+  const sent = sendDiscordMessage(target, renderHandoffReturnMessage(payload));
+  appendLog(jobId, `[${nowIso()}] handoff return to ${target}: ${sent.ok ? 'ok' : (sent.stderr || 'failed')}`);
+}
+
 function inspectRepoProof(repo: string | null, claimedCommit: string): RepoProof {
   // Normalize: workers sometimes report "abc1234 (already merged to main)" — extract just the hash
   const commitMatch = claimedCommit.match(/^([0-9a-f]{7,40})/i);
@@ -1603,6 +1714,11 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     prUrl: result.pr_url || null, error: result.blocker || null,
   });
   if (whLog) appendLog(jobId, `[${nowIso()}] ${whLog}`);
+
+  // Fire structured handoff return for jobs that carry a handoff_id.
+  // This posts the completion payload directly to the stored origin channel/thread
+  // via CCP's Discord transport instead of patching Hermes core for ProteusX-specific routing.
+  postStructuredHandoffReturn(jobId, packet, result);
 
   // Outage circuit breaker: detect API failures and trigger outage mode.
   // Per-agent (PR B): log + state file are keyed by whichever driver actually
@@ -2313,6 +2429,9 @@ module.exports = {
   inferBlockedReason,
   extractWorkerFailureContext,
   classifyHarnesslessSuccess,
+  buildHandoffReturnPayload,
+  renderHandoffReturnMessage,
+  resolveHandoffReturnTarget,
   createJob,
   listJobs,
   jobsByState,
@@ -2351,6 +2470,9 @@ export {
   inferBlockedReason,
   extractWorkerFailureContext,
   classifyHarnesslessSuccess,
+  buildHandoffReturnPayload,
+  renderHandoffReturnMessage,
+  resolveHandoffReturnTarget,
   createJob,
   listJobs,
   jobsByState,
