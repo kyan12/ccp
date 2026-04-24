@@ -920,6 +920,54 @@ function parseSummary(logText: string): Record<string, string> & { addressedComm
   return fields;
 }
 
+function classifyHarnesslessSuccess(input: {
+  exitCode: number;
+  hasSummaryOutput: boolean;
+  prUrl: string | null;
+  recoveredCommit: string | null;
+}): { state: string | null; blocker: string | null; summary: string | null } {
+  if (input.exitCode !== 0 || input.hasSummaryOutput) {
+    return { state: null, blocker: null, summary: null };
+  }
+
+  if (input.prUrl && input.recoveredCommit) {
+    return {
+      state: 'coded',
+      blocker: null,
+      summary: `Worker exited 0 and created PR ${input.prUrl}, but did not emit the final summary contract; CCP recovered PR metadata automatically.`,
+    };
+  }
+
+  return {
+    state: 'harness-failure',
+    blocker: 'worker exited 0 but produced no final summary — harness or contract failure (check worker.log for raw output)',
+    summary: null,
+  };
+}
+
+function recoverPrMetadata(prUrl: string | null, repoPath: string | null): { commit: string | null; branch: string | null } {
+  if (!prUrl) return { commit: null, branch: null };
+  const gh = commandExists('gh');
+  if (!gh) return { commit: null, branch: null };
+
+  const args = ['pr', 'view', prUrl, '--json', 'headRefOid,headRefName'];
+  const ownerRepo = repoPath ? resolveOwnerRepo(repoPath) : null;
+  if (ownerRepo) args.push('--repo', ownerRepo);
+
+  const out = run(gh, args);
+  if (out.status !== 0) return { commit: null, branch: null };
+
+  try {
+    const parsed = JSON.parse(out.stdout || '{}') as { headRefOid?: unknown; headRefName?: unknown };
+    return {
+      commit: typeof parsed.headRefOid === 'string' && parsed.headRefOid ? parsed.headRefOid : null,
+      branch: typeof parsed.headRefName === 'string' && parsed.headRefName ? parsed.headRefName : null,
+    };
+  } catch {
+    return { commit: null, branch: null };
+  }
+}
+
 function inspectRepoProof(repo: string | null, claimedCommit: string): RepoProof {
   // Normalize: workers sometimes report "abc1234 (already merged to main)" — extract just the hash
   const commitMatch = claimedCommit.match(/^([0-9a-f]{7,40})/i);
@@ -1225,43 +1273,10 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const proof = inspectRepoProof(workdir, summary.commit || 'none');
   const hasSummaryOutput = !!(summary.state || summary.summary || summary.commit);
 
-  // Classification priority:
-  // 1. Harness failure: exit 0 but worker produced no parseable summary at all
-  // 2. No-op: worker produced summary but determined nothing needs to change
-  // 3. Dirty-repo: uncommitted changes but no commit created
-  // 4. Regular blocked inference
-  let finalState: string;
-  let inferredBlocker: string | null;
-
-  if (exitCode === 0 && !hasSummaryOutput) {
-    finalState = 'harness-failure';
-    inferredBlocker = 'worker exited 0 but produced no final summary — harness or contract failure (check worker.log for raw output)';
-  } else if (exitCode === 0 && isNoOpOutcome(summary, proof)) {
-    finalState = 'no-op';
-    inferredBlocker = null;
-  } else if (proof.dirty && !proof.commitExists && ['coded', 'done', 'verified'].includes(provisionalState)) {
-    finalState = 'dirty-repo';
-    const workerContext = extractWorkerFailureContext(logText);
-    inferredBlocker = `uncommitted local changes but no commit created — worker may have been interrupted or failed to commit. Branch: ${proof.branch || 'unknown'}. Action: inspect repo changes, commit manually, or discard with git checkout. Worker said: ${workerContext}`;
-  } else {
-    inferredBlocker = inferBlockedReason(logText, {
-      state: provisionalState,
-      commit: summary.commit || 'none',
-      prod: summary.prod || 'no',
-      verified: summary.verified || 'not yet',
-      pr_url: summary.pr_url || null,
-    }, proof);
-    finalState = inferredBlocker ? 'blocked' : provisionalState;
-  }
-
-  // If the job is blocked/dirty-repo due to dirty repo state, clean it up immediately so
-  // subsequent jobs don't inherit dirty working tree (e.g. from API 500 mid-run)
-  if ((finalState === 'blocked' || finalState === 'dirty-repo') && proof.dirty && workdir) {
-    const cleanResult = cleanRepoIfDirty(workdir, proof);
-    appendLog(jobId, `[${nowIso()}] repo cleanup: ${cleanResult}`);
-  }
-
-  // Fallback: if no PR URL found in logs but branch was pushed, check GitHub for an open PR
+  // Fallback: if no PR URL found in logs but branch was pushed, check GitHub for an open PR.
+  // Do this before classification so a clean worker exit that created a PR but omitted
+  // the final summary contract can be treated as a recoverable coded job instead of a
+  // terminal harness failure.
   let prUrl: string | null = summary.pr_url || inferPrUrlFromPacket(packet) || null;
   if (!prUrl && proof.pushed && proof.branch && proof.branch !== 'main' && proof.branch !== 'master' && workdir) {
     const gh = commandExists('gh');
@@ -1275,6 +1290,55 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
         }
       }
     }
+  }
+  const recoveredPr = recoverPrMetadata(prUrl, workdir);
+  if (prUrl && recoveredPr.commit && !summary.commit) {
+    appendLog(jobId, `[${nowIso()}] PR metadata recovered: commit=${recoveredPr.commit.slice(0, 12)} branch=${recoveredPr.branch || 'unknown'}`);
+  }
+
+  // Classification priority:
+  // 1. Harnessless PR success: exit 0 + PR metadata recovered but no final summary contract
+  // 2. Harness failure: exit 0 but worker produced no parseable summary and no PR metadata
+  // 3. No-op: worker produced summary but determined nothing needs to change
+  // 4. Dirty-repo: uncommitted changes but no commit created
+  // 5. Regular blocked inference
+  let finalState: string;
+  let inferredBlocker: string | null;
+  let synthesizedSummary: string | null = null;
+
+  const harnessless = classifyHarnesslessSuccess({
+    exitCode,
+    hasSummaryOutput,
+    prUrl,
+    recoveredCommit: recoveredPr.commit,
+  });
+  if (harnessless.state) {
+    finalState = harnessless.state;
+    inferredBlocker = harnessless.blocker;
+    synthesizedSummary = harnessless.summary;
+  } else if (exitCode === 0 && isNoOpOutcome(summary, proof)) {
+    finalState = 'no-op';
+    inferredBlocker = null;
+  } else if (proof.dirty && !proof.commitExists && ['coded', 'done', 'verified'].includes(provisionalState)) {
+    finalState = 'dirty-repo';
+    const workerContext = extractWorkerFailureContext(logText);
+    inferredBlocker = `uncommitted local changes but no commit created — worker may have been interrupted or failed to commit. Branch: ${proof.branch || 'unknown'}. Action: inspect repo changes, commit manually, or discard with git checkout. Worker said: ${workerContext}`;
+  } else {
+    inferredBlocker = inferBlockedReason(logText, {
+      state: provisionalState,
+      commit: summary.commit || recoveredPr.commit || 'none',
+      prod: summary.prod || 'no',
+      verified: summary.verified || 'not yet',
+      pr_url: prUrl,
+    }, proof);
+    finalState = inferredBlocker ? 'blocked' : provisionalState;
+  }
+
+  // If the job is blocked/dirty-repo due to dirty repo state, clean it up immediately so
+  // subsequent jobs don't inherit dirty working tree (e.g. from API 500 mid-run)
+  if ((finalState === 'blocked' || finalState === 'dirty-repo') && proof.dirty && workdir) {
+    const cleanResult = cleanRepoIfDirty(workdir, proof);
+    appendLog(jobId, `[${nowIso()}] repo cleanup: ${cleanResult}`);
   }
 
   // Phase 6b: classify the catch-all "ambiguity" bucket into
@@ -1293,9 +1357,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const result: JobResult = {
     job_id: jobId,
     state: finalState,
-    commit: proof.commitExists ? (summary.commit || 'none') : 'none',
-    branch: proof.branch || 'unknown',
-    pushed: typeof proof.pushed === 'boolean' ? (proof.pushed ? 'yes' : 'no') : 'unknown',
+    commit: summary.commit || recoveredPr.commit || 'none',
+    branch: recoveredPr.branch || proof.branch || 'unknown',
+    pushed: recoveredPr.commit ? 'yes' : (typeof proof.pushed === 'boolean' ? (proof.pushed ? 'yes' : 'no') : 'unknown'),
     pr_url: prUrl,
     prod: finalState === 'blocked' ? 'no' : (summary.prod || 'no'),
     verified: finalState === 'blocked' ? 'not yet' : (summary.verified || 'not yet'),
@@ -1303,7 +1367,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     blocker_type: initialBlockerType,
     failed_checks: [],
     risk: summary.risk || null,
-    summary: summary.summary || null,
+    summary: summary.summary || synthesizedSummary || null,
     addressedComments: summary.addressedComments || undefined,
     tmux_session: status.tmux_session,
     worker_exit_code: exitCode,
@@ -2248,6 +2312,7 @@ module.exports = {
   isNoOpOutcome,
   inferBlockedReason,
   extractWorkerFailureContext,
+  classifyHarnesslessSuccess,
   createJob,
   listJobs,
   jobsByState,
@@ -2285,6 +2350,7 @@ export {
   isNoOpOutcome,
   inferBlockedReason,
   extractWorkerFailureContext,
+  classifyHarnesslessSuccess,
   createJob,
   listJobs,
   jobsByState,
