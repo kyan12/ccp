@@ -89,10 +89,21 @@ function mkMapping(localPath: string, overrides: Partial<RepoMapping> = {}): Rep
   };
 }
 
+function canonicalPath(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 function listWorktrees(repoPath: string): string[] {
   const res = sh(repoPath, ['worktree', 'list', '--porcelain']);
   if (res.status !== 0) return [];
-  return res.stdout.split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice('worktree '.length).trim());
+  return res.stdout
+    .split('\n')
+    .filter((l) => l.startsWith('worktree '))
+    .map((l) => canonicalPath(l.slice('worktree '.length).trim()));
 }
 
 function runTests(): void {
@@ -172,7 +183,7 @@ function runTests(): void {
       const head = sh(result.path, ['symbolic-ref', '-q', 'HEAD']);
       assert(head.status !== 0, 'HEAD is detached (symbolic-ref fails)');
       const wts = listWorktrees(repo);
-      assert(wts.includes(result.path), 'git worktree list includes the new path');
+      assert(wts.includes(canonicalPath(result.path)), 'git worktree list includes the new path');
     });
   }
 
@@ -204,7 +215,7 @@ function runTests(): void {
       assert(a.path !== b.path, 'distinct paths for distinct jobs');
       assert(fs.existsSync(a.path) && fs.existsSync(b.path), 'both worktrees exist');
       const wts = listWorktrees(repo);
-      assert(wts.includes(a.path) && wts.includes(b.path), 'git reports both worktrees');
+      assert(wts.includes(canonicalPath(a.path)) && wts.includes(canonicalPath(b.path)), 'git reports both worktrees');
     });
   }
 

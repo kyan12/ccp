@@ -31,6 +31,7 @@
 
 import type { SmokeConfig, SmokeResult } from '../types';
 import type { PlaywrightExecutor, RunPlaywrightSmokeOptions } from './playwright-smoke';
+import type { AgentBrowserExecutor, RunAgentBrowserSmokeOptions } from './agent-browser-smoke';
 
 // Defaults — exported for tests and downstream consumers.
 export const DEFAULT_SMOKE_PATH = '/';
@@ -97,11 +98,12 @@ export function resolveSmokeConfig(config: SmokeConfig | undefined): Required<Sm
     // Phase 4 PR C: runner defaults to 'http' so repos that set
     // `smoke.enabled: true` without an explicit runner keep the
     // dependency-free fetch behavior from PR B.
-    runner: c.runner === 'playwright' ? 'playwright' : 'http',
-    // Phase 4 PR C: playwright sub-config is kept raw here — the
-    // Playwright orchestrator does its own `resolvePlaywrightConfig`
-    // pass so the defaults live with the runner that needs them.
+    runner: c.runner === 'playwright' || c.runner === 'agent-browser' ? c.runner : 'http',
+    // Runner sub-configs are kept raw here — each browser orchestrator does
+    // its own default-resolution pass so defaults live with the runner that
+    // needs them.
     playwright: c.playwright || {},
+    agentBrowser: c.agentBrowser || {},
   };
   return resolved;
 }
@@ -375,6 +377,10 @@ export interface RunSmokeDeps {
   playwrightExecutor?: PlaywrightExecutor;
   /** Options forwarded to the Playwright runner (e.g. jobId). */
   playwrightOptions?: RunPlaywrightSmokeOptions;
+  /** Override the agent-browser executor (used by the agent-browser runner). */
+  agentBrowserExecutor?: AgentBrowserExecutor;
+  /** Options forwarded to the agent-browser runner (e.g. jobId). */
+  agentBrowserOptions?: RunAgentBrowserSmokeOptions;
 }
 
 export async function runSmoke(
@@ -382,10 +388,10 @@ export async function runSmoke(
   rawConfig: SmokeConfig | undefined,
   deps: RunSmokeDeps = {},
 ): Promise<SmokeResult> {
-  const runner = rawConfig && rawConfig.runner === 'playwright' ? 'playwright' : 'http';
+  const runner = rawConfig?.runner || 'http';
   if (runner === 'playwright') {
-    // Lazy require so smoke.test.ts and the HTTP runner don't pull the
-    // Playwright orchestrator's extra exports into every consumer.
+    // Lazy require so smoke.test.ts and the HTTP runner don't pull browser
+    // orchestrator exports into every consumer.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { runPlaywrightSmoke } = require('./playwright-smoke');
     return runPlaywrightSmoke(
@@ -393,6 +399,17 @@ export async function runSmoke(
       rawConfig,
       deps.playwrightExecutor,
       deps.playwrightOptions || {},
+    );
+  }
+  if (runner === 'agent-browser') {
+    // Lazy require keeps the dependency optional and mirrors Playwright.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { runAgentBrowserSmoke } = require('./agent-browser-smoke');
+    return runAgentBrowserSmoke(
+      previewUrl,
+      rawConfig,
+      deps.agentBrowserExecutor,
+      deps.agentBrowserOptions || {},
     );
   }
   return runHttpSmoke(previewUrl, rawConfig, deps.httpFetcher);
@@ -482,7 +499,22 @@ export function buildSmokeBlocker(result: SmokeResult): SmokeBlocker {
     feedback.push(`Observed <title>: ${JSON.stringify(result.title)}.`);
   }
   if (result.failure?.screenshotPath) {
+    // Preserve the existing Playwright smoke contract while also surfacing richer
+    // evidence artifacts below for agent-browser runs.
     feedback.push(`Screenshot captured at ${result.failure.screenshotPath}.`);
+  }
+  const artifactLines: string[] = [];
+  const addArtifact = (label: string, value?: string) => {
+    if (value) artifactLines.push(`${label}: ${value}`);
+  };
+  addArtifact('Failure screenshot', result.failure?.screenshotPath || result.artifacts?.screenshotPath);
+  addArtifact('Accessibility snapshot', result.artifacts?.snapshotPath);
+  addArtifact('Console log', result.artifacts?.consolePath);
+  addArtifact('Browser errors', result.artifacts?.errorsPath);
+  addArtifact('Network HAR', result.artifacts?.harPath);
+  addArtifact('Browser trace', result.artifacts?.tracePath);
+  if (artifactLines.length) {
+    feedback.push(['Evidence artifacts:', ...artifactLines.map((line) => `- ${line}`)].join('\n'));
   }
   if (typeof result.failure?.bodyExcerpt === 'string' && result.failure.bodyExcerpt.trim().length) {
     feedback.push(`Response body excerpt:\n${result.failure.bodyExcerpt}`);

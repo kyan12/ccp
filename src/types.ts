@@ -172,14 +172,41 @@ export interface SmokeConfig {
    * missing the runner returns a `kind: 'unknown'` result with a clear
    * install-instructions message — it does NOT crash the watcher cycle.
    */
-  runner?: 'http' | 'playwright';
+  runner?: 'http' | 'playwright' | 'agent-browser';
   /**
    * Playwright-runner-specific options. Ignored when `runner === 'http'`.
    * Kept in its own sub-object so the flat HTTP-runner config stays
    * forward-compatible.
    */
   playwright?: PlaywrightSmokeConfig;
+  /** Agent-browser-runner-specific options. Ignored unless runner === 'agent-browser'. */
+  agentBrowser?: AgentBrowserSmokeConfig;
 }
+
+export interface AgentBrowserSmokeArtifactsConfig {
+  /** Capture a final PNG screenshot path from agent-browser. Default: true. */
+  screenshot?: boolean;
+  /** Persist browser console output JSON. Default: true. */
+  console?: boolean;
+  /** Persist browser errors JSON. Default: true. */
+  errors?: boolean;
+  /** Persist network HAR when supported/configured. Default: false. */
+  har?: boolean;
+  /** Persist browser trace when supported/configured. Default: false. */
+  trace?: boolean;
+}
+
+export interface AgentBrowserSmokeConfig {
+  /** CLI binary to execute. Default: agent-browser. */
+  binary?: string;
+  /** Capture accessibility snapshot evidence. Default: true. */
+  snapshot?: boolean;
+  /** Evidence artifacts to collect after navigation. */
+  artifacts?: AgentBrowserSmokeArtifactsConfig;
+  /** Extra CLI arguments appended to each agent-browser call. */
+  extraArgs?: string[];
+}
+
 
 /**
  * Phase 4 (PR C): Playwright-runner-specific options. All fields
@@ -237,6 +264,7 @@ export interface SmokeResult {
    * `kind: 'skipped'`   → smoke config disabled or preview URL missing.
    * `kind: 'unknown'`   → catch-all for unexpected exceptions.
    */
+  artifacts?: SmokeArtifacts;
   failure?: {
     kind: 'timeout' | 'network' | 'status' | 'title' | 'skipped' | 'unknown';
     message: string;
@@ -250,6 +278,15 @@ export interface SmokeResult {
      */
     screenshotPath?: string;
   };
+}
+
+export interface SmokeArtifacts {
+  screenshotPath?: string;
+  consolePath?: string;
+  errorsPath?: string;
+  harPath?: string;
+  tracePath?: string;
+  snapshotPath?: string;
 }
 
 /**
