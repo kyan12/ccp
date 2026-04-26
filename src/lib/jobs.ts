@@ -954,6 +954,8 @@ function classifyHarnesslessSuccess(input: {
   hasSummaryOutput: boolean;
   prUrl: string | null;
   recoveredCommit: string | null;
+  workerContext?: string | null;
+  proof?: RepoProof | null;
 }): { state: string | null; blocker: string | null; summary: string | null } {
   if (input.exitCode !== 0 || input.hasSummaryOutput) {
     return { state: null, blocker: null, summary: null };
@@ -967,10 +969,30 @@ function classifyHarnesslessSuccess(input: {
     };
   }
 
+  const proof = input.proof;
+  const proofParts = proof ? [
+    `repo=${proof.repoExists ? 'yes' : 'no'}`,
+    `git=${proof.git ? 'yes' : 'no'}`,
+    `dirty=${proof.dirty ? 'yes' : 'no'}`,
+    `commit=${proof.commitExists ? 'yes' : 'no'}`,
+    `branch=${proof.branch || 'unknown'}`,
+    `pushed=${proof.pushed ?? 'unknown'}`,
+  ].join(', ') : 'proof unavailable';
+  const workerContext = input.workerContext && input.workerContext !== 'no diagnostic output captured'
+    ? input.workerContext
+    : 'no useful final worker text was captured before WORKER_EXIT_CODE';
+  const explanation = [
+    "Harness failure means the coding worker process exited successfully (exit 0), but it did not emit CCP's required final summary contract (`State:`, `Commit:`, `Verified:`, `Summary:`) and CCP could not recover PR metadata.",
+    'This is a reporting/contract failure, not proof that the code change itself failed.',
+    `Repo proof: ${proofParts}.`,
+    `Worker tail/context: ${workerContext}.`,
+    'Operator action: inspect `worker.log` and the target repo. If a PR/commit exists, reconcile the CCP job to that GitHub reality; if no PR/commit/dirty diff exists, rerun or refile with a stricter final-summary instruction.',
+  ].join(' ');
+
   return {
     state: 'harness-failure',
-    blocker: 'worker exited 0 but produced no final summary — harness or contract failure (check worker.log for raw output)',
-    summary: null,
+    blocker: explanation,
+    summary: explanation,
   };
 }
 
@@ -1335,11 +1357,14 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   let inferredBlocker: string | null;
   let synthesizedSummary: string | null = null;
 
+  const workerContextForHarness = extractWorkerFailureContext(logText);
   const harnessless = classifyHarnesslessSuccess({
     exitCode,
     hasSummaryOutput,
     prUrl,
     recoveredCommit: recoveredPr.commit,
+    workerContext: workerContextForHarness,
+    proof,
   });
   if (harnessless.state) {
     finalState = harnessless.state;

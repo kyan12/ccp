@@ -320,8 +320,15 @@ console.log('\nTest: harness-failure detection logic');
     hasSummaryOutput: false,
     prUrl: null,
     recoveredCommit: null,
+    workerContext: 'START notify: Error',
+    proof: makeProof({ branch: 'feat/test', pushed: null }),
   });
   assert(fallback.state === 'harness-failure', 'no summary and no PR remains harness-failure');
+  assert(!!fallback.blocker?.includes('coding worker process exited successfully'), 'explains harness failure meaning');
+  assert(!!fallback.blocker?.includes('reporting/contract failure'), 'says this is a reporting/contract failure');
+  assert(!!fallback.blocker?.includes('Operator action:'), 'includes operator action');
+  assert(!!fallback.blocker?.includes('START notify: Error'), 'includes worker context');
+  assert(!!fallback.summary?.includes('Harness failure means'), 'summary repeats verbose explanation');
 
   const recovered = classifyHarnesslessSuccess({
     exitCode: 0,
