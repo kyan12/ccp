@@ -106,8 +106,8 @@ function buildIncidentPacket(kind: string, payload: IntakePayload): JobPacket {
     goal = ai.title;
     description = ai.description;
     acceptance_criteria = ai.acceptance_criteria;
-    verification_steps = ai.verification_steps;
-    constraints = ai.constraints;
+    verification_steps = enriched.verification_steps?.length ? enriched.verification_steps : ai.verification_steps;
+    constraints = enriched.constraints?.length ? enriched.constraints : ai.constraints;
   }
 
   // Ensure **Repo:** tag is at the top of the description for CCP dispatch routing

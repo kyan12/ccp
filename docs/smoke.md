@@ -2,13 +2,16 @@
 
 After the [preview-URL extractor](./preview-url.md) detects a PR's Vercel
 deployment URL, the supervisor can run a lightweight smoke test against
-it. Two runners are supported:
+it. Three runners are supported:
 
 - `http` (default, from PR B) — a dependency-free `fetch` that checks
   status + optional `<title>` regex.
 - `playwright` (PR C) — launches a real headless browser (Chromium /
   Firefox / WebKit), navigates to the preview URL, and optionally
   evaluates a JS expression inside the page.
+- `agent-browser` — shells out to Vercel Labs `agent-browser` for
+  agent-readable browser evidence: screenshots, accessibility snapshots,
+  console/errors, and optional trace/HAR artifacts.
 
 **Phase 4 PR D** additionally lets failures gate the job state and
 auto-spawn a `__deployfix` remediation. Gating is **opt-in** per repo
@@ -68,8 +71,9 @@ Opt in per repo via `configs/repos.json`:
 | `titleRegex`   | *(none)*         | Optional; applied to first `<title>` element, case-insensitive. |
 | `timeoutSec`   | `15`             | Wall clock, enforced via `AbortController`.                |
 | `userAgent`    | `ccp-smoke/0.1`  | Forwarded as `User-Agent` header.                          |
-| `runner`       | `http`           | `http` or `playwright`. See below for the Playwright runner. |
+| `runner`       | `http`           | `http`, `playwright`, or `agent-browser`. See below for browser runners. |
 | `playwright`   | `{}`             | Sub-config passed to the Playwright runner when `runner:'playwright'`. |
+| `agentBrowser` | `{}`             | Sub-config passed to the Vercel Labs `agent-browser` runner when `runner:'agent-browser'`. |
 | `gate`         | `false`          | Phase 4 PR D — when true, a failing smoke result blocks the job and spawns `__deployfix`. See [Gating](#gating-phase-4-pr-d). |
 
 ## Playwright runner (PR C)
@@ -146,6 +150,92 @@ exits after emitting a single JSON object on stdout. The supervisor
 never imports `playwright` or holds a browser context between cycles,
 so a misbehaving renderer can't leak into the long-running daemon.
 
+
+
+## Agent-browser runner
+
+When `runner: "agent-browser"`, the supervisor uses the optional Vercel Labs
+`agent-browser` CLI as an evidence-oriented browser smoke runner. It follows the
+same isolation principle as the Playwright runner: CCP does not host a browser in
+the long-running supervisor process. Each browser action is a bounded, short-lived
+CLI call with a JSON/stdout boundary, so missing binaries, timeouts, non-zero
+exits, and malformed output become stable `SmokeResult` failures instead of
+leaking browser state into the daemon.
+
+Use this runner when the operator needs artifacts that help an agent or human
+understand what happened on a new preview, not just whether a health endpoint
+returned 200.
+
+Config shape:
+
+```json
+{
+  "smoke": {
+    "enabled": true,
+    "runner": "agent-browser",
+    "path": "/",
+    "expectStatus": [200],
+    "titleRegex": "My App",
+    "timeoutSec": 30,
+    "userAgent": "ccp-smoke/0.1 (+agent-browser)",
+    "agentBrowser": {
+      "binary": "agent-browser",
+      "snapshot": true,
+      "artifacts": {
+        "screenshot": true,
+        "console": true,
+        "errors": true,
+        "har": false,
+        "trace": false
+      }
+    }
+  }
+}
+```
+
+| `agentBrowser.*` field | Default | Notes |
+| ---------------------- | ------- | ----- |
+| `binary`               | `agent-browser` | CLI binary or absolute path. |
+| `snapshot`             | `true`  | Captures an accessibility snapshot to `agent-browser-snapshot.json`. |
+| `artifacts.screenshot` | `true`  | Records the screenshot path returned by the CLI. |
+| `artifacts.console`    | `true`  | Saves console output to `agent-browser-console.json`. |
+| `artifacts.errors`     | `true`  | Saves browser errors to `agent-browser-errors.json`. |
+| `artifacts.har`        | `false` | Starts/stops `network har` and records `agent-browser-network.har`. This is version-dependent; enable only on hosts with a compatible/latest `agent-browser`. |
+| `artifacts.trace`      | `false` | Starts/stops `trace` and records `agent-browser-trace.zip` when supported. |
+| `extraArgs`            | `[]`    | Extra CLI args appended to each `agent-browser` call. |
+
+### Installing agent-browser
+
+`agent-browser` is **opt-in**; CCP compiles and runs without it. If a repo is set
+to `runner: "agent-browser"` but the binary is missing, smoke returns a verbose
+`kind: 'unknown'` failure telling the operator to install/configure the binary
+rather than crashing supervisor startup.
+
+```bash
+# in the CCP supervisor checkout
+npm i -D agent-browser
+npx agent-browser install
+```
+
+The package is published by Vercel Labs. Keep it pinned/rolled out deliberately:
+older local versions may support screenshots/traces but not `network har`, while
+newer versions expose additional evidence commands. HAR is therefore default-off
+and should be enabled per host after a CLI capability check.
+
+### Evidence in blockers
+
+When gated `agent-browser` smoke fails, `buildSmokeBlocker()` includes artifact
+paths in the remediation feedback when present:
+
+- browser screenshot
+- accessibility snapshot
+- browser console
+- browser errors
+- network HAR
+- browser trace
+
+Do not assume video recording is available from this runner until the installed
+`agent-browser` CLI on the supervisor host exposes a stable record/video command.
 
 ## Failure kinds
 
@@ -248,13 +338,19 @@ if (result.smoke && result.smoke.ok === false) {
 - The HTTP runner reads the body with a cap of ~16KB — enough for the
   `<title>` regex but not for full-body assertions. The Playwright
   runner has no such cap since assertions run inside the browser.
+- `agent-browser` HAR capture is version-dependent and default-off. On older
+  CLI versions, enable screenshots/snapshots/console/errors first and leave
+  `smoke.agentBrowser.artifacts.har` disabled until `agent-browser network har`
+  is supported on the supervisor host.
+- CCP does not promise video recording from smoke runs yet; add it only after
+  verifying the installed `agent-browser` CLI exposes stable record/video commands.
 
 ## Rollout
 
 1. Land PR B (HTTP runner) — gate off; no repo automatically gains
    smoke since `enabled` defaults to false.
-2. Flip `smoke.enabled: true` (and optionally `runner: "playwright"`) on
-   one repo in `configs/repos.json`.
+2. Flip `smoke.enabled: true` (and optionally `runner: "playwright"` or
+   `runner: "agent-browser"`) on one low-risk repo in `configs/repos.json`.
 3. Watch `worker.log` for `pr-watcher: smoke …` lines on the next
    cycle. Confirm pass/fail accuracy against your repo's expected
    behavior.
