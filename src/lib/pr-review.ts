@@ -103,6 +103,7 @@ function summarizeChecks(statusCheckRollup: StatusCheckItem[] = []): ChecksSumma
 }
 
 function classifyPr(pr: Record<string, unknown>): PRClassification {
+  const prState = String(pr.state || 'UNKNOWN').toUpperCase();
   const mergeable = String(pr.mergeable || 'UNKNOWN').toUpperCase();
   const reviewDecision = String(pr.reviewDecision || '').toUpperCase();
   const checks = summarizeChecks(pr.statusCheckRollup as StatusCheckItem[] || []);
@@ -110,7 +111,25 @@ function classifyPr(pr: Record<string, unknown>): PRClassification {
   const pendingChecks = checks.checks.filter((c) => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED', 'WAITING', 'REQUESTED'].includes(c.state));
 
   const blockers: string[] = [];
-  if (pr.state !== 'OPEN') blockers.push(`pr is ${String(pr.state).toLowerCase()}`);
+
+  // CLOSED-but-unmerged PRs are terminal, not remediable. GitHub can still
+  // report stale conflict/check metadata on a closed PR; treating that as a
+  // live blocker causes the watcher to spam logs and enqueue pointless fixes
+  // against branches that are no longer merge candidates.
+  if (prState === 'CLOSED') {
+    return {
+      disposition: 'closed',
+      blockers: ['pr is closed'],
+      blockerType: 'closed',
+      failedChecks: [],
+      pendingChecks: [],
+      mergeable,
+      reviewDecision: reviewDecision || 'NONE',
+      checks,
+    };
+  }
+
+  if (prState !== 'OPEN') blockers.push(`pr is ${String(pr.state).toLowerCase()}`);
   if (pr.isDraft) blockers.push('pr is draft');
   if (mergeable === 'CONFLICTING') blockers.push('merge conflicts');
   if (checks.hasFailure) blockers.push('required checks failing');

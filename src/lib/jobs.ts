@@ -2276,15 +2276,21 @@ function healthCheck(): Record<string, unknown> {
   const now = Date.now();
   const TWO_HOURS = 2 * 60 * 60 * 1000;
   const stuckJobs = jobs.filter((j) => j.state === 'running' && j.started_at && (now - new Date(j.started_at).getTime()) > TWO_HOURS);
-  const blockedJobs = jobs.filter((j) => j.state === 'blocked');
+  const isTerminalClosedPr = (j: JobStatus): boolean => {
+    const prReview = j.integrations?.prReview as unknown as Record<string, unknown> | undefined;
+    return prReview?.disposition === 'closed' || prReview?.blockerType === 'closed';
+  };
+  const blockedJobs = jobs.filter((j) => j.state === 'blocked' && !isTerminalClosedPr(j));
 
   let launchdSupervisor = false;
   let launchdPrWatcher = false;
   try {
     const out = run('launchctl', ['list']);
     if (out.status === 0) {
-      launchdSupervisor = out.stdout.includes('ai.openclaw.coding-control-plane');
-      launchdPrWatcher = out.stdout.includes('ai.openclaw.coding-control-plane.intake');
+      launchdSupervisor = out.stdout.includes('ai.ccp.supervisor')
+        || out.stdout.includes('ai.openclaw.coding-control-plane');
+      launchdPrWatcher = out.stdout.includes('ai.ccp.intake')
+        || out.stdout.includes('ai.openclaw.coding-control-plane.intake');
     }
   } catch { /* ignore */ }
 

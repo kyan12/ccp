@@ -13,7 +13,7 @@ import type { CheckInfo } from '../types';
 // extractPreviewUrl, which isn't re-exported via the TS `export { ... }`
 // footer). This mirrors how the rest of the codebase consumes pr-review.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { extractPreviewUrl } = require('./pr-review');
+const { extractPreviewUrl, classifyPr } = require('./pr-review');
 
 let passed = 0;
 let failed = 0;
@@ -254,6 +254,37 @@ console.log('Test: extractPreviewUrl — strips trailing punctuation cleanly');
     url === 'https://my-app-abc.vercel.app',
     'trailing ) excluded from URL',
   );
+}
+
+console.log('Test: classifyPr — closed unmerged PR is terminal, not remediable');
+{
+  const result = classifyPr({
+    state: 'CLOSED',
+    isDraft: false,
+    mergeable: 'CONFLICTING',
+    reviewDecision: '',
+    statusCheckRollup: [
+      { __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'FAILURE', name: 'Vercel' },
+    ],
+  });
+  assert(result.disposition === 'closed', 'closed PR disposition is closed');
+  assert(result.blockerType === 'closed', 'closed PR blocker type is closed');
+  assert(result.blockers.length === 1 && result.blockers[0] === 'pr is closed', 'stale conflicts/check failures ignored on closed PR');
+  assert(result.failedChecks.length === 0, 'closed PR failed checks are not remediated');
+}
+
+console.log('Test: classifyPr — open conflicting PR remains remediable');
+{
+  const result = classifyPr({
+    state: 'OPEN',
+    isDraft: false,
+    mergeable: 'CONFLICTING',
+    reviewDecision: '',
+    statusCheckRollup: [],
+  });
+  assert(result.disposition === 'block', 'open conflict still blocks');
+  assert(result.blockerType === 'merge', 'open conflict keeps merge blocker type');
+  assert(result.blockers.includes('merge conflicts'), 'open conflict records merge conflict');
 }
 
 console.log(`pr-review.test: ${passed} passed, ${failed} failed`);

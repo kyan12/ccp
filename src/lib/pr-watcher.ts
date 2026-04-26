@@ -57,10 +57,13 @@ function collectWatchableJobs(): Array<{ status: JobStatus; result: JobResult; p
     try { result = readJson(rPath); } catch { continue; }
     if (!result.pr_url) continue;
 
-    // Skip jobs already finalized — PR merged AND job state is done/verified
-    // These don't need further watching; prevents redundant API calls
-    if ((status.state === 'done' || status.state === 'verified') &&
-        status.integrations?.prReview?.merged) continue;
+    // Skip jobs already finalized. Merged PRs and closed-unmerged PRs are both
+    // terminal from the watcher's perspective; neither can become mergeable by
+    // waiting, and repeatedly re-reviewing closed PRs creates noisy false
+    // "coding error" loops.
+    const prReview = status.integrations?.prReview as unknown as Record<string, unknown> | undefined;
+    if ((status.state === 'done' || status.state === 'verified') && prReview?.merged) continue;
+    if (prReview?.disposition === 'closed' || prReview?.blockerType === 'closed') continue;
 
     let packet: JobPacket;
     try { packet = readJson(packetPath(status.job_id)); } catch { continue; }
@@ -185,6 +188,18 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
     const jobId = status.job_id;
     const entry: Record<string, unknown> = { job_id: jobId, ticket_id: packet.ticket_id, pr_url: result.pr_url };
 
+    const statusBeforeReview: JobStatus = loadStatus(jobId);
+    const prevPrReviewForLog = (statusBeforeReview.integrations?.prReview || {}) as Record<string, unknown>;
+
+    const listKey = (items: unknown): string => Array.isArray(items) ? items.join('|') : '';
+    const reviewSignalChanged = (reviewResult: PRReviewResult): boolean => {
+      return prevPrReviewForLog.disposition !== reviewResult.disposition
+        || prevPrReviewForLog.blockerType !== reviewResult.blockerType
+        || listKey(prevPrReviewForLog.blockers) !== listKey(reviewResult.blockers)
+        || prevPrReviewForLog.merged !== (reviewResult.merged || false)
+        || prevPrReviewForLog.autoMergeEnabled !== (reviewResult.autoMergeEnabled || false);
+    };
+
     // Get per-repo policy for autoMerge/mergeMethod
     const policy = prReviewPolicy(packet?.repo || undefined);
 
@@ -257,7 +272,9 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
 
     // PR is approved and green
     if (review.disposition === 'approve') {
-      appendLog(jobId, `[${nowIso()}] pr-watcher: PR is green (disposition=approve)`);
+      if (reviewSignalChanged(review)) {
+        appendLog(jobId, `[${nowIso()}] pr-watcher: PR is green (disposition=approve)`);
+      }
 
       if (status.state === 'blocked' && !result.blocker) {
         saveStatus(jobId, { state: 'coded' });
@@ -269,7 +286,9 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
 
     // PR is blocked — consider remediation
     if (review.disposition === 'block') {
-      appendLog(jobId, `[${nowIso()}] pr-watcher: PR blocked (${review.blockerType}): ${(review.blockers || []).join('; ')}`);
+      if (reviewSignalChanged(review)) {
+        appendLog(jobId, `[${nowIso()}] pr-watcher: PR blocked (${review.blockerType}): ${(review.blockers || []).join('; ')}`);
+      }
 
       // Auto-rebase for merge conflicts before falling back to worker remediation.
       // Only attempt once per conflict detection — track via status.integrations.autoRebase.
@@ -332,6 +351,15 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
       } else {
         entry.action = 'blocked-no-remediation';
       }
+    }
+
+    // Closed-unmerged PRs are terminal but not remediable. Persist that live
+    // state once and let collectWatchableJobs() skip the job on future cycles.
+    if (review.disposition === 'closed') {
+      if (reviewSignalChanged(review)) {
+        appendLog(jobId, `[${nowIso()}] pr-watcher: PR is closed; stopping watch/remediation for this PR`);
+      }
+      entry.action = 'closed-terminal';
     }
 
     // PR is on hold (pending checks, etc.)
