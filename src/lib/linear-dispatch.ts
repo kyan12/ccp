@@ -1,6 +1,6 @@
 import fs = require('fs');
 import path = require('path');
-import type { DispatchState, DispatchResult, JobPacket, RepoMapping } from '../types';
+import type { DispatchState, DispatchResult, JobPacket, RepoMapping, CompletionRouting } from '../types';
 const { linearConfig, linearRequest } = require('./linear');
 const { ROOT } = require('./paths');
 const { findRepoMapping, enrichPayloadWithRepo } = require('./repos');
@@ -152,12 +152,25 @@ function chooseAgentLabel(issue: LinearDispatchIssue): string | undefined {
   return undefined;
 }
 
+interface ParsedHandoff {
+  handoff_id?: string;
+  origin?: string;
+  requestor?: string;
+  why_it_matters?: string;
+  exact_deliverable?: string;
+  callback_required?: boolean;
+  completion_routing?: CompletionRouting;
+}
+
 function parseStructuredDescription(description: string | null | undefined): {
   goal: string | null;
   acceptance_criteria: string[];
   verification_steps: string[];
   constraints: string[];
   hasStructuredSections: boolean;
+  handoff?: ParsedHandoff;
+  context_refs?: string[];
+  writeback_required?: string[];
 } {
   if (!description) return { goal: null, acceptance_criteria: [], verification_steps: [], constraints: [], hasStructuredSections: false };
 
@@ -197,12 +210,38 @@ function parseStructuredDescription(description: string | null | undefined): {
   const constraintsBody = findSection('constraints', 'risks');
   const descBody = findSection('description');
 
+  // Parse ## Handoff section into structured fields
+  const handoffBody = findSection('handoff');
+  let handoff: ParsedHandoff | undefined;
+  if (handoffBody) {
+    handoff = {};
+    for (const line of extractBullets(handoffBody)) {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx < 0) continue;
+      const key = line.slice(0, colonIdx).trim().toLowerCase();
+      const val = line.slice(colonIdx + 1).trim();
+      if (key === 'handoff id') handoff.handoff_id = val;
+      else if (key === 'origin') handoff.origin = val;
+      else if (key === 'requestor') handoff.requestor = val;
+      else if (key === 'why it matters') handoff.why_it_matters = val;
+      else if (key === 'exact deliverable') handoff.exact_deliverable = val;
+      else if (key === 'callback required') handoff.callback_required = val === 'yes' || val === 'true';
+      else if (key === 'completion routing' && (val === 'direct' || val === 'relay')) handoff.completion_routing = val;
+    }
+  }
+
+  const contextRefsBody = findSection('context references');
+  const writebackBody = findSection('writeback required');
+
   return {
     goal: descBody ? extractBullets(descBody).join(' ') || null : null,
     acceptance_criteria: acBody ? extractBullets(acBody) : [],
     verification_steps: verifyBody ? extractBullets(verifyBody) : [],
     constraints: constraintsBody ? extractBullets(constraintsBody) : [],
     hasStructuredSections: !!(acBody || verifyBody || constraintsBody || descBody),
+    handoff: handoff,
+    context_refs: contextRefsBody ? extractBullets(contextRefsBody) : undefined,
+    writeback_required: writebackBody ? extractBullets(writebackBody) : undefined,
   };
 }
 
@@ -274,7 +313,7 @@ function issueToPacket(issue: LinearDispatchIssue): JobPacket {
   }
 
   const agentLabel = chooseAgentLabel(issue);
-  return {
+  const packet: JobPacket = {
     job_id: `linear_${issue.identifier.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
     ticket_id: issue.identifier,
     repo: enriched.repo || null,
@@ -293,6 +332,22 @@ function issueToPacket(issue: LinearDispatchIssue): JobPacket {
     // Leaving it undefined preserves repo-level + env-level precedence.
     ...(agentLabel ? { agent: agentLabel } : {}),
   };
+
+  // Reconstruct structured handoff fields from Linear description sections
+  if (parsed.handoff) {
+    const h = parsed.handoff;
+    if (h.handoff_id) packet.handoff_id = h.handoff_id;
+    if (h.origin) packet.origin = h.origin;
+    if (h.requestor) packet.requestor = h.requestor;
+    if (h.why_it_matters) packet.why_it_matters = h.why_it_matters;
+    if (h.exact_deliverable) packet.exact_deliverable = h.exact_deliverable;
+    if (h.callback_required != null) packet.callback_required = h.callback_required;
+    if (h.completion_routing) packet.completion_routing = h.completion_routing;
+  }
+  if (parsed.context_refs?.length) packet.context_refs = parsed.context_refs;
+  if (parsed.writeback_required?.length) packet.writeback_required = parsed.writeback_required;
+
+  return packet;
 }
 
 async function moveIssueToInProgress(issueId: string, orgKey: string | null | undefined): Promise<unknown> {
