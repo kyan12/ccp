@@ -23,6 +23,7 @@ const { reviewPr } = require('./pr-review');
 const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = require('./outage');
 const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
+const { fireHandoffCallback } = require('./handoff-callback');
 const { fetchPrReviewComments, postRemediationComments } = require('./pr-comments');
 // Lazy-require to avoid circular dependency (pr-watcher imports from jobs)
 let _runPrWatcherCycle: (() => Promise<PrWatcherCycleResult>) | undefined;
@@ -501,6 +502,34 @@ function buildPrompt(packet: JobPacket, memory?: string | null, plan?: string | 
       ].join('\n'),
     );
   }
+  // Structured handoff context — lets the worker understand who asked,
+  // why, and what completion deliverables are expected.
+  if (packet.handoff_id) {
+    const hLines = [
+      `Handoff ID: ${packet.handoff_id}`,
+      packet.origin ? `Origin: ${packet.origin}` : null,
+      packet.requestor ? `Requestor: ${packet.requestor}` : null,
+      packet.why_it_matters ? `Why it matters: ${packet.why_it_matters}` : null,
+      packet.exact_deliverable ? `Exact deliverable: ${packet.exact_deliverable}` : null,
+      packet.completion_routing ? `Completion routing: ${packet.completion_routing}` : null,
+      packet.callback_required ? 'Callback required: yes — your final summary will be sent back to the requestor.' : null,
+    ].filter(Boolean);
+    if (packet.context_refs?.length) {
+      hLines.push(`Context references:\n  - ${packet.context_refs.join('\n  - ')}`);
+    }
+    if (packet.writeback_required?.length) {
+      hLines.push(`Writeback required:\n  - ${packet.writeback_required.join('\n  - ')}`);
+    }
+    bits.push(
+      [
+        'Handoff context (this task was filed through a structured Business Crab → Code Crab handoff):',
+        '--- BEGIN HANDOFF ---',
+        ...hLines,
+        '--- END HANDOFF ---',
+      ].join('\n'),
+    );
+  }
+
   bits.push(`Ticket: ${packet.ticket_id || 'UNTRACKED'}`);
   bits.push(`Goal: ${packet.goal || 'No goal provided'}`);
   if (packet.constraints?.length) bits.push(`Constraints:\n- ${packet.constraints.join('\n- ')}`);
@@ -1603,6 +1632,26 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     prUrl: result.pr_url || null, error: result.blocker || null,
   });
   if (whLog) appendLog(jobId, `[${nowIso()}] ${whLog}`);
+
+  // Fire structured handoff callback when this job is part of a Hermes handoff
+  const handoffStatusMap: Record<string, 'done' | 'blocked' | 'failed'> = {
+    coded: 'done', done: 'done', verified: 'done',
+    blocked: 'blocked', failed: 'failed',
+    'no-op': 'done', 'dirty-repo': 'failed', 'harness-failure': 'failed',
+  };
+  const handoffStatus = handoffStatusMap[finalState] || 'failed';
+  const hcLog = fireHandoffCallback({
+    packet,
+    status: handoffStatus,
+    summary: result.summary || `Job ${jobId} finished with state: ${finalState}`,
+    artifacts: {
+      pr: result.pr_url || '',
+      commit: result.commit || '',
+      branch: result.branch || '',
+    },
+    blockers: result.blocker ? [result.blocker] : [],
+  });
+  if (hcLog) appendLog(jobId, `[${nowIso()}] ${hcLog}`);
 
   // Outage circuit breaker: detect API failures and trigger outage mode.
   // Per-agent (PR B): log + state file are keyed by whichever driver actually

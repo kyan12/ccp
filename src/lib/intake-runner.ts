@@ -144,6 +144,28 @@ function buildIncidentPacket(kind: string, payload: IntakePayload): JobPacket {
   if (enriched.callback_required != null) packet.callback_required = !!enriched.callback_required;
   if (enriched.callback_url) packet.callback_url = enriched.callback_url as string;
   if (Array.isArray(enriched.writeback_required)) packet.writeback_required = enriched.writeback_required as string[];
+  if (enriched.exact_deliverable) packet.exact_deliverable = enriched.exact_deliverable as string;
+  if (enriched.completion_routing && (enriched.completion_routing === 'direct' || enriched.completion_routing === 'relay')) {
+    packet.completion_routing = enriched.completion_routing as 'direct' | 'relay';
+  }
+
+  // Validate: when handoff_id is present, flag missing routing/deliverable/verification fields.
+  // We don't block intake outright (the job can still run), but attach warnings so
+  // operators can see the gap in the Linear ticket or logs.
+  if (packet.handoff_id) {
+    const missing: string[] = [];
+    if (!packet.completion_routing) missing.push('completion_routing');
+    if (!packet.exact_deliverable && !enriched.exact_deliverable) missing.push('exact_deliverable');
+    if (!packet.verification_steps?.length) missing.push('verification_steps');
+    if (!packet.callback_required && !packet.callback_url) missing.push('callback_required or callback_url');
+    if (missing.length) {
+      const warn = `[handoff] handoff_id=${packet.handoff_id} missing recommended fields: ${missing.join(', ')}`;
+      console.warn(`[ccp] ${warn}`);
+      const meta = (packet.metadata || {}) as Record<string, unknown>;
+      meta.handoff_warnings = missing;
+      packet.metadata = meta;
+    }
+  }
 
   return packet;
 }

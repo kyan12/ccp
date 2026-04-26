@@ -34,6 +34,7 @@ function makePacket(overrides: Partial<JobPacket> = {}): JobPacket {
     requestor: 'Kevin',
     callback_required: true,
     callback_url: 'http://127.0.0.1:8644/webhooks/code-crab-completion',
+    completion_routing: 'direct',
     metadata: {
       origin_channel_id: '123456789',
       origin_thread_id: '987654321',
@@ -111,9 +112,12 @@ console.log('\nTest: buildHandoffPayload — full payload shape');
     summary: 'Implemented handoff callback',
     artifacts: { pr: 'https://github.com/kyan12/ccp/pull/52', branch: 'feat/handoff' },
     verification: { commands: ['npm test'], results: 'all passed' },
+    blockers: [],
+    writeback_notes: ['Updated architecture docs'],
   });
   assert(payload.handoff_id === 'hc_20260423_001', 'payload has correct handoff_id');
   assert(payload.status === 'done', 'payload has correct status');
+  assert(payload.completion_routing === 'direct', 'payload has explicit routing');
   assert(payload.summary === 'Implemented handoff callback', 'payload has summary');
   assert(payload.artifacts.pr === 'https://github.com/kyan12/ccp/pull/52', 'payload has PR artifact');
   assert(payload.artifacts.branch === 'feat/handoff', 'payload has branch artifact');
@@ -122,6 +126,8 @@ console.log('\nTest: buildHandoffPayload — full payload shape');
   assert(payload.needs_kevin === false, 'needs_kevin defaults to false');
   assert(payload.origin.channel_id === '123456789', 'payload has origin channel_id');
   assert(payload.origin.thread_id === '987654321', 'payload has origin thread_id');
+  assert(Array.isArray(payload.blockers) && payload.blockers.length === 0, 'payload has empty blockers');
+  assert(payload.writeback_notes[0] === 'Updated architecture docs', 'payload has writeback_notes');
 }
 
 console.log('\nTest: buildHandoffPayload — throws without handoff_id');
@@ -147,9 +153,50 @@ console.log('\nTest: buildHandoffPayload — needs_kevin override');
     summary: 'Needs credentials',
     needs_kevin: true,
     next_recommended_action: 'Provide API key for staging',
+    blockers: ['Missing staging API key'],
   });
   assert(payload.needs_kevin === true, 'needs_kevin can be set to true');
   assert(payload.next_recommended_action === 'Provide API key for staging', 'next_recommended_action is set');
+  assert(payload.blockers[0] === 'Missing staging API key', 'blockers populated for blocked status');
+}
+
+// ── Relay routing ───────────────────────────────────────────
+
+console.log('\nTest: buildHandoffPayload — relay mode includes target_audience and relay_message');
+{
+  const payload = buildHandoffPayload({
+    packet: makePacket({ completion_routing: 'relay', requestor: 'Kevin' }),
+    status: 'done',
+    summary: 'Feature shipped',
+    relay_message: 'Hey Kevin, the dashboard is live with per-agent cost breakdowns.',
+    target_audience: 'Kevin',
+  });
+  assert(payload.completion_routing === 'relay', 'relay routing set');
+  assert(payload.target_audience === 'Kevin', 'target_audience set from opts');
+  assert(payload.relay_message === 'Hey Kevin, the dashboard is live with per-agent cost breakdowns.', 'relay_message set');
+}
+
+console.log('\nTest: buildHandoffPayload — relay defaults target_audience to packet.requestor');
+{
+  const payload = buildHandoffPayload({
+    packet: makePacket({ completion_routing: 'relay', requestor: 'Kevin' }),
+    status: 'done',
+    summary: 'Done',
+  });
+  assert(payload.target_audience === 'Kevin', 'target_audience defaults to requestor');
+  assert(payload.relay_message === 'Done', 'relay_message defaults to summary');
+}
+
+console.log('\nTest: buildHandoffPayload — direct mode omits relay fields');
+{
+  const payload = buildHandoffPayload({
+    packet: makePacket({ completion_routing: 'direct' }),
+    status: 'done',
+    summary: 'Done',
+  });
+  assert(payload.completion_routing === 'direct', 'direct routing set');
+  assert(!payload.target_audience, 'no target_audience in direct mode');
+  assert(!payload.relay_message, 'no relay_message in direct mode');
 }
 
 // ── fireHandoffCallback ─────────────────────────────────────

@@ -501,7 +501,19 @@ export interface JobPacket {
   callback_required?: boolean;
   callback_url?: string;
   writeback_required?: string[];
+  /** Explicit deliverable expected from Code Crab. */
+  exact_deliverable?: string;
+  /**
+   * How the completion result should be routed back:
+   *  - 'direct': CCP fires callback straight to the requestor/origin.
+   *  - 'relay':  CCP returns to Code Crab, who relays a human-readable
+   *              message to the requestor via the origin channel.
+   */
+  completion_routing?: CompletionRouting;
 }
+
+/** Explicit routing enum — never inferred from other fields. */
+export type CompletionRouting = 'direct' | 'relay';
 
 // ── Job status ──
 

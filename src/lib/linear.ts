@@ -123,7 +123,7 @@ function normalizeJobToLinearIssue(packet: JobPacket, orgKey?: string | null): R
   // Always append Repo: tag so dispatch can resolve the repo from the Linear issue
   const enrichedDesc = (packet.metadata as Record<string, unknown>)?.enriched_description as string | undefined;
   const repoTag = packet.ownerRepo ? `\n\n**Repo:** ${packet.ownerRepo}` : (packet.repo ? `\n\n**Repo:** ${packet.repo}` : '');
-  const description = enrichedDesc ? (enrichedDesc + repoTag) : [
+  let description = enrichedDesc ? (enrichedDesc + repoTag) : [
     `Job ID: ${packet.job_id || 'pending'}`,
     `Repo: ${packet.repo || 'unknown'}`,
     routing.project?.name ? `Linear project: ${routing.project.name}` : null,
@@ -137,6 +137,26 @@ function normalizeJobToLinearIssue(packet: JobPacket, orgKey?: string | null): R
     packet.verification_steps?.length ? `## Validation\n- ${packet.verification_steps.join('\n- ')}` : null,
     packet.review_feedback?.length ? `Review feedback:\n- ${packet.review_feedback.join('\n- ')}` : null,
   ].filter(Boolean).join('\n\n');
+
+  // Append structured handoff sections so they survive the Linear round-trip
+  if (packet.handoff_id) {
+    const handoffLines = [
+      `- Handoff ID: ${packet.handoff_id}`,
+      packet.origin ? `- Origin: ${packet.origin}` : null,
+      packet.requestor ? `- Requestor: ${packet.requestor}` : null,
+      packet.why_it_matters ? `- Why it matters: ${packet.why_it_matters}` : null,
+      packet.exact_deliverable ? `- Exact deliverable: ${packet.exact_deliverable}` : null,
+      packet.callback_required != null ? `- Callback required: ${packet.callback_required ? 'yes' : 'no'}` : null,
+      packet.completion_routing ? `- Completion routing: ${packet.completion_routing}` : null,
+    ].filter(Boolean);
+    description += `\n\n## Handoff\n${handoffLines.join('\n')}`;
+  }
+  if (packet.context_refs?.length) {
+    description += `\n\n## Context References\n${packet.context_refs.map(r => `- ${r}`).join('\n')}`;
+  }
+  if (packet.writeback_required?.length) {
+    description += `\n\n## Writeback Required\n${packet.writeback_required.map(w => `- ${w}`).join('\n')}`;
+  }
 
   return {
     identifier: packet.ticket_id || null,

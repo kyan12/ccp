@@ -9,13 +9,15 @@
  * Separate from webhook-callback.ts which handles app-dispatched fix callbacks.
  */
 
-import type { JobPacket } from '../types';
+import type { JobPacket, CompletionRouting } from '../types';
 
 const DEFAULT_HERMES_WEBHOOK_URL = 'http://127.0.0.1:8644/webhooks/code-crab-completion';
 
 export interface HandoffCallbackPayload {
   handoff_id: string;
   status: 'done' | 'blocked' | 'failed';
+  /** Explicit routing — 'direct' or 'relay'. Never inferred. */
+  completion_routing: CompletionRouting;
   summary: string;
   artifacts: {
     pr?: string;
@@ -28,6 +30,8 @@ export interface HandoffCallbackPayload {
     commands: string[];
     results: string;
   };
+  blockers: string[];
+  writeback_notes: string[];
   needs_kevin: boolean;
   next_recommended_action: string;
   origin: {
@@ -35,6 +39,10 @@ export interface HandoffCallbackPayload {
     thread_id: string;
     message_id: string;
   };
+  /** When completion_routing is 'relay', who the message is for. */
+  target_audience?: string;
+  /** When completion_routing is 'relay', the human-readable message to forward. */
+  relay_message?: string;
 }
 
 export interface HandoffCallbackOpts {
@@ -43,9 +51,13 @@ export interface HandoffCallbackOpts {
   summary: string;
   artifacts?: HandoffCallbackPayload['artifacts'];
   verification?: HandoffCallbackPayload['verification'];
+  blockers?: string[];
+  writeback_notes?: string[];
   needs_kevin?: boolean;
   next_recommended_action?: string;
   origin?: Partial<HandoffCallbackPayload['origin']>;
+  target_audience?: string;
+  relay_message?: string;
 }
 
 /**
@@ -92,9 +104,12 @@ function buildHandoffPayload(opts: HandoffCallbackOpts): HandoffCallbackPayload 
   const handoff_id = extractHandoffId(opts.packet);
   if (!handoff_id) throw new Error('Cannot build handoff payload: no handoff_id on packet');
 
-  return {
+  const routing: CompletionRouting = opts.packet.completion_routing || 'direct';
+
+  const payload: HandoffCallbackPayload = {
     handoff_id,
     status: opts.status,
+    completion_routing: routing,
     summary: opts.summary,
     artifacts: {
       pr: opts.artifacts?.pr || '',
@@ -107,10 +122,19 @@ function buildHandoffPayload(opts: HandoffCallbackOpts): HandoffCallbackPayload 
       commands: opts.verification?.commands || [],
       results: opts.verification?.results || '',
     },
+    blockers: opts.blockers || [],
+    writeback_notes: opts.writeback_notes || [],
     needs_kevin: opts.needs_kevin ?? false,
     next_recommended_action: opts.next_recommended_action || '',
     origin: extractOriginMeta(opts.packet, opts.origin),
   };
+
+  if (routing === 'relay') {
+    payload.target_audience = opts.target_audience || opts.packet.requestor || '';
+    payload.relay_message = opts.relay_message || opts.summary;
+  }
+
+  return payload;
 }
 
 /**
