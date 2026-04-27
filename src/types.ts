@@ -589,12 +589,27 @@ export interface PrReviewIntegration {
   previewUrl?: string | null;
 }
 
+/**
+ * PRO-583: stamped once when pr-watcher (or another reconciliation path)
+ * has fired a structured Hermes handoff callback. Guarantees we don't
+ * double-fire on subsequent watcher cycles. Absent on jobs that never
+ * had a handoff_id or that were finalized through the regular finalizeJob
+ * path (which fires the callback inline and never enters this branch).
+ */
+export interface HandoffCallbackIntegration {
+  fired: boolean;
+  at: string;
+  via: 'pr-watcher' | 'finalize' | 'reconcile';
+}
+
 export interface JobIntegrations {
   linear?: LinearIntegration;
   prReview?: PrReviewIntegration;
   remediation?: RemediationResult;
   /** Phase 2b: record of the __valfix remediation spawn attempt (if any). */
   validationRemediation?: RemediationResult;
+  /** PRO-583: idempotency record for handoff callbacks fired outside finalizeJob. */
+  handoffCallback?: HandoffCallbackIntegration;
   /**
    * Phase 4 (PR B): most recent smoke-test result for this job's preview
    * URL. Updated each pr-watcher cycle once the preview URL is known.

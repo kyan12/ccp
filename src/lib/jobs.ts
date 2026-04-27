@@ -1676,7 +1676,18 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     },
     blockers: result.blocker ? [result.blocker] : [],
   });
-  if (hcLog) appendLog(jobId, `[${nowIso()}] ${hcLog}`);
+  if (hcLog) {
+    appendLog(jobId, `[${nowIso()}] ${hcLog}`);
+    // PRO-583: stamp the same idempotency record pr-watcher uses so the
+    // watcher cycle doesn't double-fire on a subsequent merge detection.
+    const cur = loadStatus(jobId);
+    saveStatus(jobId, {
+      integrations: {
+        ...(cur.integrations || {}),
+        handoffCallback: { fired: true, at: nowIso(), via: 'finalize' },
+      },
+    });
+  }
 
   // Outage circuit breaker: detect API failures and trigger outage mode.
   // Per-agent (PR B): log + state file are keyed by whichever driver actually

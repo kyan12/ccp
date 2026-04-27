@@ -168,6 +168,29 @@ intake payload → buildIncidentPacket → JobPacket
   → finalizeJob → fireHandoffCallback → structured callback payload
 ```
 
+### Stale-worker reconciliation (PRO-583)
+
+A worker that gets interrupted (operator kill, hung tmux session) jumps
+straight to `state=blocked` via `interruptJob` and never reaches
+`finalizeJob`, so the handoff callback never fires inline. If the PR
+that worker pushed is later merged anyway, `pr-watcher` reconciles the
+gap by firing the deferred handoff callback once the merge is observed:
+
+```
+interruptJob → state=blocked, notifications.final=false  (no callback yet)
+  → operator merges PR
+  → pr-watcher cycle detects merged=true
+  → maybeFireMergeHandoffCallback (handoff-callback.ts)
+  → state→done, notifications.final=true,
+    integrations.handoffCallback={fired,via:'pr-watcher'}
+```
+
+Idempotency: both `finalizeJob` and `pr-watcher` stamp
+`integrations.handoffCallback.fired=true` after a successful fire, and
+`maybeFireMergeHandoffCallback` short-circuits on that flag — so the
+callback is delivered exactly once even when both paths race or when
+the watcher runs many cycles against the same merged PR.
+
 ## Writeback expectations
 
 `writeback_required` should only trigger **durable** technical writeback:

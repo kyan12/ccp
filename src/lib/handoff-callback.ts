@@ -182,5 +182,74 @@ function fireHandoffCallback(opts: HandoffCallbackOpts): string | null {
   }
 }
 
-module.exports = { fireHandoffCallback, extractHandoffId, buildHandoffPayload, resolveCallbackUrl };
-export { fireHandoffCallback, extractHandoffId, buildHandoffPayload, resolveCallbackUrl };
+/**
+ * PRO-583: reconcile a merged PR with a stale/interrupted worker and fire
+ * the structured handoff callback exactly once.
+ *
+ * Background: when a worker is interrupted (operator kill, stuck tmux), the
+ * job transitions straight to `state=blocked` without ever passing through
+ * `finalizeJob` — so the handoff callback never fires inline. If the PR for
+ * that work later gets merged anyway, the pr-watcher cycle is responsible
+ * for emitting the deferred completion callback so Hermes can close the
+ * loop instead of waiting forever on `notifications.final=false`.
+ *
+ * Idempotency contract: callers pass `alreadyFired` from the persisted
+ * `JobIntegrations.handoffCallback.fired` flag. This helper does not mutate
+ * status itself — the caller is responsible for stamping the integration
+ * record after a successful fire so a second watcher cycle re-reading the
+ * same status will short-circuit on `already-fired`.
+ */
+export interface MergeHandoffCallbackOpts {
+  packet: JobPacket;
+  jobId: string;
+  prUrl?: string | null;
+  commit?: string | null;
+  branch?: string | null;
+  alreadyFired?: boolean;
+}
+
+export type MergeHandoffCallbackReason = 'no-handoff-id' | 'already-fired' | 'fired';
+
+export interface MergeHandoffCallbackResult {
+  fired: boolean;
+  reason: MergeHandoffCallbackReason;
+  log?: string;
+}
+
+function maybeFireMergeHandoffCallback(opts: MergeHandoffCallbackOpts): MergeHandoffCallbackResult {
+  const handoffId = extractHandoffId(opts.packet);
+  if (!handoffId) return { fired: false, reason: 'no-handoff-id' };
+  if (opts.alreadyFired) return { fired: false, reason: 'already-fired' };
+
+  const prRef = opts.prUrl || 'unknown';
+  const summary =
+    `PR ${prRef} merged — handoff finalization recovered by pr-watcher after stale/interrupted worker (job ${opts.jobId}).`;
+
+  const log = fireHandoffCallback({
+    packet: opts.packet,
+    status: 'done',
+    summary,
+    artifacts: {
+      pr: opts.prUrl || '',
+      commit: opts.commit || '',
+      branch: opts.branch || '',
+    },
+  });
+
+  return { fired: true, reason: 'fired', log: log || undefined };
+}
+
+module.exports = {
+  fireHandoffCallback,
+  extractHandoffId,
+  buildHandoffPayload,
+  resolveCallbackUrl,
+  maybeFireMergeHandoffCallback,
+};
+export {
+  fireHandoffCallback,
+  extractHandoffId,
+  buildHandoffPayload,
+  resolveCallbackUrl,
+  maybeFireMergeHandoffCallback,
+};

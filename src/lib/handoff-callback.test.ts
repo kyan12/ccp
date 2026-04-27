@@ -239,5 +239,74 @@ console.log('\nTest: buildHandoffPayload — consistent payload for same inputs'
   assert(JSON.stringify(p1) === JSON.stringify(p2), 'same inputs produce identical payloads (deterministic)');
 }
 
+// ── PRO-583: maybeFireMergeHandoffCallback (stale-worker reconciliation) ───
+
+const { maybeFireMergeHandoffCallback } = require('./handoff-callback');
+
+console.log('\nTest: maybeFireMergeHandoffCallback — bails on non-handoff packet');
+{
+  const result = maybeFireMergeHandoffCallback({
+    packet: makePacket({ handoff_id: undefined, metadata: {} }),
+    jobId: 'linear_pro_999',
+    prUrl: 'https://github.com/foo/bar/pull/1',
+  });
+  assert(result.fired === false, 'does not fire when no handoff_id');
+  assert(result.reason === 'no-handoff-id', 'reason is no-handoff-id');
+}
+
+console.log('\nTest: maybeFireMergeHandoffCallback — bails when already fired');
+{
+  const result = maybeFireMergeHandoffCallback({
+    packet: makePacket(),
+    jobId: 'linear_pro_580',
+    prUrl: 'https://github.com/foo/bar/pull/445',
+    alreadyFired: true,
+  });
+  assert(result.fired === false, 'does not re-fire when alreadyFired=true');
+  assert(result.reason === 'already-fired', 'reason is already-fired');
+}
+
+console.log('\nTest: maybeFireMergeHandoffCallback — fires for stale-worker merged PR (linear_pro_580 case)');
+{
+  // Mirrors the linear_pro_580 scenario: worker was interrupted (exit 130),
+  // job state went to blocked, but the PR for the work was merged. The
+  // pr-watcher cycle now reconciles by firing the deferred handoff callback.
+  const result = maybeFireMergeHandoffCallback({
+    packet: makePacket({
+      handoff_id: 'seo-koka-crawl-insert-claims-20260427',
+      ticket_id: 'PRO-580',
+    }),
+    jobId: 'linear_pro_580',
+    prUrl: 'https://github.com/ProteusX-Consulting/proteusx-seo/pull/445',
+    commit: 'abc123def4567',
+    branch: 'fix/koka-crawl-respectrobotstxt',
+    alreadyFired: false,
+  });
+  assert(result.fired === true, 'fires when handoff_id present and not already fired');
+  assert(result.reason === 'fired', 'reason is fired');
+  assert(typeof result.log === 'string' && result.log.includes('seo-koka-crawl-insert-claims-20260427'),
+    'log message references the handoff_id');
+  assert(typeof result.log === 'string' && result.log.includes('status=done'),
+    'log message reports done status (PR merged)');
+}
+
+console.log('\nTest: maybeFireMergeHandoffCallback — second cycle with alreadyFired=true is no-op');
+{
+  // This proves idempotency at the helper boundary: pr-watcher reads the
+  // persisted handoffCallback.fired flag and passes it in. A subsequent
+  // cycle on the same job must not re-fire.
+  const opts = {
+    packet: makePacket(),
+    jobId: 'linear_pro_580',
+    prUrl: 'https://github.com/foo/bar/pull/445',
+    alreadyFired: false,
+  };
+  const first = maybeFireMergeHandoffCallback(opts);
+  const second = maybeFireMergeHandoffCallback({ ...opts, alreadyFired: true });
+  assert(first.fired === true, 'first call fires');
+  assert(second.fired === false, 'second call (with alreadyFired=true) does not fire');
+  assert(second.reason === 'already-fired', 'second call reason is already-fired');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
