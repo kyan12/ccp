@@ -21,6 +21,7 @@ const DISCORD_STATUS_CHANNEL: string = process.env.CCP_DISCORD_STATUS_CHANNEL ||
 const DISCORD_ERRORS_CHANNEL: string = process.env.CCP_DISCORD_ERRORS_CHANNEL || '';
 const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
+const { maybeFireMergeHandoffCallback } = require('./handoff-callback');
 
 /**
  * PR-lifecycle watcher: scans finalized PR-backed jobs and re-evaluates
@@ -258,6 +259,46 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
           packet, jobId, status: 'merged', prUrl: result.pr_url || null,
         });
         if (whLog) appendLog(jobId, `[${nowIso()}] pr-watcher: ${whLog}`);
+
+        // PRO-583: fire the structured Hermes handoff callback for jobs
+        // whose worker never reached finalizeJob (e.g. operator interrupt
+        // → state=blocked, then PR merged anyway). Idempotent — the
+        // integrations.handoffCallback.fired flag prevents re-fires on
+        // subsequent watcher cycles, and finalizeJob's own callback path
+        // already stamps the same flag once it lands inline.
+        const currentForHandoff: JobStatus = loadStatus(jobId);
+        const prevHandoff = (currentForHandoff.integrations as Record<string, unknown> | undefined)
+          ?.handoffCallback as { fired?: boolean } | undefined;
+        const handoffOutcome = maybeFireMergeHandoffCallback({
+          packet,
+          jobId,
+          prUrl: result.pr_url || null,
+          commit: result.commit && result.commit !== 'none' ? result.commit : null,
+          branch: result.branch || null,
+          alreadyFired: prevHandoff?.fired === true,
+        });
+        if (handoffOutcome.fired) {
+          if (handoffOutcome.log) {
+            appendLog(jobId, `[${nowIso()}] pr-watcher: ${handoffOutcome.log}`);
+          }
+          // Stamp the idempotency record AND mark notifications.final so
+          // the dashboard / supervisor stop treating this job as "still
+          // pending its terminal callback."
+          const stampStatus: JobStatus = loadStatus(jobId);
+          saveStatus(jobId, {
+            notifications: {
+              start: stampStatus.notifications?.start ?? true,
+              final: true,
+            },
+            integrations: {
+              ...(stampStatus.integrations || {}),
+              handoffCallback: { fired: true, at: nowIso(), via: 'pr-watcher' },
+            },
+          });
+          entry.handoffCallback = { fired: true, via: 'pr-watcher' };
+        } else if (handoffOutcome.reason === 'already-fired') {
+          entry.handoffCallback = { fired: false, reason: 'already-fired' };
+        }
 
         // Post merge notification to status channel
         if (DISCORD_STATUS_CHANNEL) {
