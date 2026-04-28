@@ -9,7 +9,7 @@
  *  - claudeCodeDriver.failurePatterns match the strings outage.ts flagged before
  */
 
-import { resolveAgent, getAgent, listAgents, claudeCodeDriver, codexDriver, parseClaudeUsage, parseCodexUsage } from './agents';
+import { resolveAgent, getAgent, listAgents, claudeCodeDriver, codexDriver, devinDriver, parseClaudeUsage, parseCodexUsage } from './agents';
 
 let passed = 0;
 let failed = 0;
@@ -285,6 +285,88 @@ console.log('\nTest: codexDriver.preflight returns a well-formed shape');
   }
 }
 
+// ── devinDriver is registered but inactive unless selected ──
+console.log('\nTest: devin driver is registered under all expected aliases');
+{
+  assert(listAgents().includes('devin'), 'devin is in listAgents()');
+  assert(getAgent('devin') === devinDriver, 'getAgent(devin) returns devinDriver');
+  assert(getAgent('devin-ai') === devinDriver, 'alias devin-ai resolves to devinDriver');
+  assert(getAgent('cognition-devin') === devinDriver, 'alias cognition-devin resolves to devinDriver');
+  assert(getAgent('DEVIN') === devinDriver, 'devin lookup is case-insensitive');
+  assert(devinDriver.name === 'devin', 'devinDriver.name = devin');
+  assert(typeof devinDriver.label === 'string' && devinDriver.label.length > 0, 'devinDriver has a label');
+}
+
+// ── devinDriver.buildCommand shape ──
+console.log('\nTest: devinDriver.buildCommand builds the configurable terminal bridge shell');
+{
+  withEnv('CCP_DEVIN_COMMAND', undefined, () => {
+    const cmd = devinDriver.buildCommand({
+      promptPath: '/tmp/prompt.txt',
+      repoPath: '/tmp/repo',
+      packet: { job_id: 'x', ticket_id: null, repo: '/tmp/repo', goal: '', source: '', kind: '', label: '' },
+      bin: '/usr/local/bin/devin',
+    });
+    assert(cmd.shellCmd.startsWith("cat '/tmp/prompt.txt' | "), 'pipes prompt on stdin');
+    assert(cmd.shellCmd.includes("'/usr/local/bin/devin'"), 'uses resolved devin binary');
+    assert(cmd.shellCmd.includes('terminal'), 'default command targets Devin terminal mode');
+    assert(cmd.env === undefined || Object.keys(cmd.env).length === 0, 'no extra env for devin driver');
+  });
+}
+
+console.log('\nTest: devinDriver.buildCommand honors CCP_DEVIN_COMMAND template without activating it globally');
+{
+  withEnv('CCP_DEVIN_COMMAND', "devin terminal run --cwd {repoPath} --prompt-file {promptPath}", () => {
+    const cmd = devinDriver.buildCommand({
+      promptPath: '/tmp/space dir/prompt.txt',
+      repoPath: '/tmp/repo with space',
+      packet: { job_id: 'x', ticket_id: null, repo: '/tmp/repo with space', goal: '', source: '', kind: '', label: '' },
+      bin: '/opt/bin with space/devin',
+    });
+    assert(cmd.shellCmd.includes("'/tmp/space dir/prompt.txt'"), 'template prompt path is quoted');
+    assert(cmd.shellCmd.includes("'/tmp/repo with space'"), 'template repo path is quoted');
+    assert(cmd.shellCmd.includes("'/opt/bin with space/devin'"), 'template binary token is available and quoted');
+  });
+}
+
+// ── devinDriver.failurePatterns ──
+console.log('\nTest: devinDriver.failurePatterns match known terminal/API failure strings');
+{
+  const pats = devinDriver.failurePatterns.apiError;
+  const sample = (s: string): boolean => pats.some((re) => re.test(s));
+  assert(sample('Devin API Error: 503 Service Unavailable'), 'matches Devin API 503');
+  assert(sample('devin terminal session failed: 502 bad gateway'), 'matches Devin terminal 502');
+  assert(sample('ECONNRESET while connecting to Devin'), 'matches ECONNRESET');
+  assert(sample('Devin is temporarily unavailable'), 'matches temporary unavailable');
+  assert(!sample('TypeError: x is not a function'), 'does NOT match user-code errors');
+}
+
+// ── devinDriver.preflight returns an AgentPreflight shape ──
+console.log('\nTest: devinDriver.preflight returns a well-formed shape');
+{
+  const pf = devinDriver.preflight();
+  assert(typeof pf.ok === 'boolean', 'ok is boolean');
+  assert(typeof pf.bin === 'string', 'bin is string');
+  assert(Array.isArray(pf.failures), 'failures is array');
+  assert(typeof pf.commands === 'object' && pf.commands !== null, 'commands is object');
+  assert('devin' in pf.commands && 'devin_ai' in pf.commands, 'commands includes devin + devin_ai');
+  if (!pf.bin) {
+    assert(pf.ok === false, 'ok=false when devin is not installed/configured');
+    assert(pf.failures.some((f) => f.toLowerCase().includes('devin')), 'failure message mentions devin');
+    assert(pf.failures.some((f) => f.includes('CCP_DEVIN_COMMAND') || f.includes('PATH')), 'failure message hints at configuration');
+  }
+}
+
+console.log('\nTest: devinDriver.preflight rejects invalid CCP_DEVIN_BIN paths');
+{
+  withEnv('CCP_DEVIN_BIN', '/definitely/not/a/devin', () => {
+    const pf = devinDriver.preflight();
+    assert(pf.ok === false, 'invalid configured binary fails preflight');
+    assert(pf.bin === '/definitely/not/a/devin', 'preflight echoes configured binary for diagnostics');
+    assert(pf.failures.some((f) => f.includes('CCP_DEVIN_BIN')), 'failure message mentions CCP_DEVIN_BIN');
+  });
+}
+
 // ── resolveAgent picks codex when repo.agent=codex ──
 console.log('\nTest: resolveAgent routes to codex via repo.agent');
 {
@@ -294,6 +376,26 @@ console.log('\nTest: resolveAgent routes to codex via repo.agent');
     assert(r.source === 'repo', 'source = repo');
     assert(r.fellBack === false, 'no fallback (agent is known)');
     assert(r.fellBackDueToOutage === false, 'no outage swap');
+  });
+}
+
+// ── resolveAgent picks devin only when explicitly selected ──
+console.log('\nTest: resolveAgent routes to devin via explicit config only');
+{
+  withEnv('CCP_AGENT', undefined, () => {
+    const defaulted = resolveAgent(null, null);
+    assert(defaulted.driver === claudeCodeDriver, 'default remains claude-code (devin inactive by default)');
+    const byRepo = resolveAgent(null, { agent: 'devin' });
+    assert(byRepo.driver === devinDriver, 'repo.agent=devin selects devin');
+    assert(byRepo.source === 'repo', 'repo selection source');
+    const byPacket = resolveAgent({ agent: 'devin' }, { agent: 'claude-code' });
+    assert(byPacket.driver === devinDriver, 'packet.agent=devin selects devin');
+    assert(byPacket.source === 'packet', 'packet selection source');
+  });
+  withEnv('CCP_AGENT', 'devin', () => {
+    const byEnv = resolveAgent(null, null);
+    assert(byEnv.driver === devinDriver, 'CCP_AGENT=devin selects devin when no packet/repo override');
+    assert(byEnv.source === 'env', 'env selection source');
   });
 }
 
