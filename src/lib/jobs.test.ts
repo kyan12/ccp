@@ -1,4 +1,4 @@
-import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, classifyHarnesslessSuccess } from './jobs';
+import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, extractPrReferences, classifyHarnesslessSuccess } from './jobs';
 import type { JobPacket, RepoProof } from '../types';
 
 let passed = 0;
@@ -343,6 +343,84 @@ console.log('\nTest: harness-failure detection logic');
   const validResult = { state: 'coded', summary: 'did work', commit: 'abc1234' };
   const hasValidSummary = !!(validResult.state || validResult.summary || validResult.commit);
   assert(hasValidSummary, 'valid summary not mistaken for harness-failure');
+}
+
+// ── Test: extractPrReferences (PRO-594) ──
+console.log('\nTest: extractPrReferences finds PR # / URL references');
+{
+  // Full URL is captured as URL and contributes its number
+  const r1 = extractPrReferences(
+    'PR created: https://github.com/owner/repo/pull/42 ready for review',
+  );
+  assert(r1.urls.includes('https://github.com/owner/repo/pull/42'), 'captures explicit URL');
+  assert(r1.numbers.includes('42'), 'records number from URL');
+
+  // Bare "PR #465" reference (PRO-593 scenario)
+  const r2 = extractPrReferences('PR #465 already exists, is mergeable, all CI green');
+  assert(r2.urls.length === 0, 'no URL when only # reference present');
+  assert(r2.numbers.includes('465'), 'captures bare PR #<n>');
+
+  // Mixed forms + dedup
+  const r3 = extractPrReferences(
+    'PR #465 already exists. See https://github.com/owner/repo/pull/465 for details. ' +
+      'Also pull request #99 was closed.',
+  );
+  assert(r3.numbers.sort().join(',') === '465,99', 'dedupes #465 across forms and adds #99');
+  assert(r3.urls.length === 1 && r3.urls[0].endsWith('/pull/465'), 'one URL captured');
+
+  // Empty / null-safe
+  const r4 = extractPrReferences('');
+  assert(r4.urls.length === 0 && r4.numbers.length === 0, 'empty text yields no candidates');
+
+  // Does NOT match unrelated `#465` without PR/pull-request prefix
+  const r5 = extractPrReferences('Issue #465 is the design doc, not a PR');
+  assert(r5.numbers.length === 0, 'does not capture bare issue #<n>');
+}
+
+// ── Test: PRO-593 regression — recovered PR URL prevents false blocked ──
+console.log('\nTest: recovered PR URL flips local-commit-not-pushed away from blocked');
+{
+  // Reproduce PRO-593: worker said "PR #465 already exists ... Blocker: none",
+  // emitted commit "20b62a9" but no pr_url field, and proof reports
+  // commitExists=true, pushed=false (local branch was reset).
+  const workerLog = [
+    'PR #465 already exists, is mergeable, and all CI checks pass.',
+    'State: coded',
+    'Commit: 20b62a9 (already on origin/fix/dida-timeclock-camera, in PR #465)',
+    'Verified: PR #465 CI all green',
+    'Blocker: none',
+    'WORKER_EXIT_CODE: 0',
+  ].join('\n');
+
+  // Sanity: extractor finds the PR # reference (the verifier would then
+  // resolve it to a real URL via `gh pr view <num> --repo <owner/repo>`).
+  const refs = extractPrReferences(workerLog);
+  assert(refs.numbers.includes('465'), 'PRO-593: finds PR #465 in worker log');
+
+  // Without recovery (pr_url=null), this is exactly the case that misclassified
+  // PRO-593 as blocked under inferBlockedReason.
+  const blockedWithoutRecovery = inferBlockedReason(
+    workerLog,
+    { state: 'coded', commit: '20b62a9', prod: 'no', verified: 'not yet', pr_url: null },
+    makeProof({ commitExists: true, pushed: false, branch: 'fix/dida-timeclock-camera' }),
+  );
+  assert(
+    blockedWithoutRecovery !== null && blockedWithoutRecovery.includes('not pushed'),
+    'PRO-593: without recovery, this scenario IS classified as blocked (the bug)',
+  );
+
+  // After recovery hydrates pr_url, the same proof must NOT be blocked —
+  // hasReviewDelivery short-circuits the local-commit-not-pushed rule.
+  const recoveredUrl = 'https://github.com/ProteusX-Consulting/proteusx-seo/pull/465';
+  const blockedWithRecovery = inferBlockedReason(
+    workerLog,
+    { state: 'coded', commit: 'd5c9765a3a202d0566547a18707e7f1ff0cf5440', prod: 'no', verified: 'not yet', pr_url: recoveredUrl },
+    makeProof({ commitExists: true, pushed: false, branch: 'fix/dida-timeclock-camera' }),
+  );
+  assert(
+    blockedWithRecovery === null,
+    'PRO-593: with recovered pr_url, scenario is non-blocked (the fix)',
+  );
 }
 
 // ── Summary ──

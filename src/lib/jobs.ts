@@ -1173,6 +1173,75 @@ function inferPrUrlFromPacket(packet: JobPacket): string | null {
   return null;
 }
 
+/**
+ * PRO-594: Extract PR URL/number candidates from worker log + summary +
+ * review feedback. Pure function — no IO. Returns full GitHub PR URLs
+ * verbatim and bare `#<n>` references separately so the caller can verify
+ * the bare numbers against an `owner/repo` via `gh pr view`.
+ *
+ * Patterns recognized:
+ *   - Full https://github.com/<owner>/<repo>/pull/<n> URL
+ *   - "PR #<n>" / "PR#<n>" / "pr #<n>" (case-insensitive)
+ *   - "pull request #<n>"
+ */
+function extractPrReferences(text: string): { urls: string[]; numbers: string[] } {
+  const urls = new Set<string>();
+  const numbers = new Set<string>();
+  if (!text) return { urls: [], numbers: [] };
+
+  for (const m of text.matchAll(/https:\/\/github\.com\/[^\s"'<>)]+\/pull\/(\d+)/gi)) {
+    urls.add(m[0]);
+    numbers.add(m[1]);
+  }
+  for (const m of text.matchAll(/\bPR\s*#\s*(\d+)\b/gi)) {
+    numbers.add(m[1]);
+  }
+  for (const m of text.matchAll(/\bpull\s+request\s+#\s*(\d+)\b/gi)) {
+    numbers.add(m[1]);
+  }
+  return { urls: [...urls], numbers: [...numbers] };
+}
+
+/**
+ * PRO-594: Verify PR candidates against GitHub via `gh pr view` and return
+ * the first candidate whose `--repo <owner/repo>` lookup succeeds. This is
+ * the recovery path for cases where:
+ *   - the worker mentioned `PR #465` but never wrote the full URL, OR
+ *   - the local branch was reset (`proof.pushed=false`) so a branch-based
+ *     `gh pr view <branch>` was previously skipped.
+ *
+ * Guardrail: text-mention is necessary but not sufficient — every
+ * candidate is verified with `gh pr view --repo <ownerRepo>` so we never
+ * hydrate a PR that doesn't actually exist in the matching repo.
+ */
+function verifyPrCandidates(
+  candidates: { urls: string[]; numbers: string[] },
+  ownerRepo: string,
+): string | null {
+  const gh = commandExists('gh');
+  if (!gh) return null;
+  const seen = new Set<string>();
+  // Prefer explicit URLs first — they uniquely identify a repo and are the
+  // strongest evidence the worker actually delivered the work to GitHub.
+  for (const url of candidates.urls) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const out = run(gh, ['pr', 'view', url, '--json', 'url', '-q', '.url']);
+    if (out.status === 0 && out.stdout.trim().startsWith('https://')) {
+      return out.stdout.trim();
+    }
+  }
+  for (const num of candidates.numbers) {
+    if (seen.has(num)) continue;
+    seen.add(num);
+    const out = run(gh, ['pr', 'view', num, '--repo', ownerRepo, '--json', 'url', '-q', '.url']);
+    if (out.status === 0 && out.stdout.trim().startsWith('https://')) {
+      return out.stdout.trim();
+    }
+  }
+  return null;
+}
+
 function inferBlockedReason(logText: string, result: { state: string; commit: string; prod: string; verified: string; pr_url: string | null }, proof: RepoProof): string | null {
   const permissionMatch = logText.match(/I need file write permission to proceed\.[\s\S]*?(?=WORKER_EXIT_CODE:|$)/i);
   if (permissionMatch) {
@@ -1324,20 +1393,49 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const proof = inspectRepoProof(workdir, summary.commit || 'none');
   const hasSummaryOutput = !!(summary.state || summary.summary || summary.commit);
 
-  // Fallback: if no PR URL found in logs but branch was pushed, check GitHub for an open PR.
-  // Do this before classification so a clean worker exit that created a PR but omitted
-  // the final summary contract can be treated as a recoverable coded job instead of a
-  // terminal harness failure.
+  // PRO-594: Recover PR metadata from every reliable source before classification
+  // so a real PR (existing or just pushed) is never misclassified as blocked. The
+  // priority order, strongest signal first:
+  //   1. explicit URL in worker summary / log
+  //   2. URL passed in from packet metadata or review_feedback
+  //   3. `PR #<n>` / `pull request #<n>` references in worker log, verified with
+  //      `gh pr view <num> --repo <owner/repo>`
+  //   4. branch-based remote lookup `gh pr view <branch> --repo <owner/repo>`
+  //      (no longer gated on `proof.pushed` — the local branch may have been
+  //      reset/cleaned by the worker even when the remote PR exists)
+  //   5. `gh pr list --head <branch> --state all` fallback
   let prUrl: string | null = summary.pr_url || inferPrUrlFromPacket(packet) || null;
-  if (!prUrl && proof.pushed && proof.branch && proof.branch !== 'main' && proof.branch !== 'master' && workdir) {
+  const ownerRepo = workdir ? resolveOwnerRepo(workdir) : null;
+  if (!prUrl && workdir && ownerRepo) {
     const gh = commandExists('gh');
     if (gh) {
-      const ownerRepo = resolveOwnerRepo(workdir);
-      if (ownerRepo) {
+      // (3) Verify any PR # references found in worker log against the repo.
+      const refs = extractPrReferences(logText);
+      const verified = verifyPrCandidates(refs, ownerRepo);
+      if (verified) {
+        prUrl = verified;
+        appendLog(jobId, `[${nowIso()}] pr_url recovered from worker log reference: ${prUrl}`);
+      }
+      // (4) Fall back to branch-based lookup. Note: we intentionally drop the
+      // `proof.pushed` precondition so a reset/clean local branch with an
+      // open remote PR (PRO-593 incident) is still recoverable.
+      if (!prUrl && proof.branch && proof.branch !== 'main' && proof.branch !== 'master') {
         const prCheck = run(gh, ['pr', 'view', proof.branch, '--repo', ownerRepo, '--json', 'url', '-q', '.url']);
         if (prCheck.status === 0 && prCheck.stdout.trim().startsWith('https://')) {
           prUrl = prCheck.stdout.trim();
-          appendLog(jobId, `[${nowIso()}] pr_url recovered from GitHub: ${prUrl}`);
+          appendLog(jobId, `[${nowIso()}] pr_url recovered from GitHub branch: ${prUrl}`);
+        } else {
+          // (5) `gh pr view <branch>` only finds open PRs by default; widen to
+          // any state (open/merged/closed) via list — operator triage still
+          // benefits from a closed/merged URL.
+          const listCheck = run(gh, [
+            'pr', 'list', '--head', proof.branch, '--repo', ownerRepo,
+            '--state', 'all', '--json', 'url', '-q', '.[0].url',
+          ]);
+          if (listCheck.status === 0 && listCheck.stdout.trim().startsWith('https://')) {
+            prUrl = listCheck.stdout.trim();
+            appendLog(jobId, `[${nowIso()}] pr_url recovered via gh pr list --head: ${prUrl}`);
+          }
         }
       }
     }
@@ -1378,9 +1476,12 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     const workerContext = extractWorkerFailureContext(logText);
     inferredBlocker = `uncommitted local changes but no commit created — worker may have been interrupted or failed to commit. Branch: ${proof.branch || 'unknown'}. Action: inspect repo changes, commit manually, or discard with git checkout. Worker said: ${workerContext}`;
   } else {
+    // PRO-594: prefer the PR's canonical head commit when we recovered a PR
+    // — workers sometimes emit a short/local sha while the actual remote
+    // commit on the PR is the truth-of-record.
     inferredBlocker = inferBlockedReason(logText, {
       state: provisionalState,
-      commit: summary.commit || recoveredPr.commit || 'none',
+      commit: recoveredPr.commit || summary.commit || 'none',
       prod: summary.prod || 'no',
       verified: summary.verified || 'not yet',
       pr_url: prUrl,
@@ -1411,7 +1512,10 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const result: JobResult = {
     job_id: jobId,
     state: finalState,
-    commit: summary.commit || recoveredPr.commit || 'none',
+    // PRO-594: when a real PR is recovered, hydrate from its headRefOid/headRefName
+    // first so we don't preserve a stale/short worker-reported commit on top of
+    // the canonical remote sha.
+    commit: recoveredPr.commit || summary.commit || 'none',
     branch: recoveredPr.branch || proof.branch || 'unknown',
     pushed: recoveredPr.commit ? 'yes' : (typeof proof.pushed === 'boolean' ? (proof.pushed ? 'yes' : 'no') : 'unknown'),
     pr_url: prUrl,
@@ -2403,6 +2507,7 @@ module.exports = {
   isNoOpOutcome,
   inferBlockedReason,
   extractWorkerFailureContext,
+  extractPrReferences,
   classifyHarnesslessSuccess,
   createJob,
   listJobs,
@@ -2441,6 +2546,7 @@ export {
   isNoOpOutcome,
   inferBlockedReason,
   extractWorkerFailureContext,
+  extractPrReferences,
   classifyHarnesslessSuccess,
   createJob,
   listJobs,
