@@ -506,6 +506,12 @@ export function compactionArgsFor(agentName: string): string[] {
         'read-only',
         '--skip-git-repo-check',
       ];
+    case 'devin':
+      // Devin terminal bridge also reads the prompt from stdin. Keep this
+      // minimal because the concrete terminal feature CLI can be overridden
+      // for main workers via CCP_DEVIN_COMMAND; compaction is opt-in and
+      // should remain a simple non-interactive terminal run.
+      return ['terminal', 'run'];
     default:
       // Unknown driver name — fall back to claude-code's flag shape.
       // resolveAgent() would have already caught this and warned.

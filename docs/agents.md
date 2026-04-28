@@ -57,6 +57,7 @@ agent-fallback: primary 'claude-code' circuit open → dispatching via fallback 
 |---------------|----------------------------------------|------------------------------------------|
 | `claude-code` | `claude`                               | `claude-opus` or `claude` on `PATH`      |
 | `codex`       | `openai-codex`, `codex-cli`            | `codex` on `PATH` (`@openai/codex`)      |
+| `devin`       | `devin-ai`, `cognition-devin`          | `devin` / `devin-ai` on `PATH`, or `CCP_DEVIN_BIN` |
 
 ### Claude-code driver specifics
 
@@ -101,6 +102,29 @@ tarballs).
   phrasing is matched but *not* translated into a wall-clock pause yet
   (unlike Claude's "resets 2pm (ET)" format). Codex rate-limit hits
   currently fall through to the generic API-error circuit.
+
+### Devin driver specifics
+
+This is a dormant terminal-bridge scaffold for Cognition Devin's terminal
+feature. Registering it only makes CCP able to select Devin explicitly; the
+built-in default stays `claude-code`, and no repo config is changed by this
+support.
+
+- **Binary**: prefers `CCP_DEVIN_BIN` when set, otherwise `devin` or
+  `devin-ai` on `PATH`.
+- **Default command**: `cat <prompt> | devin terminal run --cwd <repoPath>`.
+- **Custom command**: set `CCP_DEVIN_COMMAND` when the local Devin terminal CLI
+  shape differs. Supported template tokens are `{bin}`, `{repoPath}`,
+  `{promptPath}`, and `{jobId}`; replacements are shell-quoted. A template that
+  starts with literal `devin` is automatically rewritten to the resolved
+  `{bin}` path.
+- **Probe**: defaults to `<bin> --version` as a non-destructive readiness check
+  until Devin exposes a stable non-interactive health probe. Operators can set
+  `CCP_DEVIN_PROBE_COMMAND` to a command that returns `PONG` or `OK` for a real
+  terminal/API health probe.
+- **Outage patterns**: Devin/API 5xx strings, terminal session failures,
+  temporary-unavailable strings, and shared network faults (`ECONNRESET`,
+  `ETIMEDOUT`, `ECONNREFUSED`, `EAI_AGAIN`).
 
 ## Per-repo configuration
 

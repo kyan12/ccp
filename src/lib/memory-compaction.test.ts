@@ -346,6 +346,10 @@ console.log('\nTest: compactionArgsFor emits agent-appropriate flags');
       'codex args must not contain a positional prompt arg (would shadow stdin)',
     );
     assert(!codexArgs.includes('-'), "codex args must not include bare '-' (treated as literal prompt)");
+    const devinArgs = compactionArgsFor('devin');
+    assert(devinArgs[0] === 'terminal', 'devin compaction uses terminal subcommand');
+    assert(devinArgs[1] === 'run', 'devin compaction uses non-interactive terminal run shape');
+    assert(!devinArgs.includes('-'), "devin args must not include bare '-' (prompt is provided on stdin)");
     const unknown = compactionArgsFor('some-future-agent');
     assert(unknown.includes('--print'), 'unknown agent falls back to --print (claude-style)');
   });
