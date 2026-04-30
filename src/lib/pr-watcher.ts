@@ -42,6 +42,12 @@ function remediationEnabled(): boolean {
   return String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
 }
 
+function hasPendingOperatorDecision(status: JobStatus, result?: JobResult | null): boolean {
+  const decision = status.integrations?.decision;
+  if (decision) return decision.status === 'pending';
+  return result?.blocker_type === 'operator-decision';
+}
+
 /**
  * Collect jobs whose PRs should be watched.
  */
@@ -57,6 +63,7 @@ function collectWatchableJobs(): Array<{ status: JobStatus; result: JobResult; p
     let result: JobResult;
     try { result = readJson(rPath); } catch { continue; }
     if (!result.pr_url) continue;
+    if (hasPendingOperatorDecision(status, result)) continue;
 
     // Skip jobs already finalized. Merged PRs and closed-unmerged PRs are both
     // terminal from the watcher's perspective; neither can become mergeable by

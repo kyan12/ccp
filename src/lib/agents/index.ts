@@ -27,6 +27,7 @@ import type { JobPacket, RepoMapping } from '../../types';
 import type { AgentDriver } from './types';
 import { claudeCodeDriver } from './claude';
 import { codexDriver } from './codex';
+import { devinDriver } from './devin';
 
 export const AGENTS: Record<string, AgentDriver> = {
   'claude-code': claudeCodeDriver,
@@ -35,6 +36,9 @@ export const AGENTS: Record<string, AgentDriver> = {
   codex: codexDriver,
   'openai-codex': codexDriver,
   'codex-cli': codexDriver,
+  devin: devinDriver,
+  'devin-ai': devinDriver,
+  'cognition-devin': devinDriver,
 };
 
 export function listAgents(): string[] {
@@ -183,5 +187,5 @@ export type {
   AgentUsage,
   AgentUsageParseContext,
 } from './types';
-export { claudeCodeDriver, codexDriver };
+export { claudeCodeDriver, codexDriver, devinDriver };
 export { parseClaudeUsage, parseCodexUsage } from './usage';

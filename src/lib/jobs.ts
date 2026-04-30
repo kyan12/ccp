@@ -25,6 +25,13 @@ const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
 const { fireHandoffCallback } = require('./handoff-callback');
 const { fetchPrReviewComments, postRemediationComments } = require('./pr-comments');
+const {
+  buildDecisionInstructions,
+  createDecisionContinuationPacket,
+  formatDecisionRequestForDiscord,
+  parseDecisionRequest,
+  resolveDecisionPolicy,
+} = require('./decisions') as typeof import('./decisions');
 // Lazy-require to avoid circular dependency (pr-watcher imports from jobs)
 let _runPrWatcherCycle: (() => Promise<PrWatcherCycleResult>) | undefined;
 function getRunPrWatcherCycle(): () => Promise<PrWatcherCycleResult> {
@@ -52,6 +59,10 @@ function readJson(file: string): Record<string, unknown> {
 
 function writeJson(file: string, data: unknown): void {
   fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
+}
+
+function writeJsonAtomic(file: string, data: unknown): void {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n', { flag: 'wx' });
 }
 
 function appendLog(jobId: string, text: string): void {
@@ -129,25 +140,8 @@ function loadStatus(jobId: string): JobStatus {
 }
 
 function saveStatus(jobId: string, patch: Partial<JobStatus>): JobStatus {
-  const file = statusPath(jobId);
-  const lockFile = file + '.lock';
-  const maxWait = 3000;
-  const start = Date.now();
-  while (fs.existsSync(lockFile)) {
-    if (Date.now() - start > maxWait) {
-      console.warn(`[ccp] lock timeout for ${jobId}, removing stale lock`);
-      try { fs.unlinkSync(lockFile); } catch (e) { console.error(`[ccp] failed to remove stale lock for ${jobId}: ${(e as Error).message}`); }
-      break;
-    }
-    spawnSync('sleep', ['0.05']);
-  }
-  try {
-    fs.writeFileSync(lockFile, String(process.pid), { flag: 'wx' });
-  } catch (e) {
-    // Another process grabbed it; proceed anyway (advisory lock)
-    console.error(`[ccp] lock acquisition contention for ${jobId}: ${(e as Error).message}`);
-  }
-  try {
+  return withJobStatusLock(jobId, () => {
+    const file = statusPath(jobId);
     const current = loadStatus(jobId);
     const mergedNotifications = patch.notifications
       ? { ...(current.notifications || {}), ...patch.notifications }
@@ -160,9 +154,7 @@ function saveStatus(jobId: string, patch: Partial<JobStatus>): JobStatus {
     } as JobStatus;
     writeJson(file, next);
     return next;
-  } finally {
-    try { fs.unlinkSync(lockFile); } catch (e) { console.error(`[ccp] failed to release lock for ${jobId}: ${(e as Error).message}`); }
-  }
+  });
 }
 
 function createJob(packet: JobPacket): { jobId: string; packet: JobPacket; status: JobStatus } {
@@ -549,8 +541,17 @@ function buildPrompt(packet: JobPacket, memory?: string | null, plan?: string | 
       bits.push('---');
     }
   }
-  bits.push('Never ask clarifying questions. You are running non-interactively — no one will answer.');
-  bits.push('If the ticket is ambiguous, investigate the codebase and make your best judgment.');
+
+  const repoMapping = packet.repo ? findRepoByPath(packet.repo) : null;
+  const decisionPolicy = resolveDecisionPolicy(packet, repoMapping);
+  bits.push(buildDecisionInstructions(decisionPolicy));
+  const decisionMode = decisionPolicy.mode;
+  if (decisionMode === 'auto' || decisionMode === 'never-block') {
+    bits.push('Never ask clarifying questions. You are running non-interactively — no one will answer.');
+    bits.push('If the ticket is ambiguous, investigate the codebase and make your best judgment.');
+  } else {
+    bits.push('You are running non-interactively. Do not ask free-form clarifying questions in chat. Use the structured DecisionRequest protocol above only when the configured decision policy says to pause; otherwise investigate the codebase and make your best judgment.');
+  }
   bits.push('If truly blocked (missing credentials, broken build, etc.), exit with a clear blocker description — do not ask questions.');
   bits.push('Make only the minimum necessary changes for this task.');
   bits.push('Before reporting State: coded/done/verified, you MUST describe what you did to verify your changes work. If you cannot verify, report State: blocked with Blocker: unable to verify.');
@@ -1532,6 +1533,13 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     proof,
     updated_at: nowIso(),
   };
+  const decisionRequest = finalState === 'blocked' ? parseDecisionRequest(logText, jobId, nowIso()) : null;
+  if (decisionRequest) {
+    result.blocker_type = 'operator-decision';
+    result.blocker = `Decision needed: ${decisionRequest.question}`;
+    result.summary = result.summary || decisionRequest.reason || 'Worker paused for an operator decision.';
+    appendLog(jobId, `[${nowIso()}] decision request captured: ${decisionRequest.question}`);
+  }
   if (capturedUsage) {
     result.usage = capturedUsage;
     appendLog(
@@ -1558,7 +1566,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       | import('../types').ValidationConfig
       | null
       | undefined;
-    if (shouldGateOnValidation(mappingValidation, validationReport)) {
+    if (!decisionRequest && shouldGateOnValidation(mappingValidation, validationReport)) {
       const blocker = buildValidationBlocker(validationReport);
       finalState = 'blocked';
       result.state = 'blocked';
@@ -1571,7 +1579,6 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       appendLog(jobId, `[${nowIso()}] validation gate: promoted to blocked (${blocker.failedStepNames.join(', ') || 'unknown'})`);
     }
   }
-  writeJson(resultPath(jobId), result);
   const started = status.started_at ? new Date(status.started_at).getTime() : Date.now();
   const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
   const statusPatch: Partial<JobStatus> = {
@@ -1581,10 +1588,19 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     last_heartbeat_at: nowIso(),
     last_output_excerpt: safeExcerpt(logText),
   };
+  if (decisionRequest) {
+    statusPatch.integrations = {
+      ...(loadStatus(jobId).integrations || {}),
+      decision: decisionRequest,
+    };
+  }
   if (capturedUsage) statusPatch.usage = capturedUsage;
   saveStatus(jobId, statusPatch);
+  writeJson(resultPath(jobId), result);
 
-  const prReview = maybeReviewPr(jobId, result);
+  const prReview = decisionRequest
+    ? { ok: false, skipped: true, reason: 'operator decision pending' } as PRReviewResult & { skipped?: boolean; reason?: string }
+    : maybeReviewPr(jobId, result);
   if (prReview?.ok) {
     // Preserve the validation blocker if we set one \u2014 a green PR-review disposition
     // must not silently erase a local validation failure. Likewise, preserve a
@@ -1599,7 +1615,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     // silently disqualify the job from the auto-unblock watchdog.
     const prBlockerType =
       prReview.blockerType && prReview.blockerType !== 'none' ? prReview.blockerType : null;
-    if (!validationGated) {
+    if (!validationGated && !decisionRequest) {
       result.blocker_type = prBlockerType || result.blocker_type || null;
       result.failed_checks = prReview.failedChecks || [];
     } else if (prBlockerType) {
@@ -1614,7 +1630,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     }
     writeJson(resultPath(jobId), result);
   }
-  const remediation = maybeEnqueueReviewRemediation(jobId, packet, result, prReview);
+  const remediation = decisionRequest
+    ? { ok: false, skipped: true, reason: 'operator decision pending' } as RemediationResult
+    : maybeEnqueueReviewRemediation(jobId, packet, result, prReview);
   const validationRemediation = validationGated
     ? maybeEnqueueValidationRemediation(jobId, packet, result)
     : { ok: false, skipped: true, reason: 'validation not gated' } as RemediationResult;
@@ -1649,6 +1667,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       },
       remediation,
       validationRemediation,
+      ...(decisionRequest ? { decision: decisionRequest } : {}),
     },
   });
 
@@ -1677,6 +1696,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       const emoji = emojiMap[result.state] || '❌ FAIL';
       const exitInfo = exitCode !== 0 ? ` (exit ${exitCode})` : '';
       runsMsg = `${emoji} — ${ticket} | ${repoName}${exitInfo}\n${blocker}`;
+      if (decisionRequest) runsMsg += `\n\n${formatDecisionRequestForDiscord(decisionRequest)}`;
       if (validationTag) runsMsg += `\n${validationTag}`;
       if (validationRemediation.ok && !validationRemediation.skipped && validationRemediation.job_id) {
         runsMsg += `\n🔁 valfix: ${validationRemediation.job_id}`;
@@ -1729,6 +1749,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
         if (result.pr_url) threadParts.push(`PR: ${result.pr_url}`);
         if (result.branch) threadParts.push(`Branch: \`${result.branch}\``);
         if (result.blocker) threadParts.push(`Blocker: ${result.blocker}`);
+        if (decisionRequest) threadParts.push(formatDecisionRequestForDiscord(decisionRequest));
         if (prReview.ok && prReview.blockers?.length) threadParts.push(`PR blockers: ${prReview.blockers.join('; ')}`);
         if (remediation.ok && !remediation.skipped) threadParts.push(`Remediation job: \`${remediation.job_id}\``);
         threadParts.push(`\nUpdates will be posted here. Thread auto-archives after 24h of inactivity.`);
@@ -2122,6 +2143,188 @@ function summarizeJobs(): Record<string, unknown> {
       updated_at: job.updated_at,
     })),
   };
+}
+
+function withJobStatusLock<T>(jobId: string, fn: () => T): T {
+  const lockFile = statusPath(jobId) + '.lock';
+  const warnEveryMs = 3000;
+  let lastWarnAt = 0;
+  let acquired = false;
+  while (!acquired) {
+    try {
+      fs.writeFileSync(lockFile, String(process.pid), { flag: 'wx' });
+      acquired = true;
+    } catch (e) {
+      const now = Date.now();
+      let holderAlive = true;
+      try {
+        const holderPid = Number(fs.readFileSync(lockFile, 'utf8').trim());
+        holderAlive = Number.isFinite(holderPid) && holderPid > 0;
+        if (holderAlive) {
+          try { process.kill(holderPid, 0); } catch { holderAlive = false; }
+        }
+      } catch {
+        holderAlive = true;
+      }
+      if (!holderAlive) {
+        try { fs.unlinkSync(lockFile); } catch (unlinkErr) { console.error(`[ccp] failed to remove stale lock for ${jobId}: ${(unlinkErr as Error).message}`); }
+      } else {
+        if (now - lastWarnAt > warnEveryMs) {
+          console.warn(`[ccp] waiting for status lock for ${jobId}`);
+          lastWarnAt = now;
+        }
+        spawnSync('sleep', ['0.05']);
+      }
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try { fs.unlinkSync(lockFile); } catch (e) { console.error(`[ccp] failed to release lock for ${jobId}: ${(e as Error).message}`); }
+  }
+}
+
+function answerDecision(jobId: string, choice: string, note?: string): Record<string, unknown> {
+  if (!choice || !choice.trim()) return { ok: false, reason: 'choice missing' };
+  if (!fs.existsSync(statusPath(jobId)) || !fs.existsSync(packetPath(jobId))) {
+    return { ok: false, reason: `job not found: ${jobId}` };
+  }
+
+  let threadId: string | undefined;
+  let notifyChoice: string | undefined;
+  let notifyJobId: string | undefined;
+  let appendMessage: string | undefined;
+
+  const out = withJobStatusLock(jobId, () => {
+    const status = loadStatus(jobId);
+    const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
+    const existingDecision = status.integrations?.decision || null;
+    const normalizedChoice = choice.trim();
+    if (!existingDecision) {
+      return { ok: false, reason: `job ${jobId} has no pending decision request` };
+    }
+    const selectedOption = existingDecision.options.find((o) => o.id.toLowerCase() === normalizedChoice.toLowerCase());
+    if (!selectedOption) {
+      return { ok: false, reason: `invalid choice '${normalizedChoice}'. Expected one of: ${existingDecision.options.map((o) => o.id).join(', ')}` };
+    }
+    const canonicalChoice = selectedOption.id;
+    const childPacket = createDecisionContinuationPacket({
+      packet,
+      parentJobId: jobId,
+      choice: canonicalChoice,
+      note,
+      request: existingDecision,
+    });
+
+    if (existingDecision.status === 'answered') {
+      const answeredChoice = existingDecision.answer || '';
+      if (answeredChoice.toLowerCase() !== canonicalChoice.toLowerCase()) {
+        return { ok: false, reason: `decision already answered with different option: ${answeredChoice || 'unknown'}` };
+      }
+      const claimPath = path.join(jobDir(jobId), 'decision-answer.json');
+      const existingClaim = fs.existsSync(claimPath) ? readJson(claimPath) : null;
+      const claimedJobId = String(existingClaim?.child_job_id || childPacket.job_id);
+      if (claimedJobId && fs.existsSync(statusPath(claimedJobId))) {
+        return { ok: true, skipped: true, reason: 'decision already answered', job_id: claimedJobId, parent: jobId, choice: canonicalChoice };
+      }
+      if (fs.existsSync(statusPath(childPacket.job_id))) {
+        return { ok: true, skipped: true, reason: 'decision already answered', job_id: childPacket.job_id, parent: jobId, choice: canonicalChoice };
+      }
+      if (claimedJobId && claimedJobId !== childPacket.job_id) {
+        return { ok: false, reason: 'decision answer claim points at unexpected continuation', existing_job_id: claimedJobId };
+      }
+      const recovered = createJob(childPacket);
+      threadId = status.discord_thread_id || undefined;
+      notifyChoice = canonicalChoice;
+      notifyJobId = recovered.jobId;
+      appendMessage = `[${nowIso()}] decision recovered: ${canonicalChoice}${note ? ` — ${note.trim()}` : ''}; continuation ${recovered.jobId}`;
+      return { ok: true, job_id: recovered.jobId, parent: jobId, choice: canonicalChoice, recovered: true };
+    }
+
+    if (existingDecision.status !== 'pending') {
+      return { ok: false, reason: `job ${jobId} has no pending decision request` };
+    }
+    const answeredDecision = {
+      ...existingDecision,
+      status: 'answered' as const,
+      answer: canonicalChoice,
+      note: note?.trim() || undefined,
+      answered_at: nowIso(),
+    };
+    const nextStatus: JobStatus = {
+      ...status,
+      integrations: {
+        ...(status.integrations || {}),
+        decision: answeredDecision,
+      },
+      updated_at: nowIso(),
+    } as JobStatus;
+
+    const existingContinuations = fs.existsSync(JOBS_DIR)
+      ? fs.readdirSync(JOBS_DIR).filter((name) => name.startsWith(`${jobId}__decision_`))
+      : [];
+    if (existingContinuations.includes(childPacket.job_id)) {
+      writeJson(statusPath(jobId), nextStatus);
+      appendMessage = `[${nowIso()}] decision reconciled: ${canonicalChoice}${note ? ` — ${note.trim()}` : ''}; existing continuation ${childPacket.job_id}`;
+      return { ok: true, skipped: true, reason: 'decision continuation already exists', job_id: childPacket.job_id };
+    }
+    if (existingContinuations.length > 0) {
+      return {
+        ok: false,
+        reason: `decision continuation already exists for a different option: ${existingContinuations.join(', ')}`,
+        existing_job_id: existingContinuations[0],
+      };
+    }
+
+    const claimPath = path.join(jobDir(jobId), 'decision-answer.json');
+    try {
+      writeJsonAtomic(claimPath, {
+        choice: canonicalChoice,
+        child_job_id: childPacket.job_id,
+        claimed_at: nowIso(),
+      });
+    } catch (e) {
+      const existingClaim = fs.existsSync(claimPath) ? readJson(claimPath) : null;
+      const claimedChoice = String(existingClaim?.choice || '');
+      const claimedJobId = String(existingClaim?.child_job_id || '');
+      if (claimedChoice.toLowerCase() !== canonicalChoice.toLowerCase()) {
+        return {
+          ok: false,
+          reason: `decision answer already claimed for different option: ${claimedChoice || 'unknown'}`,
+          existing_job_id: claimedJobId || undefined,
+        };
+      }
+      if (claimedJobId && fs.existsSync(statusPath(claimedJobId))) {
+        writeJson(statusPath(jobId), nextStatus);
+        appendMessage = `[${nowIso()}] decision reconciled: ${canonicalChoice}${note ? ` — ${note.trim()}` : ''}; existing continuation ${claimedJobId}`;
+        return { ok: true, skipped: true, reason: 'decision continuation already exists', job_id: claimedJobId };
+      }
+      if (claimedJobId && claimedJobId !== childPacket.job_id) {
+        return { ok: false, reason: 'decision answer claim points at unexpected continuation', existing_job_id: claimedJobId };
+      }
+      const recovered = createJob(childPacket);
+      writeJson(statusPath(jobId), nextStatus);
+      threadId = status.discord_thread_id || undefined;
+      notifyChoice = canonicalChoice;
+      notifyJobId = recovered.jobId;
+      appendMessage = `[${nowIso()}] decision recovered: ${canonicalChoice}${note ? ` — ${note.trim()}` : ''}; continuation ${recovered.jobId}`;
+      return { ok: true, job_id: recovered.jobId, parent: jobId, choice: canonicalChoice, recovered: true };
+    }
+
+    const created = createJob(childPacket);
+    writeJson(statusPath(jobId), nextStatus);
+    threadId = status.discord_thread_id || undefined;
+    notifyChoice = canonicalChoice;
+    notifyJobId = created.jobId;
+    appendMessage = `[${nowIso()}] decision answered: ${canonicalChoice}${note ? ` — ${note.trim()}` : ''}; continuation ${created.jobId}`;
+    return { ok: true, job_id: created.jobId, parent: jobId, choice: canonicalChoice };
+  });
+
+  if (appendMessage) appendLog(jobId, appendMessage);
+  if (threadId && notifyChoice && notifyJobId) {
+    try { sendToThread(threadId, `✅ Decision received: **${notifyChoice}**${note ? ` — ${note.trim()}` : ''}\nQueued continuation job: \`${notifyJobId}\``); } catch { /* best effort */ }
+  }
+  return out;
 }
 
 function startJob(jobId: string): Record<string, unknown> {
@@ -2526,6 +2729,7 @@ module.exports = {
   finalizeJob,
   inspectEnvironment,
   interruptJob,
+  answerDecision,
   maybeEnqueueReviewRemediation,
   maybeEnqueueSmokeRemediation,
   maybeReviewPr,
@@ -2565,6 +2769,7 @@ export {
   finalizeJob,
   inspectEnvironment,
   interruptJob,
+  answerDecision,
   maybeEnqueueReviewRemediation,
   maybeEnqueueSmokeRemediation,
   maybeReviewPr,

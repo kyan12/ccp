@@ -35,6 +35,12 @@ export interface RepoMapping {
    */
   agentFallback?: string;
   /**
+   * Human decision policy for ambiguous/high-impact agent choices. Controls
+   * whether workers should continue with their own judgment or stop with a
+   * structured DecisionRequest for an operator to answer.
+   */
+  decisionPolicy?: DecisionPolicyConfig;
+  /**
    * Phase 5a: path to a per-repo memory/context file that is prepended
    * to every worker prompt for this repo. Persistent project knowledge
    * — conventions, architectural notes, known pitfalls, "don't touch X"
@@ -528,6 +534,10 @@ export interface JobPacket {
    * in the resolver. Set via Linear labels, Discord command, or dashboard.
    */
   agent?: string;
+  /** Per-job override for the decision policy mode. */
+  decisionMode?: DecisionMode;
+  /** Full per-job decision policy override. */
+  decisionPolicy?: DecisionPolicyConfig;
 
   // ── Structured handoff fields (Hermes ↔ Code Crab) ──
   handoff_id?: string | null;
@@ -551,6 +561,56 @@ export interface JobPacket {
 
 /** Explicit routing enum — never inferred from other fields. */
 export type CompletionRouting = 'direct' | 'relay';
+
+export type DecisionMode = 'ask' | 'auto' | 'hybrid' | 'never-block';
+
+export type DecisionTrigger =
+  | 'production_risk'
+  | 'destructive_action'
+  | 'architecture_choice'
+  | 'scope_expansion'
+  | 'low_confidence'
+  | 'data_migration'
+  | 'auth_or_billing'
+  | 'secrets_or_credentials';
+
+export interface DecisionPolicyConfig {
+  mode?: DecisionMode;
+  promptOn?: DecisionTrigger[];
+  confidenceThreshold?: number;
+  timeoutMinutes?: number;
+  defaultTimeoutAction?: 'recommended' | 'fail-closed';
+}
+
+export interface ResolvedDecisionPolicy {
+  mode: DecisionMode;
+  promptOn: DecisionTrigger[];
+  confidenceThreshold: number;
+  timeoutMinutes: number;
+  defaultTimeoutAction: 'recommended' | 'fail-closed';
+}
+
+export interface DecisionOption {
+  id: string;
+  label: string;
+  tradeoff?: string;
+}
+
+export interface DecisionRequest {
+  id: string;
+  job_id: string;
+  question: string;
+  options: DecisionOption[];
+  recommended?: string;
+  risk?: 'low' | 'medium' | 'high' | string;
+  confidence?: number;
+  reason?: string;
+  created_at: string;
+  status: 'pending' | 'answered' | 'auto' | 'cancelled';
+  answer?: string;
+  answered_at?: string;
+  note?: string;
+}
 
 // ── Job status ──
 
@@ -617,6 +677,8 @@ export interface JobIntegrations {
    * detected yet.
    */
   smoke?: SmokeResult;
+  /** Current/past operator decision request for this job, if the worker paused for one. */
+  decision?: DecisionRequest;
 }
 
 export interface JobStatus {
