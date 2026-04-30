@@ -26,7 +26,7 @@ console.log('\nTest: decision policy resolves default and overrides');
   const old = process.env.CCP_DECISION_MODE;
   delete process.env.CCP_DECISION_MODE;
   const def = resolveDecisionPolicy(packet(), null);
-  assert.equal(def.mode, 'hybrid');
+  assert.equal(def.mode, 'auto');
   assert.equal(def.confidenceThreshold, 0.75);
 
   const repo: RepoMapping = { key: 'r', localPath: '/tmp/repo', decisionPolicy: { mode: 'ask', confidenceThreshold: 0.9 } };

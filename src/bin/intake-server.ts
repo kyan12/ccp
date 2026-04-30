@@ -110,6 +110,26 @@ function verifyVercel(req: http.IncomingMessage): boolean {
   return provided === expected;
 }
 
+function constantTimeEquals(a: string, b: string): boolean {
+  const crypto = require('crypto');
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function verifyDecisionApi(req: http.IncomingMessage): boolean {
+  const expected = getSecret(process.env.CCP_DECISION_API_TOKEN_ENV || 'CCP_DECISION_API_TOKEN') || process.env.CONTROL_PLANE_SECRET || '';
+  if (!expected) return false;
+  const auth = String(req.headers.authorization || '');
+  const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+  const provided = bearer || String(req.headers['x-control-plane-token'] || req.headers['x-decision-token'] || '').trim();
+  return !!provided && constantTimeEquals(provided, expected);
+}
+
+function isSafeJobId(jobId: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(jobId);
+}
+
 async function ghApiJson(pathOrArgs: string | string[]): Promise<unknown> {
   const args = ['api', ...(Array.isArray(pathOrArgs) ? pathOrArgs : [pathOrArgs])];
   try {
@@ -405,6 +425,21 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
     }
 
     const payload = await parseBody(req);
+
+    const decisionMatch = url.pathname.match(/^\/api\/jobs\/(.+)\/decision$/);
+    if (decisionMatch || url.pathname === '/api/decide') {
+      if (!verifyDecisionApi(req)) { json(res, 403, { ok: false, error: 'decision API auth failed' }); return; }
+      const jobId = decisionMatch ? decodeURIComponent(decisionMatch[1]) : String(payload.jobId || payload.job_id || '').trim();
+      const choice = String(payload.choice || payload.option || payload.optionId || payload.option_id || '').trim();
+      const note = payload.note == null ? undefined : String(payload.note);
+      if (!jobId) { json(res, 400, { ok: false, error: 'jobId missing' }); return; }
+      if (!isSafeJobId(jobId)) { json(res, 400, { ok: false, error: 'invalid jobId' }); return; }
+      if (!choice) { json(res, 400, { ok: false, error: 'choice missing' }); return; }
+      const { answerDecision } = require('../lib/jobs');
+      const result = answerDecision(jobId, choice, note);
+      json(res, result.ok ? 200 : 400, result);
+      return;
+    }
 
     if (url.pathname === '/ingest/vercel') {
       if (!verifyVercel(req)) { json(res, 403, { ok: false, error: 'bad webhook secret' }); return; }

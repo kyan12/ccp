@@ -43,7 +43,7 @@ function envMode(): DecisionMode | null {
 
 export function resolveDecisionPolicy(packet?: Partial<JobPacket> | null, repo?: Partial<RepoMapping> | null): ResolvedDecisionPolicy {
   const base: ResolvedDecisionPolicy = {
-    mode: 'hybrid',
+    mode: 'auto',
     promptOn: [...DEFAULT_PROMPT_ON],
     confidenceThreshold: 0.75,
     timeoutMinutes: 60,

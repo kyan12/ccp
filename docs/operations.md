@@ -10,11 +10,24 @@ node src/bin/supervisor.ts --once
 
 ## Human decision requests
 
-When a worker pauses with `blocker_type: operator-decision`, answer it with:
+When a worker pauses with `blocker_type: operator-decision`, answer it from an operator shell with:
 
 ```bash
 ccp-jobs decide <job_id> <option-id> [note]
 ```
+
+Discord/Hermes bridges can answer the same request without shell access by POSTing JSON to the intake server:
+
+```bash
+curl -X POST http://localhost:${CCP_INTAKE_PORT:-4318}/api/decide \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $CCP_DECISION_API_TOKEN" \
+  -d '{"jobId":"<job_id>","choice":"<option-id>","note":"optional note"}'
+```
+
+The decision POST route requires `CCP_DECISION_API_TOKEN` (or `CONTROL_PLANE_SECRET`) so arbitrary Discord/web clients cannot answer decisions.
+
+Operator decisions are opt-in (`decisionMode: ask|hybrid` or repo/env policy); the default mode is `auto`, so normal CCP jobs run through without requiring a human decision.
 
 This queues a continuation job with the selected answer. See [decisions.md](./decisions.md) for policy modes and config.
 

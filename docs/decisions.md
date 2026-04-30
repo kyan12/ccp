@@ -10,13 +10,13 @@ Decision policy resolves in this order:
 2. `JobPacket.decisionMode`
 3. `JobPacket.decisionPolicy.mode`
 4. `RepoMapping.decisionPolicy.mode`
-5. default: `hybrid`
+5. default: `auto`
 
 Supported modes:
 
-- `hybrid` — default. Worker makes low-risk calls, but pauses for configured high-impact triggers or confidence below threshold.
+- `auto` — default. Worker always makes its best judgment and logs rationale; no operator decision is required.
+- `hybrid` — opt-in. Worker makes low-risk calls, but pauses for configured high-impact triggers or confidence below threshold.
 - `ask` — worker pauses for any important ambiguous decision before high-impact changes.
-- `auto` — worker always makes its best judgment and logs rationale.
 - `never-block` — same non-blocking posture as `auto`, useful as a hard override when throughput matters more than human gating.
 
 ## Repo config
@@ -90,11 +90,27 @@ CCP captures this into `status.integrations.decision`, marks the result as `bloc
 
 ## Answering a decision
 
-Use:
+From an operator shell, use:
 
 ```bash
 ccp-jobs decide <job_id> <option-id> [note]
 ```
+
+For Discord/Hermes routing, the intake server exposes an equivalent JSON endpoint so a bridge can answer without shell access:
+
+```bash
+curl -X POST http://localhost:${CCP_INTAKE_PORT:-4318}/api/decide \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $CCP_DECISION_API_TOKEN" \
+  -d '{"jobId":"<job_id>","choice":"<option-id>","note":"optional note"}'
+
+curl -X POST http://localhost:${CCP_INTAKE_PORT:-4318}/api/jobs/<job_id>/decision \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $CCP_DECISION_API_TOKEN" \
+  -d '{"choice":"<option-id>","note":"optional note"}'
+```
+
+Decision POST routes require `CCP_DECISION_API_TOKEN` (or `CONTROL_PLANE_SECRET`) and reject unsafe job IDs before mutating job state.
 
 Example:
 
@@ -113,5 +129,5 @@ The continuation inherits the original packet and branch context, adds the human
 ## Notes
 
 - This is an auditable stop/resume loop, not free-form chat with the worker.
-- Discord buttons are not required; text command routing keeps the MVP deterministic.
+- Discord buttons are not required; text command routing keeps the MVP deterministic. A Discord bridge should parse the posted command/choice and call `/api/decide` or `/api/jobs/<job_id>/decision`.
 - `defaultTimeoutAction` is persisted in the prompt contract for workers, but automatic timeout execution is not implemented yet.
