@@ -8,6 +8,16 @@ node src/bin/jobs.ts status
 node src/bin/supervisor.ts --once
 ```
 
+## Human decision requests
+
+When a worker pauses with `blocker_type: operator-decision`, answer it with:
+
+```bash
+ccp-jobs decide <job_id> <option-id> [note]
+```
+
+This queues a continuation job with the selected answer. See [decisions.md](./decisions.md) for policy modes and config.
+
 ## Long-running supervisor
 
 ```bash

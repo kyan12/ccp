@@ -16,10 +16,11 @@ const {
   inspectEnvironment,
   interruptJob,
   buildTelemetryIo,
+  answerDecision,
 } = require('../lib/jobs');
 
 function usage(): void {
-  console.log(`jobs <command> [args]\n\nCommands:\n  enqueue <packet.json>\n  start <job_id>\n  list\n  status\n  show <job_id>\n  tail <job_id>\n  result <job_id>\n  interrupt <job_id>\n  retry <job_id>\n  reconcile <job_id|all>\n  doctor [repo]\n  phase0 [repo]\n  compact-memory <repoKey> [--force]\n  telemetry [--days N] [--json]`);
+  console.log(`jobs <command> [args]\n\nCommands:\n  enqueue <packet.json>\n  start <job_id>\n  list\n  status\n  show <job_id>\n  tail <job_id>\n  result <job_id>\n  interrupt <job_id>\n  retry <job_id>\n  decide <job_id> <option-id> [note]\n  reconcile <job_id|all>\n  doctor [repo]\n  phase0 [repo]\n  compact-memory <repoKey> [--force]\n  telemetry [--days N] [--json]`);
 }
 
 function die(msg: string, code: number = 1): never {
@@ -92,6 +93,16 @@ async function main(): Promise<void> {
       const jobId = args[0];
       if (!jobId) die('usage: jobs retry <job_id>');
       const out = startJob(jobId);
+      console.log(JSON.stringify(out, null, 2));
+      process.exit(out.ok ? 0 : 2);
+      break;
+    }
+    case 'decide': {
+      const jobId = args[0];
+      const choice = args[1];
+      const note = args.slice(2).join(' ') || undefined;
+      if (!jobId || !choice) die('usage: jobs decide <job_id> <option-id> [note]');
+      const out = answerDecision(jobId, choice, note);
       console.log(JSON.stringify(out, null, 2));
       process.exit(out.ok ? 0 : 2);
       break;

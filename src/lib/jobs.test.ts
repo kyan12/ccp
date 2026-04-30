@@ -32,12 +32,12 @@ console.log('\nTest: non-interactive constraint in prompt');
 {
   const prompt = buildPrompt(makePacket());
   assert(
-    prompt.includes('Never ask clarifying questions. You are running non-interactively — no one will answer.'),
-    'contains non-interactive instruction',
+    prompt.includes('Decision policy: hybrid.'),
+    'contains hybrid decision policy instruction',
   );
   assert(
-    prompt.includes('If the ticket is ambiguous, investigate the codebase and make your best judgment.'),
-    'contains ambiguity investigation instruction',
+    prompt.includes('structured DecisionRequest protocol'),
+    'contains structured decision protocol instruction',
   );
   assert(
     prompt.includes('If truly blocked (missing credentials, broken build, etc.), exit with a clear blocker description — do not ask questions.'),
@@ -57,7 +57,7 @@ console.log('\nTest: clear ticket produces valid prompt');
   assert(prompt.includes('Fix the login button color to blue'), 'contains goal');
   assert(prompt.includes('- [ ] Login button is blue'), 'contains acceptance criteria');
   assert(prompt.includes('1. Open the login page'), 'contains verification steps');
-  assert(prompt.includes('Never ask clarifying questions'), 'still has non-interactive constraint');
+  assert(prompt.includes('structured DecisionRequest protocol'), 'still has decision protocol instruction');
 }
 
 // ── Test: ambiguous ticket - worker should investigate, not ask ──
@@ -77,8 +77,8 @@ console.log('\nTest: ambiguous ticket directs investigation');
   );
   // Non-interactive constraint must still be present
   assert(
-    prompt.includes('no one will answer'),
-    'non-interactive warning present for ambiguous ticket',
+    prompt.includes('structured DecisionRequest protocol'),
+    'decision protocol warning present for ambiguous ticket',
   );
 }
 
@@ -182,7 +182,7 @@ console.log('\nTest: review feedback preserved');
     review_feedback: ['Fix the typo in README'],
   }));
   assert(prompt.includes('Fix the typo in README'), 'review feedback included');
-  assert(prompt.includes('Never ask clarifying questions'), 'non-interactive constraint with review feedback');
+  assert(prompt.includes('structured DecisionRequest protocol'), 'decision protocol with review feedback');
 }
 
 // ── Finalization classification helpers ──
