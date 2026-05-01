@@ -8,7 +8,8 @@
       "aliases": [
         "proteusx seo",
         "proteusx-seo",
-        "seo"
+        "seo",
+        "seo.proteusx.ai"
       ],
       "autoMerge": true,
       "mergeMethod": "squash",
@@ -16,7 +17,8 @@
         "enabled": true,
         "branch": "main",
         "timeoutSec": 1200
-      }
+      },
+      "productionUrl": "https://seo.proteusx.ai"
     },
     {
       "key": "coding-control-plane",
@@ -144,17 +146,36 @@
       "mergeMethod": "squash"
     },
     {
+      "key": "proteusx-website",
+      "ownerRepo": "ProteusX-Consulting/proteusx-website",
+      "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-website.git",
+      "localPath": "/Users/crab/repos/proteusx-website",
+      "aliases": [
+        "proteusx website",
+        "proteusx ai",
+        "proteusx.ai",
+        "main proteusx site",
+        "proteusx marketing"
+      ],
+      "productionUrl": "https://proteusx.ai",
+      "autoMerge": true,
+      "mergeMethod": "squash"
+    },
+    {
       "key": "proteusx-labs",
       "aliases": [
         "labs",
-        "ptx-labs"
+        "ptx-labs",
+        "proteusx labs",
+        "labs.proteusx.ai"
       ],
       "ownerRepo": "ProteusX-Consulting/proteusx-labs",
       "localPath": "/Users/crab/repos/proteusx-labs",
       "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-labs.git",
       "linearOrg": "default",
       "autoMerge": true,
-      "mergeMethod": "squash"
+      "mergeMethod": "squash",
+      "productionUrl": "https://labs.proteusx.ai"
     },
     {
       "key": "therapeuticcuts",
@@ -189,10 +210,13 @@
       "aliases": [
         "arbs",
         "arbs-ai",
-        "arbitration"
+        "arbitration",
+        "proteusx arbs",
+        "arbs.proteusx.ai"
       ],
       "autoMerge": true,
-      "mergeMethod": "squash"
+      "mergeMethod": "squash",
+      "productionUrl": "https://arbs.proteusx.ai"
     },
     {
       "key": "licatesi-law",
@@ -257,9 +281,14 @@
       "aliases": [
         "g8-nyc",
         "g8 nyc",
-        "g8"
+        "g8",
+        "g8 events",
+        "g8events",
+        "g8events.com"
       ],
-      "autoMerge": true
+      "autoMerge": true,
+      "productionUrl": "https://g8events.com",
+      "mergeMethod": "squash"
     },
     {
       "key": "auth-gateway",

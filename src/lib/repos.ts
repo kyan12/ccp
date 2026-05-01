@@ -36,12 +36,16 @@ function findRepoMapping(payload: IntakePayload = {}): RepoMapping | null {
     }
   }
 
-  // Pass 2: substring match (fuzzy fallback)
-  for (const mapping of cfg.mappings || []) {
-    const candidates: string[] = [mapping.key, mapping.ownerRepo, mapping.gitUrl, mapping.localPath, ...(mapping.aliases || [])]
+  // Pass 2: substring match (fuzzy fallback). Prefer the most-specific
+  // candidate globally so broad aliases/domains like "proteusx.ai" do not
+  // steal requests for subdomains like "arbs.proteusx.ai".
+  const fuzzyCandidates = (cfg.mappings || []).flatMap((mapping) =>
+    [mapping.key, mapping.ownerRepo, mapping.gitUrl, mapping.localPath, ...(mapping.aliases || [])]
       .filter(Boolean)
-      .map(normalize) as string[];
-    if (candidates.some((candidate) => haystacks.some((hay) => hay.includes(candidate)))) {
+      .map((raw) => ({ mapping, candidate: normalize(raw) })),
+  ).sort((a, b) => b.candidate.length - a.candidate.length);
+  for (const { mapping, candidate } of fuzzyCandidates) {
+    if (haystacks.some((hay) => hay.includes(candidate))) {
       return mapping;
     }
   }
