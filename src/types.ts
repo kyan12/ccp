@@ -19,6 +19,20 @@ export interface RepoMapping {
   autoMerge?: boolean;
   mergeMethod?: 'squash' | 'merge' | 'rebase';
   linearOrg?: string;
+  /**
+   * Canonical production URL for this repo's deployed application.
+   * Used by smoke tests (as the base URL when no preview is available),
+   * handoff callbacks (as the deploy_url artifact), and dashboard links.
+   * Example: "https://g8events.com"
+   */
+  productionUrl?: string;
+  /**
+   * Default webhook callback URL for job completion notifications.
+   * When a job for this repo completes and no per-job callback_url is
+   * set on the packet, CCP POSTs a signed status payload here.
+   * Example: "https://seo.proteusx.ai/api/fixes/webhook"
+   */
+  callbackUrl?: string;
   nightly?: NightlyConfig;
   validation?: ValidationConfig;
   /**
