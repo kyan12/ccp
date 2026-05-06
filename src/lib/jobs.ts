@@ -6,6 +6,7 @@ import type {
   PRReviewResult, PrReviewIntegration, RemediationResult, DiscordMessageResult, DiscordThreadResult,
   SupervisorCycleSummary, PreflightResult, LinearSyncResult, PrWatcherCycleResult,
   ReviewComment, AddressedComment, ValidationReport,
+  AutoRemediationStatus, HarnessFailureInfo,
 } from '../types';
 import { run, commandExists, shellQuote } from './shell';
 import { resolveAgent, getAgent, claudeCodeDriver } from './agents';
@@ -24,6 +25,13 @@ const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = re
 const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
 const { fireHandoffCallback } = require('./handoff-callback');
+const {
+  summarizeAutoRemediation,
+  formatAutoRemediationLine,
+  isRemediationJobId,
+  downgradeWebhookStatus,
+  downgradeHandoffStatus,
+} = require('./auto-remediation');
 const { fetchPrReviewComments, postRemediationComments } = require('./pr-comments');
 const {
   buildDecisionInstructions,
@@ -1465,10 +1473,23 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     workerContext: workerContextForHarness,
     proof,
   });
+  // PRO-598: track harness-failure subtype + recovery status so notifiers
+  // can render an explicit "PR/commit recovered: yes/no" without scraping
+  // the blocker prose. Set both for outright harness-failure and for the
+  // harnessless-but-recovered `coded` path so dashboards see the
+  // contract-failure trail even when the work itself succeeded.
+  let harnessFailureInfo: HarnessFailureInfo | null = null;
   if (harnessless.state) {
     finalState = harnessless.state;
     inferredBlocker = harnessless.blocker;
     synthesizedSummary = harnessless.summary;
+    const prRecovered = !!prUrl;
+    const commitRecovered = !!recoveredPr.commit;
+    harnessFailureInfo = {
+      kind: harnessless.state === 'coded' ? 'reporting-contract-recovered' : 'reporting-contract',
+      prRecovered,
+      commitRecovered,
+    };
   } else if (exitCode === 0 && isNoOpOutcome(summary, proof)) {
     finalState = 'no-op';
     inferredBlocker = null;
@@ -1533,6 +1554,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     proof,
     updated_at: nowIso(),
   };
+  if (harnessFailureInfo) {
+    result.harnessFailure = harnessFailureInfo;
+  }
   const decisionRequest = finalState === 'blocked' ? parseDecisionRequest(logText, jobId, nowIso()) : null;
   if (decisionRequest) {
     result.blocker_type = 'operator-decision';

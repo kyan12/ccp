@@ -693,6 +693,13 @@ export interface JobIntegrations {
   smoke?: SmokeResult;
   /** Current/past operator decision request for this job, if the worker paused for one. */
   decision?: DecisionRequest;
+  /**
+   * PRO-598: structured auto-remediation disposition mirrored on
+   * status.json so the dashboard + notifiers can render it without
+   * scraping prose from `blocker`. Updated by finalizeJob and
+   * pr-watcher whenever they decide whether/how to enqueue a fix child.
+   */
+  autoRemediation?: AutoRemediationStatus;
 }
 
 export interface JobStatus {
@@ -808,6 +815,22 @@ export interface JobResult {
   worker_exit_code?: number;
   proof?: RepoProof;
   validation?: ValidationReport;
+  /**
+   * PRO-598: harness-failure subtype + PR/commit recovery status.
+   * Populated when `state === 'harness-failure'` so notifiers don't
+   * have to scrape the blocker prose to know whether a PR was
+   * recovered. Absent on every other state.
+   */
+  harnessFailure?: HarnessFailureInfo;
+  /**
+   * PRO-598: structured auto-remediation disposition. Mirrors
+   * `status.integrations.autoRemediation` onto the stable per-job
+   * record so callers (notifier helpers, webhook/handoff callbacks)
+   * read it from result.json. Notifier renders it as the
+   * "Auto-remediation: ..." line; callbacks downgrade `failed`
+   * statuses when `superseding=true`.
+   */
+  autoRemediation?: AutoRemediationStatus;
   /**
    * Phase 6e: per-agent token / cost sample captured from the agent
    * CLI's self-report at finalize time. Mirrors `status.usage` so
@@ -996,6 +1019,84 @@ export interface RemediationResult {
   job_id?: string;
   branch?: string | null;
   blockerType?: string;
+}
+
+/**
+ * PRO-598: structured auto-remediation disposition for Discord error/blocked
+ * notifications and downstream callbacks. Lets notifiers and the
+ * handoff/webhook callbacks reason about whether CCP will retry without
+ * scraping the prose blocker text.
+ *
+ * - `queued`         a `__reviewfix|__valfix|__deployfix` child was just
+ *                    enqueued (`remediationJobId` populated).
+ * - `existing`       an existing remediation child for the same parent is
+ *                    already running.
+ * - `pending-watcher` the job has a PR but the pr-watcher cycle hasn't
+ *                    fired remediation yet — operator can wait one cycle.
+ * - `depth-limit`    the remediation depth guard tripped (this job is
+ *                    itself a remediation/auto-retry); no further auto
+ *                    retries.
+ * - `disabled`       remediation is globally off (CCP_PR_REMEDIATE_ENABLED).
+ * - `not-applicable` no PR/blocking review/validation/smoke gate to act on.
+ *                    Operator must rerun or refile. Harness-failure with
+ *                    no recovered PR lands here.
+ * - `superseded`     a replacement attempt is already active (operator
+ *                    retried/restarted/repaired); this terminal callback
+ *                    is therefore not authoritative.
+ */
+export type AutoRemediationDisposition =
+  | 'queued'
+  | 'existing'
+  | 'pending-watcher'
+  | 'depth-limit'
+  | 'disabled'
+  | 'not-applicable'
+  | 'superseded';
+
+export interface AutoRemediationStatus {
+  disposition: AutoRemediationDisposition;
+  /**
+   * True when the disposition is 'superseded' OR when an active replacement
+   * attempt makes this notification non-authoritative. Notifiers downgrade
+   * webhook `failed → in_progress` and handoff `failed → blocked` when
+   * `superseding=true` so we stop emitting misleading terminal callbacks.
+   */
+  superseding: boolean;
+  /** Job id of the remediation child when disposition === 'queued'/'existing'. */
+  remediationJobId?: string | null;
+  /** Which remediation path produced this disposition. */
+  source?: 'review' | 'validation' | 'smoke' | 'none';
+  /** Free-form human reason, mirrored into the rendered Discord line. */
+  reason?: string;
+}
+
+/**
+ * PRO-598: harness-failure subtype. `state === 'harness-failure'` covers
+ * the case where the worker exited 0 but did not emit CCP's final summary
+ * contract. Notifiers need to distinguish *reporting-contract* failure
+ * (CCP couldn't tell whether work happened) from *implementation* failure
+ * (worker crashed mid-task), and also report whether PR/commit metadata
+ * was recovered after the fact.
+ */
+export interface HarnessFailureInfo {
+  /**
+   * - `reporting-contract`           worker exited 0, no summary, no PR.
+   *                                  Could be a silent success, a crash, or
+   *                                  a stalled write — operator must
+   *                                  inspect the repo + log.
+   * - `reporting-contract-recovered` worker exited 0, no summary, but CCP
+   *                                  recovered the PR/commit. The code
+   *                                  change probably succeeded; only the
+   *                                  reporting line failed.
+   * - `implementation`               worker exited non-zero or wrote a
+   *                                  blocker — actual code/test/run
+   *                                  failure (currently unused, reserved
+   *                                  for callers that want to reuse the
+   *                                  type for non-zero-exit cases).
+   */
+  kind: 'reporting-contract' | 'reporting-contract-recovered' | 'implementation';
+  prRecovered: boolean;
+  commitRecovered: boolean;
 }
 
 // ── Supervisor ──

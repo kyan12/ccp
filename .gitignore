@@ -17,5 +17,6 @@ configs/1password.json
 configs/quotas.json
 configs/routing.json
 configs/linear-smartadvocateai.json
+configs/outage-*.json
 dist/
 configs/scheduling.json
