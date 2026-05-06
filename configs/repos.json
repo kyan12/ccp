@@ -329,6 +329,23 @@
       ],
       "autoMerge": false,
       "baseBranch": "ccp-staging"
+    },
+    {
+      "key": "webair-ai-chat-mvp",
+      "ownerRepo": "WebAir-AI/Webair.ai-CHAT-MVP",
+      "gitUrl": "git@github.com:WebAir-AI/Webair.ai-CHAT-MVP.git",
+      "localPath": "/Users/crab/repos/Webair.ai-CHAT-MVP",
+      "aliases": [
+        "webair-ai-chat-mvp",
+        "webair.ai-chat-mvp",
+        "webair.ai chat mvp",
+        "webair chat mvp",
+        "webair chat",
+        "chat mvp"
+      ],
+      "autoMerge": false,
+      "mergeMethod": "squash",
+      "baseBranch": "main"
     }
   ]
 }
