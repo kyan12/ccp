@@ -576,3 +576,32 @@ the event loop for other requests. Removed unused `spawnSync` import.
 - **`Promise.all` for independent I/O**: When making multiple independent API calls, use
   `Promise.all` to run them concurrently rather than sequentially.
 
+## 2026-05-06 — Nightly Review
+
+### Tests: auto-remediation.ts coverage (53 cases)
+
+`auto-remediation.ts` was added in d7b5fa7 with 249 lines of pure disposition logic
+(PRO-598) but no test file. The module explicitly states it's designed for testability
+("so tests can exercise the dispositions without any filesystem state"). Added
+`auto-remediation.test.ts` covering:
+- `isRemediationJobId`: suffix matching for `__reviewfix/__valfix/__deployfix/__autoretry`
+- `summarizeAutoRemediation`: all 7 disposition paths, priority ordering (superseded > disabled >
+  depth-limit > queued > existing > pending-watcher > not-applicable), edge cases
+- `formatAutoRemediationLine`: rendering for each disposition type
+- `downgradeWebhookStatus` / `downgradeHandoffStatus`: status downgrade when superseding
+
+Updated `package.json` test script to include the new test file.
+
+### Code Health Observations
+
+- **Advisory lock pattern** (`jobs.ts:103-137`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+- **No open PRs**: All previously flagged PRs have been merged or closed.
+
+### Patterns Worth Reinforcing
+
+- **New pure-function modules need same-day test coverage**: `auto-remediation.ts` was
+  explicitly designed for testability but shipped without tests. Pure function modules
+  should have tests from day one — they're the easiest code to test.
+- **Nightly review cadence**: Seventeen consecutive reviews, each identifying and resolving issues.
+
