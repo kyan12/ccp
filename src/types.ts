@@ -810,6 +810,10 @@ export interface JobResult {
   failed_checks?: CheckInfo[];
   risk?: string | null;
   summary?: string | null;
+  /** Nightly compound learning extracted from worker output (`Learning:`). */
+  learning?: string | null;
+  /** Nightly compound implementation summary from worker output (`Implemented:`). */
+  implemented?: string | null;
   addressedComments?: AddressedComment[];
   tmux_session?: string | null;
   worker_exit_code?: number;

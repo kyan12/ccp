@@ -25,6 +25,7 @@ const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = re
 const { prReviewPolicy } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
 const { fireHandoffCallback } = require('./handoff-callback');
+const { postRepoProgressSummary } = require('./progress-threads');
 const {
   summarizeAutoRemediation,
   formatAutoRemediationLine,
@@ -909,7 +910,7 @@ function notifyStart(jobId: string): void {
 
 function parseSummary(logText: string): Record<string, string> & { addressedComments?: AddressedComment[] } {
   const fields: Record<string, string> & { addressedComments?: AddressedComment[] } = {};
-  for (const key of ['State', 'Commit', 'Prod', 'Verified', 'Blocker', 'Risk', 'Summary']) {
+  for (const key of ['State', 'Commit', 'Prod', 'Verified', 'Blocker', 'Risk', 'Summary', 'Learning', 'Implemented']) {
     const re = new RegExp(`^${key}:\\s*(.+)$`, 'gmi');
     const matches = [...logText.matchAll(re)];
     if (matches.length) fields[key.toLowerCase()] = matches[matches.length - 1][1].trim();
@@ -1548,6 +1549,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     failed_checks: [],
     risk: summary.risk || null,
     summary: summary.summary || synthesizedSummary || null,
+    learning: summary.learning || null,
+    implemented: summary.implemented || null,
     addressedComments: summary.addressedComments || undefined,
     tmux_session: status.tmux_session,
     worker_exit_code: exitCode,
@@ -1783,6 +1786,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     }
 
     saveStatus(jobId, { notifications: { final: sentMain.ok, start: true }, discord_thread_id: threadId });
+
+    const progress = postRepoProgressSummary(packet, loadStatus(jobId), result);
+    appendLog(jobId, `[${nowIso()}] repo progress thread: ${progress.ok ? `ok (${progress.threadId})` : `skipped/failed (${progress.reason || 'unknown'})`}`);
 
     // Post completion comment to Linear ticket
     const didWork = result.commit !== 'none' || ['blocked', 'coded', 'done', 'verified', 'dirty-repo', 'harness-failure'].includes(result.state);
