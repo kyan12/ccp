@@ -1392,7 +1392,12 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   }
   const summary = parseSummary(logText);
   const exitCodeMatch = logText.match(/WORKER_EXIT_CODE:\s*(\d+)/);
-  const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : (status.exit_code ?? 0);
+  // If the tmux session disappeared before the wrapper wrote WORKER_EXIT_CODE,
+  // the worker did NOT complete the harness. Treat that as an interrupted worker,
+  // not as exit-0 harnessless success. Defaulting this path to 0 caused false
+  // HARNESS-FAILURE alerts for jobs that were killed/superseded before Claude
+  // emitted any final contract.
+  const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : (status.exit_code ?? 1);
   const provisionalState = exitCode === 0 ? (summary.state || 'coded') : (summary.state || 'failed');
   // Phase 3: operate on the per-job worktree if one was allocated, else
   // fall back to packet.repo (pre-Phase-3 behavior). Every repo-path

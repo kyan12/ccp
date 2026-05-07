@@ -60,11 +60,12 @@ function fallbackSendDiscordMessage(channelId: string, message: string): Discord
 
 function fallbackCreateDiscordThread(channelId: string, messageId: string, threadName: string): DiscordThreadResult {
   const out = run(OPENCLAW_CMD, [
-    'message', 'thread-create',
+    'message', 'thread', 'create',
     '--channel', 'discord',
-    '--channel-id', channelId,
+    '--target', `channel:${channelId}`,
     '--message-id', messageId,
     '--thread-name', threadName.slice(0, 100),
+    '--json',
   ]);
   let threadId: string | null = null;
   try {
