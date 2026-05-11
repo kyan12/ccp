@@ -156,7 +156,6 @@
       "ownerRepo": "ProteusX-Consulting/didahairstudio",
       "localPath": "/Users/crab/repos/didahairstudio",
       "gitUrl": "git@github.com:ProteusX-Consulting/didahairstudio.git",
-      "linearOrg": "default",
       "autoMerge": true,
       "mergeMethod": "squash"
     },
@@ -187,7 +186,6 @@
       "ownerRepo": "ProteusX-Consulting/proteusx-labs",
       "localPath": "/Users/crab/repos/proteusx-labs",
       "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-labs.git",
-      "linearOrg": "default",
       "autoMerge": true,
       "mergeMethod": "squash",
       "productionUrl": "https://labs.proteusx.ai"
