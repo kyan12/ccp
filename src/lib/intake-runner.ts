@@ -180,7 +180,7 @@ async function intakeToLinear(kind: string, payload: IntakePayload, options: { a
   let dispatch: unknown = null;
   let supervisor: unknown = null;
   if (options.autoDispatch) {
-    dispatch = await dispatchLinearIssues().catch((error: Error) => ({ ok: false, error: error.message }));
+    dispatch = await dispatchLinearIssues({ force: true }).catch((error: Error) => ({ ok: false, error: error.message }));
     if (options.autoStart) {
       const { runSupervisorCycle } = require('./jobs');
       supervisor = await runSupervisorCycle({ maxConcurrent: options.maxConcurrent || 1 }).catch((error: Error) => ({ ok: false, error: error.message }));

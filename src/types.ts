@@ -1190,6 +1190,8 @@ export interface PrWatcherCycleResult {
 export interface DispatchState {
   dispatchedIssueIds: Record<string, { identifier: string; job_id: string; at: string }>;
   updatedAt: string | null;
+  rateLimitedOrgs?: Record<string, { until: string; at: string; reason: string }>;
+  lastPolledOrgs?: Record<string, string>;
 }
 
 export interface DispatchResult {

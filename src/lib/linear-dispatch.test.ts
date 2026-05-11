@@ -6,7 +6,14 @@
  * isolation — that's where the PR B behavior actually lives.
  */
 
-import { chooseAgentLabel } from './linear-dispatch';
+import {
+  chooseAgentLabel,
+  normalizeLinearOrgKeys,
+  shouldSkipOrgForRateLimit,
+  markOrgRateLimited,
+  shouldSkipOrgForPollInterval,
+  markOrgPolled,
+} from './linear-dispatch';
 
 let passed = 0;
 let failed = 0;
@@ -70,6 +77,46 @@ console.log('\nTest: chooseAgentLabel handles missing labels.nodes gracefully');
   assert(chooseAgentLabel({ labels: {} } as any) === undefined, 'missing .nodes → undefined');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   assert(chooseAgentLabel({ labels: { nodes: [] } } as any) === undefined, 'empty .nodes → undefined');
+}
+
+console.log('\nTest: normalizeLinearOrgKeys de-dupes default org aliases');
+{
+  const orgs = normalizeLinearOrgKeys([null, 'default', 'smartadvocateai', 'default', 'smartadvocateai']);
+  assert(JSON.stringify(orgs) === JSON.stringify([null, 'smartadvocateai']), 'null/default collapse to one default poll and other orgs are unique');
+}
+
+console.log('\nTest: rate-limit backoff skips only until the recorded reset time');
+{
+  const state = { dispatchedIssueIds: {}, updatedAt: null };
+  markOrgRateLimited(state, 'default', 1_000, 10_000, 'test');
+  const skipped = shouldSkipOrgForRateLimit(state, 'default', 5_000);
+  assert(skipped.skip === true && /until/.test(skipped.reason || ''), 'org is skipped before reset');
+  const allowed = shouldSkipOrgForRateLimit(state, 'default', 10_001);
+  assert(allowed.skip === false, 'org is allowed after reset');
+  const other = shouldSkipOrgForRateLimit(state, 'smartadvocateai', 5_000);
+  assert(other.skip === false, 'backoff is scoped to the org key');
+}
+
+console.log('\nTest: rate-limit backoff falls back when Linear omits reset headers');
+{
+  const state = { dispatchedIssueIds: {}, updatedAt: null };
+  markOrgRateLimited(state, null, 2_000, null, 'missing header');
+  const skipped = shouldSkipOrgForRateLimit(state, null, 2_001);
+  assert(skipped.skip === true, 'missing reset still creates conservative backoff');
+  const allowed = shouldSkipOrgForRateLimit(state, null, 2_000 + 60 * 60 * 1000 + 1);
+  assert(allowed.skip === false, 'fallback backoff expires after one hour');
+}
+
+console.log('\nTest: dispatch polling interval skips repeated supervisor polls but allows force');
+{
+  const state = { dispatchedIssueIds: {}, updatedAt: null };
+  markOrgPolled(state, null, 20_000);
+  const skipped = shouldSkipOrgForPollInterval(state, null, 30_000, 60_000, false);
+  assert(skipped.skip === true && /last polled/.test(skipped.reason || ''), 'recent default-org poll is skipped');
+  const forced = shouldSkipOrgForPollInterval(state, null, 30_000, 60_000, true);
+  assert(forced.skip === false, 'forced dispatch bypasses poll interval');
+  const elapsed = shouldSkipOrgForPollInterval(state, null, 80_001, 60_000, false);
+  assert(elapsed.skip === false, 'poll interval expires');
 }
 
 console.log(`\nTotal: ${passed} passed, ${failed} failed`);

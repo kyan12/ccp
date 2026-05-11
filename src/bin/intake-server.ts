@@ -71,7 +71,7 @@ async function handleLinearWebhook(payload: Record<string, unknown>, res: http.S
     _linearWebhookTimeout = null;
     try {
       process.stdout.write(`[linear-webhook] dispatching + supervisor cycle\n`);
-      const dispatched = await dispatchLinearIssues();
+      const dispatched = await dispatchLinearIssues({ force: true });
       const started = dispatched.filter((d: { queued?: boolean }) => d.queued);
       if (started.length > 0) {
         process.stdout.write(`[linear-webhook] dispatched ${started.length} new jobs, running supervisor\n`);

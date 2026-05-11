@@ -12,14 +12,22 @@ function ensureDir(): void {
   fs.mkdirSync(DISPATCH_DIR, { recursive: true });
 }
 
+function emptyState(): DispatchState {
+  return { dispatchedIssueIds: {}, updatedAt: null, rateLimitedOrgs: {}, lastPolledOrgs: {} };
+}
+
 function readState(): DispatchState {
   ensureDir();
-  if (!fs.existsSync(STATE_FILE)) return { dispatchedIssueIds: {}, updatedAt: null };
+  if (!fs.existsSync(STATE_FILE)) return emptyState();
   try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    const state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) as DispatchState;
+    if (!state.dispatchedIssueIds) state.dispatchedIssueIds = {};
+    if (!state.rateLimitedOrgs) state.rateLimitedOrgs = {};
+    if (!state.lastPolledOrgs) state.lastPolledOrgs = {};
+    return state;
   } catch (err) {
     console.error(`[ccp] failed to parse ${STATE_FILE}: ${(err as Error).message}`);
-    return { dispatchedIssueIds: {}, updatedAt: null };
+    return emptyState();
   }
 }
 
@@ -31,17 +39,90 @@ function writeState(state: DispatchState): void {
 const { loadConfig } = require('./config');
 const { hasLinearCredentials } = require('./linear');
 
-function listLinearOrgs(): Array<string | null> {
-  const orgs: Array<string | null> = [null]; // default org
-  const reposCfg = loadConfig('repos', { mappings: [] });
+function normalizeLinearOrgKey(orgKey: string | null | undefined): string | null {
+  return orgKey && orgKey !== 'default' ? orgKey : null;
+}
+
+function linearOrgStateKey(orgKey: string | null | undefined): string {
+  return normalizeLinearOrgKey(orgKey) || 'default';
+}
+
+function normalizeLinearOrgKeys(orgs: Array<string | null | undefined>): Array<string | null> {
+  const out: Array<string | null> = [];
   const seen = new Set<string>();
-  for (const m of reposCfg.mappings || []) {
-    if (m.linearOrg && !seen.has(m.linearOrg)) {
-      seen.add(m.linearOrg);
-      orgs.push(m.linearOrg);
-    }
+  for (const raw of orgs) {
+    const normalized = normalizeLinearOrgKey(raw);
+    const key = linearOrgStateKey(normalized);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
   }
-  return orgs;
+  return out;
+}
+
+const DEFAULT_DISPATCH_POLL_INTERVAL_MS = 60 * 1000;
+
+function dispatchPollIntervalMs(): number {
+  const raw = Number(process.env.CCP_LINEAR_DISPATCH_POLL_INTERVAL_MS || DEFAULT_DISPATCH_POLL_INTERVAL_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_DISPATCH_POLL_INTERVAL_MS;
+}
+
+function shouldSkipOrgForPollInterval(
+  state: DispatchState,
+  orgKey: string | null | undefined,
+  nowMs: number = Date.now(),
+  intervalMs: number = dispatchPollIntervalMs(),
+  force: boolean = false,
+): { skip: boolean; reason?: string } {
+  if (force || intervalMs <= 0) return { skip: false };
+  const last = state.lastPolledOrgs?.[linearOrgStateKey(orgKey)];
+  if (!last) return { skip: false };
+  const lastMs = new Date(last).getTime();
+  if (!Number.isFinite(lastMs)) return { skip: false };
+  const nextMs = lastMs + intervalMs;
+  if (nextMs <= nowMs) return { skip: false };
+  return { skip: true, reason: `last polled ${last}; next poll after ${new Date(nextMs).toISOString()}` };
+}
+
+function markOrgPolled(state: DispatchState, orgKey: string | null | undefined, nowMs: number = Date.now()): void {
+  if (!state.lastPolledOrgs) state.lastPolledOrgs = {};
+  state.lastPolledOrgs[linearOrgStateKey(orgKey)] = new Date(nowMs).toISOString();
+}
+
+function shouldSkipOrgForRateLimit(state: DispatchState, orgKey: string | null | undefined, nowMs: number = Date.now()): { skip: boolean; reason?: string } {
+  const entry = state.rateLimitedOrgs?.[linearOrgStateKey(orgKey)];
+  if (!entry?.until) return { skip: false };
+  const untilMs = new Date(entry.until).getTime();
+  if (!Number.isFinite(untilMs) || untilMs <= nowMs) return { skip: false };
+  return { skip: true, reason: `Linear rate-limit backoff until ${entry.until}${entry.reason ? ` (${entry.reason})` : ''}` };
+}
+
+function markOrgRateLimited(state: DispatchState, orgKey: string | null | undefined, nowMs: number = Date.now(), resetMs?: number | null, reason: string = 'rate limit exceeded'): void {
+  const fallbackMs = nowMs + 60 * 60 * 1000;
+  const untilMs = resetMs && resetMs > nowMs ? resetMs : fallbackMs;
+  if (!state.rateLimitedOrgs) state.rateLimitedOrgs = {};
+  state.rateLimitedOrgs[linearOrgStateKey(orgKey)] = {
+    at: new Date(nowMs).toISOString(),
+    until: new Date(untilMs).toISOString(),
+    reason,
+  };
+}
+
+function clearExpiredRateLimits(state: DispatchState, nowMs: number = Date.now()): void {
+  if (!state.rateLimitedOrgs) return;
+  for (const [key, entry] of Object.entries(state.rateLimitedOrgs)) {
+    const untilMs = new Date(entry.until).getTime();
+    if (!Number.isFinite(untilMs) || untilMs <= nowMs) delete state.rateLimitedOrgs[key];
+  }
+}
+
+function listLinearOrgs(): Array<string | null> {
+  const orgs: Array<string | null | undefined> = [null]; // default org
+  const reposCfg = loadConfig('repos', { mappings: [] });
+  for (const m of reposCfg.mappings || []) {
+    orgs.push(m.linearOrg);
+  }
+  return normalizeLinearOrgKeys(orgs);
 }
 
 interface LinearDispatchIssue {
@@ -56,13 +137,26 @@ interface LinearDispatchIssue {
   _orgKey?: string | null;
 }
 
-async function listDispatchCandidates(): Promise<LinearDispatchIssue[]> {
+async function listDispatchCandidates(state?: DispatchState, options: { force?: boolean } = {}): Promise<LinearDispatchIssue[]> {
   const allIssues: LinearDispatchIssue[] = [];
   for (const orgKey of listLinearOrgs()) {
+    if (state) {
+      const backoff = shouldSkipOrgForRateLimit(state, orgKey);
+      if (backoff.skip) {
+        console.error(`[ccp] linear-dispatch: skipping org "${orgKey}" due to ${backoff.reason}`);
+        continue;
+      }
+      const interval = shouldSkipOrgForPollInterval(state, orgKey, Date.now(), dispatchPollIntervalMs(), !!options.force);
+      if (interval.skip) {
+        console.error(`[ccp] linear-dispatch: skipping org "${orgKey}" due to ${interval.reason}`);
+        continue;
+      }
+    }
     if (!hasLinearCredentials(orgKey)) continue;
     const cfg = linearConfig(orgKey);
     if (!cfg.teamId) continue;
     try {
+      markOrgPolled(state || emptyState(), orgKey);
       const data = await linearRequest(
         `query DispatchIssues($teamId: String!) {
           team(id: $teamId) {
@@ -90,7 +184,11 @@ async function listDispatchCandidates(): Promise<LinearDispatchIssue[]> {
       }
       allIssues.push(...issues);
     } catch (err) {
+      const error = err as Error & { linearRateLimited?: boolean; rateLimitResetMs?: number | null };
       console.error(`[ccp] linear-dispatch: failed to list issues for org "${orgKey}":`, err);
+      if (state && (error.linearRateLimited || /rate limit/i.test(error.message))) {
+        markOrgRateLimited(state, orgKey, Date.now(), error.rateLimitResetMs || null, error.message);
+      }
     }
   }
   return allIssues;
@@ -375,10 +473,11 @@ async function moveIssueToInProgress(issueId: string, orgKey: string | null | un
   );
 }
 
-async function dispatchLinearIssues(): Promise<DispatchResult[]> {
+async function dispatchLinearIssues(options: { force?: boolean } = {}): Promise<DispatchResult[]> {
   const { createJob } = require('./jobs');
   const state = readState();
-  const issues = await listDispatchCandidates();
+  clearExpiredRateLimits(state);
+  const issues = await listDispatchCandidates(state, options);
   const out: DispatchResult[] = [];
 
   for (const issue of issues) {
@@ -436,6 +535,22 @@ module.exports = {
   issueToPacket,
   readState,
   chooseAgentLabel,
+  normalizeLinearOrgKeys,
+  shouldSkipOrgForRateLimit,
+  markOrgRateLimited,
+  shouldSkipOrgForPollInterval,
+  markOrgPolled,
 };
 
-export { dispatchLinearIssues, listDispatchCandidates, issueToPacket, readState, chooseAgentLabel };
+export {
+  dispatchLinearIssues,
+  listDispatchCandidates,
+  issueToPacket,
+  readState,
+  chooseAgentLabel,
+  normalizeLinearOrgKeys,
+  shouldSkipOrgForRateLimit,
+  markOrgRateLimited,
+  shouldSkipOrgForPollInterval,
+  markOrgPolled,
+};

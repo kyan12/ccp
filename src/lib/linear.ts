@@ -71,6 +71,13 @@ function getJobLinearLink(jobId: string): LinearJobLink | null {
   return links[jobId] || null;
 }
 
+function parseRateLimitReset(headers: Record<string, string | string[] | number | undefined>): number | null {
+  const raw = headers['x-ratelimit-complexity-reset'] || headers['x-ratelimit-requests-reset'];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const ms = Number(value || 0);
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
 function linearRequest(query: string, variables: Record<string, unknown> = {}, orgKey?: string | null): Promise<Record<string, unknown>> {
   const apiKey = linearApiKey(orgKey);
   if (!apiKey) {
@@ -93,7 +100,14 @@ function linearRequest(query: string, variables: Record<string, unknown> = {}, o
         try {
           const parsed = JSON.parse(data || '{}');
           if (parsed.errors?.length) {
-            reject(new Error(parsed.errors.map((e: { message: string }) => e.message).join('; ')));
+            const message = parsed.errors.map((e: { message: string }) => e.message).join('; ');
+            const err = new Error(message) as Error & { rateLimitResetMs?: number | null; linearOrgKey?: string | null; linearRateLimited?: boolean };
+            if (/rate limit/i.test(message)) {
+              err.linearRateLimited = true;
+              err.rateLimitResetMs = parseRateLimitReset(res.headers);
+              err.linearOrgKey = orgKey || null;
+            }
+            reject(err);
             return;
           }
           resolve(parsed.data);
