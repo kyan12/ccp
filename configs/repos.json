@@ -48,6 +48,21 @@
       "autoMerge": true
     },
     {
+      "key": "g8-nyc",
+      "ownerRepo": "ProteusX-Consulting/g8-nyc",
+      "gitUrl": "git@github.com:ProteusX-Consulting/g8-nyc.git",
+      "localPath": "/Users/crab/repos/g8-nyc",
+      "aliases": [
+        "g8-nyc",
+        "g8 nyc",
+        "g8events",
+        "g8events.com"
+      ],
+      "autoMerge": true,
+      "baseBranch": "main",
+      "productionUrl": "https://www.g8events.com"
+    },
+    {
       "key": "kjevents",
       "ownerRepo": "kyan12/kjevents",
       "gitUrl": "git@github.com:kyan12/kjevents.git",
