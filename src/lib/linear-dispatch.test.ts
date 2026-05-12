@@ -14,6 +14,7 @@ import {
   shouldSkipOrgForPollInterval,
   markOrgPolled,
 } from './linear-dispatch';
+const { parseRateLimitReset } = require('./linear');
 
 let passed = 0;
 let failed = 0;
@@ -117,6 +118,37 @@ console.log('\nTest: dispatch polling interval skips repeated supervisor polls b
   assert(forced.skip === false, 'forced dispatch bypasses poll interval');
   const elapsed = shouldSkipOrgForPollInterval(state, null, 80_001, 60_000, false);
   assert(elapsed.skip === false, 'poll interval expires');
+}
+
+console.log('\nTest: parseRateLimitReset converts seconds to milliseconds');
+{
+  // Unix epoch seconds (~1.7e9) should be converted to ms
+  const seconds = 1717500000;
+  const result = parseRateLimitReset({ 'x-ratelimit-requests-reset': String(seconds) });
+  assert(result === seconds * 1000, 'seconds value is multiplied by 1000');
+}
+
+console.log('\nTest: parseRateLimitReset passes through millisecond values');
+{
+  // Already in ms (~1.7e12) should be returned as-is
+  const ms = 1717500000000;
+  const result = parseRateLimitReset({ 'x-ratelimit-complexity-reset': String(ms) });
+  assert(result === ms, 'millisecond value is returned unchanged');
+}
+
+console.log('\nTest: parseRateLimitReset returns null for missing/invalid headers');
+{
+  assert(parseRateLimitReset({}) === null, 'empty headers → null');
+  assert(parseRateLimitReset({ 'x-ratelimit-requests-reset': '0' }) === null, 'zero → null');
+  assert(parseRateLimitReset({ 'x-ratelimit-requests-reset': 'abc' }) === null, 'non-numeric → null');
+  assert(parseRateLimitReset({ 'x-ratelimit-requests-reset': '-1' }) === null, 'negative → null');
+}
+
+console.log('\nTest: parseRateLimitReset handles array header values');
+{
+  const seconds = 1717500000;
+  const result = parseRateLimitReset({ 'x-ratelimit-requests-reset': [String(seconds), '999'] });
+  assert(result === seconds * 1000, 'uses first element of array and converts from seconds');
 }
 
 console.log(`\nTotal: ${passed} passed, ${failed} failed`);
