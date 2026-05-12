@@ -74,8 +74,11 @@ function getJobLinearLink(jobId: string): LinearJobLink | null {
 function parseRateLimitReset(headers: Record<string, string | string[] | number | undefined>): number | null {
   const raw = headers['x-ratelimit-complexity-reset'] || headers['x-ratelimit-requests-reset'];
   const value = Array.isArray(raw) ? raw[0] : raw;
-  const ms = Number(value || 0);
-  return Number.isFinite(ms) && ms > 0 ? ms : null;
+  const num = Number(value || 0);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  // HTTP rate-limit reset headers are typically Unix epoch seconds (~1.7e9),
+  // but Date.now() returns milliseconds (~1.7e12). Detect and convert.
+  return num < 1e12 ? num * 1000 : num;
 }
 
 function linearRequest(query: string, variables: Record<string, unknown> = {}, orgKey?: string | null): Promise<Record<string, unknown>> {
@@ -556,6 +559,7 @@ module.exports = {
   resolveLinearOrg,
   findIssueByIdentifier,
   postCompletionComment,
+  parseRateLimitReset,
 };
 
 export {
@@ -576,4 +580,5 @@ export {
   resolveLinearOrg,
   findIssueByIdentifier,
   postCompletionComment,
+  parseRateLimitReset,
 };

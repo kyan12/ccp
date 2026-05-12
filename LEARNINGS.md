@@ -605,3 +605,30 @@ Updated `package.json` test script to include the new test file.
   should have tests from day one — they're the easiest code to test.
 - **Nightly review cadence**: Seventeen consecutive reviews, each identifying and resolving issues.
 
+## 2026-05-11 — Nightly Review
+
+### Bug Fixed: `parseRateLimitReset` ignores epoch-seconds from Linear headers
+
+`parseRateLimitReset` in `linear.ts` parsed the `x-ratelimit-*-reset` HTTP header and
+returned the raw numeric value, naming it `ms`. However, these headers contain Unix epoch
+**seconds** (~1.7e9), not milliseconds (~1.7e12). When the result flowed into
+`markOrgRateLimited` and was compared against `Date.now()` (milliseconds), the check
+`resetMs > nowMs` was always false (1.7 billion < 1.7 trillion), so the parsed header
+value was silently discarded and the fallback 1-hour backoff was always used instead.
+
+**Impact:** Rate limit backoff durations were always 1 hour regardless of what the Linear
+API actually reported. If Linear said "retry in 30 seconds," CCP would still wait 1 hour.
+
+**Fix:** Added epoch-unit detection: values < 1e12 are treated as seconds and multiplied
+by 1000. Values >= 1e12 are treated as milliseconds and returned as-is. Added 4 test cases
+for the conversion logic.
+
+### Patterns Worth Reinforcing
+
+- **Recent commits are high quality**: The rate-limit throttling (0dd2bb5), duplicate org
+  dedup (9da4437), and Discord bridge restoration (c8c7764) are well-structured with tests.
+- **Unit consistency in timestamp APIs**: When parsing timestamps from external APIs, always
+  verify whether the value is in seconds or milliseconds. A naming convention (`Ms` suffix)
+  is not enough — the actual data source determines the unit.
+- **Nightly review cadence**: Eighteen consecutive reviews, each identifying and resolving issues.
+
