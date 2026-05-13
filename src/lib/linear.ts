@@ -101,6 +101,26 @@ function linearRequest(query: string, variables: Record<string, unknown> = {}, o
       res.on('data', (chunk: string) => { data += chunk; });
       res.on('end', () => {
         try {
+          // Handle non-2xx HTTP responses before parsing GraphQL body.
+          // Linear may return 429 (rate limit), 500, 502, 503, etc. with a
+          // non-GraphQL body (e.g. {"error":"Too Many Requests"} without an
+          // `errors` array). Without this check, such responses silently
+          // resolve as `undefined` (parsed.data is missing), causing callers
+          // to fail in unexpected ways.
+          const statusCode = res.statusCode || 0;
+          if (statusCode < 200 || statusCode >= 300) {
+            const isRateLimit = statusCode === 429 || /rate limit/i.test(data);
+            const message = `Linear API HTTP ${statusCode}: ${data.slice(0, 200)}`;
+            const err = new Error(message) as Error & { rateLimitResetMs?: number | null; linearOrgKey?: string | null; linearRateLimited?: boolean };
+            if (isRateLimit) {
+              err.linearRateLimited = true;
+              err.rateLimitResetMs = parseRateLimitReset(res.headers);
+              err.linearOrgKey = orgKey || null;
+            }
+            reject(err);
+            return;
+          }
+
           const parsed = JSON.parse(data || '{}');
           if (parsed.errors?.length) {
             const message = parsed.errors.map((e: { message: string }) => e.message).join('; ');
