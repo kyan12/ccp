@@ -632,3 +632,36 @@ for the conversion logic.
   is not enough — the actual data source determines the unit.
 - **Nightly review cadence**: Eighteen consecutive reviews, each identifying and resolving issues.
 
+## 2026-05-12 — Nightly Review
+
+### Bug Fixed: `linearRequest` ignores HTTP status code — non-2xx responses silently resolve as `undefined`
+
+`linearRequest` in `linear.ts` never checked `res.statusCode`. The function only inspected
+the response body for a GraphQL `errors` array. If Linear returned a non-2xx HTTP response
+with a non-GraphQL body (e.g. HTTP 429 with `{"error":"Too Many Requests"}` instead of a
+GraphQL `errors` array, or HTTP 502/503 with an HTML error page), the code would:
+
+1. Parse the body as JSON (or fail trying for HTML responses)
+2. Find no `parsed.errors` array
+3. Resolve the promise with `parsed.data` which is `undefined`
+
+**Impact:** Callers (e.g. `listDispatchCandidates` in `linear-dispatch.ts`) would receive
+`undefined` instead of a rejection, then fail when accessing properties like `.team.issues`.
+For HTTP 429 specifically, the rate-limit backoff logic (`linearRateLimited` flag) would not
+be triggered, so the dispatcher would immediately retry on the next cycle instead of backing
+off — potentially worsening the rate limit situation.
+
+**Fix:** Added HTTP status code check before GraphQL body parsing. Non-2xx responses now
+reject with a descriptive error. HTTP 429 and responses containing "rate limit" in the body
+are tagged with `linearRateLimited = true` and `rateLimitResetMs` from headers, so the
+existing backoff machinery in `linear-dispatch.ts` activates correctly.
+
+### Patterns Worth Reinforcing
+
+- **Always check HTTP status codes**: Even for GraphQL APIs that typically return 200, the
+  server infrastructure (load balancer, CDN, API gateway) can return non-200 responses that
+  don't follow the GraphQL error format. Always check `res.statusCode` before parsing the body.
+- **Recent commits are high quality**: The rate-limit throttling, org dedup, and Discord bridge
+  restoration are well-structured. The new `discord_bridge.py` is clean and well-organized.
+- **Nightly review cadence**: Nineteen consecutive reviews, each identifying and resolving issues.
+
