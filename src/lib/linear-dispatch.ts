@@ -156,7 +156,6 @@ async function listDispatchCandidates(state?: DispatchState, options: { force?: 
     const cfg = linearConfig(orgKey);
     if (!cfg.teamId) continue;
     try {
-      markOrgPolled(state || emptyState(), orgKey);
       const data = await linearRequest(
         `query DispatchIssues($teamId: String!) {
           team(id: $teamId) {
@@ -183,6 +182,11 @@ async function listDispatchCandidates(state?: DispatchState, options: { force?: 
         issue._orgKey = orgKey;
       }
       allIssues.push(...issues);
+      // Mark polled only after a successful API response. If the request fails
+      // (network error, DNS, etc.), the org should be retried on the next
+      // supervisor cycle rather than waiting for the full poll interval.
+      // Rate-limit errors have their own dedicated backoff via markOrgRateLimited.
+      markOrgPolled(state || emptyState(), orgKey);
     } catch (err) {
       const error = err as Error & { linearRateLimited?: boolean; rateLimitResetMs?: number | null };
       console.error(`[ccp] linear-dispatch: failed to list issues for org "${orgKey}":`, err);
