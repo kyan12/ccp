@@ -665,3 +665,33 @@ existing backoff machinery in `linear-dispatch.ts` activates correctly.
   restoration are well-structured. The new `discord_bridge.py` is clean and well-organized.
 - **Nightly review cadence**: Nineteen consecutive reviews, each identifying and resolving issues.
 
+## 2026-05-13 — Nightly Review
+
+### Bug Fixed: `markOrgPolled` called before API request — transient failures suppress retries
+
+`listDispatchCandidates` in `linear-dispatch.ts` called `markOrgPolled(state, orgKey)` at
+line 159 **before** the `linearRequest` API call. If the request failed (network timeout,
+DNS resolution error, connection refused), the org was still recorded as "polled" in the
+persisted state. On the next supervisor cycle, `shouldSkipOrgForPollInterval` would skip
+the org for the remainder of the poll interval (default 60s, configurable).
+
+**Impact:** A transient network error could suppress Linear dispatch polling for an entire
+poll interval. With the default 60s interval this is minor, but operators who configured
+longer intervals (e.g., 5 minutes) would see significant delays in issue dispatch after
+transient failures. Rate-limited errors were already handled separately via
+`markOrgRateLimited`, so the premature poll mark only affected non-rate-limit failures.
+
+**Fix:** Moved `markOrgPolled` to after the successful `linearRequest` response. Only
+successful API calls now reset the poll timer. Failed requests (except rate limits, which
+have dedicated backoff) are retried on the next supervisor cycle.
+
+### Patterns Worth Reinforcing
+
+- **Recent commits are high quality**: The rate-limit HTTP status code check (209154c),
+  seconds-to-milliseconds conversion (61e168f), and dispatch throttling (0dd2bb5) are
+  well-structured with proper test coverage.
+- **Side-effect ordering matters**: Recording "we did X" before actually doing X is a
+  common anti-pattern in async code. If the operation fails, the record is wrong.
+  State mutations that track "last successful" timestamps should be placed after success.
+- **Nightly review cadence**: Twenty consecutive reviews, each identifying and resolving issues.
+
