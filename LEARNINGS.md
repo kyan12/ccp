@@ -695,3 +695,31 @@ have dedicated backoff) are retried on the next supervisor cycle.
   State mutations that track "last successful" timestamps should be placed after success.
 - **Nightly review cadence**: Twenty consecutive reviews, each identifying and resolving issues.
 
+## 2026-05-14 — Nightly Review
+
+### Security Fix: Timing-unsafe secret comparisons in intake-server.ts
+
+Two webhook verification functions used direct string comparison (`===` / `!==`) for
+secret/HMAC comparison, making them vulnerable to timing attacks:
+
+1. **`verifyVercel` (line 110)**: Used `provided === expected` to compare the Vercel
+   webhook secret header against the stored secret. An attacker could probe one byte at
+   a time by measuring response latency. Fixed: now uses `constantTimeEquals` (which
+   wraps `crypto.timingSafeEqual`), matching the pattern already used by `verifyDecisionApi`.
+
+2. **`/api/intake` HMAC check (line 484)**: Used `sigHeader !== expected` to compare
+   the `x-signature-256` HMAC header against the computed HMAC. Same timing-attack
+   vulnerability. Fixed: now uses `constantTimeEquals`.
+
+The `constantTimeEquals` function already existed in the file (used by `verifyDecisionApi`)
+but was not applied to the other two verification paths.
+
+### Patterns Worth Reinforcing
+
+- **Recent commits are high quality**: The Linear rate-limit fixes (db3a6cb, 209154c,
+  61e168f) are well-structured, each addressing a specific failure mode with tests.
+- **Use timing-safe comparison for ALL secret/HMAC checks**: When adding new webhook
+  endpoints or auth checks, always use `constantTimeEquals` (or `crypto.timingSafeEqual`
+  directly). Direct `===` comparison leaks information about how many leading bytes match.
+- **Nightly review cadence**: Twenty-one consecutive reviews, each identifying and resolving issues.
+
