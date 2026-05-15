@@ -511,6 +511,11 @@ export interface ValidationReport {
 
 export interface NightlyConfig {
   enabled?: boolean;
+  /**
+   * Per-repo override for auto-merging PRs created by nightly compound jobs.
+   * When omitted, nightly jobs inherit the normal repo/global autoMerge policy.
+   */
+  autoMerge?: boolean;
   branch?: string;
   timeoutSec?: number;
 }

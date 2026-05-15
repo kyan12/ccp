@@ -7,10 +7,10 @@ Nightly compound runs review recent work across repos, extract learnings, and im
 ## Architecture
 
 ```
-OpenClaw cron (10:30 PM ET daily)
+Hermes cron (10:30 PM ET daily)
   → nightly-compound.ts reads repos.json (nightly.enabled=true)
     → creates a CCP job per repo
-      → supervisor queues and runs them sequentially (max-concurrent=1)
+      → supervisor queues and runs them subject to its max-concurrent setting
         → tmux worker runs Claude Code
           → Discord notifications on start/done/fail
 ```
@@ -27,6 +27,7 @@ Add `nightly` config to any repo:
   "localPath": "/Users/crab/repos/my-repo",
   "nightly": {
     "enabled": true,
+    "autoMerge": false,
     "branch": "main",
     "timeoutSec": 1200
   }
@@ -35,12 +36,13 @@ Add `nightly` config to any repo:
 
 Fields:
 - `enabled` — whether to include in nightly dispatch
+- `autoMerge` — optional override for PRs created by nightly compound jobs; when omitted, nightly jobs inherit the repo/global auto-merge policy
 - `branch` — branch to pull and work from
 - `timeoutSec` — max runtime for the worker (default 900)
 
 ### Enable/Disable a repo
 
-Edit `configs/repos.json` and toggle `nightly.enabled`.
+Use the CCP dashboard repo card toggles for `Nightly compound` and `Nightly auto-merge`, or edit `configs/repos.json` and toggle `nightly.enabled` / `nightly.autoMerge`.
 
 ## Commands
 
@@ -60,11 +62,11 @@ node src/bin/nightly-compound.ts --repo papyrx
 
 ## Cron Schedule
 
-The dispatch runs at **10:30 PM ET daily** via OpenClaw cron.
+The dispatch runs at **10:30 PM ET daily** via Hermes cron.
 
-Cron job name: `nightly-compound-dispatch`
+Cron job name: `ccp-nightly-compound-dispatch`
 
-The supervisor handles execution order. Jobs are queued and run one at a time.
+The supervisor handles execution order. Jobs are queued and run within the configured concurrency limit.
 
 ## Job Lifecycle
 

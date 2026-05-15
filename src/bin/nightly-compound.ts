@@ -97,6 +97,7 @@ function buildPacket(repo: RepoMapping): JobPacket {
     nightly: {
       branch: repo.nightly?.branch || 'main',
       timeoutSec: repo.nightly?.timeoutSec || 900,
+      ...(repo.nightly?.autoMerge !== undefined ? { autoMerge: repo.nightly.autoMerge } : {}),
     },
   };
 }
@@ -120,7 +121,8 @@ function main(): void {
     for (const r of mappings) {
       const status = r.nightly?.enabled ? '✅ enabled' : '❌ disabled';
       const branch = r.nightly?.branch || 'n/a';
-      console.log(`  ${r.key}: ${status} (branch: ${branch})`);
+      const nightlyAutoMerge = r.nightly?.autoMerge === undefined ? 'inherit' : (r.nightly.autoMerge ? 'on' : 'off');
+      console.log(`  ${r.key}: ${status} (branch: ${branch}, nightly auto-merge: ${nightlyAutoMerge})`);
     }
     return;
   }

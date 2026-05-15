@@ -209,7 +209,8 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
     };
 
     // Get per-repo policy for autoMerge/mergeMethod
-    const policy = prReviewPolicy(packet?.repo || undefined);
+    const isNightly = packet?.source === 'nightly' || packet?.label === 'nightly' || !!packet?.nightly;
+    const policy = prReviewPolicy(packet?.repo || undefined, { isNightly });
 
     // Review live PR state
     let review: PRReviewResult;

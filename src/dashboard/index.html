@@ -833,7 +833,9 @@ tbody tr.clickable { cursor: pointer; }
     grid.innerHTML = data.mappings.map(repo => {
       const autoMerge = repo.autoMerge === true;
       const mergeMethod = repo.mergeMethod || 'squash';
-      const nightlyEnabled = repo.nightly && repo.nightly.enabled;
+      const nightly = repo.nightly || {};
+      const nightlyEnabled = nightly.enabled === true;
+      const nightlyAutoMerge = nightly.autoMerge === undefined ? autoMerge : nightly.autoMerge === true;
 
       return '<div class="repo-card" data-key="' + escapeHtml(repo.key) + '">' +
         '<div class="repo-card-header"><div>' +
@@ -849,8 +851,10 @@ tbody tr.clickable { cursor: pointer; }
               '<option value="merge"' + (mergeMethod === 'merge' ? ' selected' : '') + '>merge</option>' +
               '<option value="rebase"' + (mergeMethod === 'rebase' ? ' selected' : '') + '>rebase</option>' +
             '</select></div>' +
-          '<div class="repo-row"><span class="repo-row-label">Nightly</span>' +
-            '<span class="repo-row-value" style="color:' + (nightlyEnabled ? 'var(--green)' : 'var(--text-muted)') + '">' + (nightlyEnabled ? 'Enabled' : 'Off') + '</span></div>' +
+          '<div class="repo-row"><span class="repo-row-label">Nightly compound</span>' +
+            '<div class="toggle ' + (nightlyEnabled ? 'on' : '') + '" data-key="' + escapeHtml(repo.key) + '" data-field="nightly.enabled"></div></div>' +
+          '<div class="repo-row"><span class="repo-row-label">Nightly auto-merge</span>' +
+            '<div class="toggle ' + (nightlyAutoMerge ? 'on' : '') + '" data-key="' + escapeHtml(repo.key) + '" data-field="nightly.autoMerge"></div></div>' +
           (repo.aliases ? '<div class="repo-row"><span class="repo-row-label">Aliases</span><span class="repo-row-value cell-secondary" style="font-size:11px">' + escapeHtml(repo.aliases.join(', ')) + '</span></div>' : '') +
         '</div></div>';
     }).join('');
@@ -859,14 +863,22 @@ tbody tr.clickable { cursor: pointer; }
     grid.querySelectorAll('.toggle').forEach(toggle => {
       toggle.addEventListener('click', async () => {
         const key = toggle.dataset.key;
+        const field = toggle.dataset.field;
         const isOn = toggle.classList.contains('on');
+        const nextValue = !isOn;
+        const payload = field && field.startsWith('nightly.')
+          ? { nightly: { [field.slice('nightly.'.length)]: nextValue } }
+          : { [field || 'autoMerge']: nextValue };
         toggle.classList.toggle('on');
         const resp = await api('/api/repos/' + encodeURIComponent(key), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ autoMerge: !isOn })
+          body: JSON.stringify(payload)
         });
-        if (resp && resp.ok) toast('Auto-merge ' + (!isOn ? 'enabled' : 'disabled'), 'success');
+        const label = field === 'nightly.enabled' ? 'Nightly compound'
+          : field === 'nightly.autoMerge' ? 'Nightly auto-merge'
+          : 'Auto-merge';
+        if (resp && resp.ok) toast(label + ' ' + (nextValue ? 'enabled' : 'disabled'), 'success');
         else { toggle.classList.toggle('on'); toast('Failed to update', 'error'); }
       });
     });

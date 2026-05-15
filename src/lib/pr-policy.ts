@@ -4,7 +4,11 @@
  * Extracted from jobs.ts and pr-watcher.ts to prevent drift.
  */
 
-function prReviewPolicy(repoPath?: string): { enabled: boolean; autoMerge: boolean; mergeMethod: string } {
+interface PRReviewPolicyOptions {
+  isNightly?: boolean;
+}
+
+function prReviewPolicy(repoPath?: string, options: PRReviewPolicyOptions = {}): { enabled: boolean; autoMerge: boolean; mergeMethod: string } {
   const globalAutoMerge = String(process.env.CCP_PR_AUTOMERGE || 'false').toLowerCase() === 'true';
   const globalMergeMethod = process.env.CCP_PR_MERGE_METHOD || 'squash';
 
@@ -14,6 +18,7 @@ function prReviewPolicy(repoPath?: string): { enabled: boolean; autoMerge: boole
     const { findRepoByPath } = require('./repos');
     const repo = repoPath ? findRepoByPath(repoPath) : null;
     if (repo?.autoMerge !== undefined) repoAutoMerge = !!repo.autoMerge;
+    if (options.isNightly && repo?.nightly?.autoMerge !== undefined) repoAutoMerge = !!repo.nightly.autoMerge;
     if (repo?.mergeMethod) repoMergeMethod = repo.mergeMethod;
   } catch { /* repos module not available */ }
 

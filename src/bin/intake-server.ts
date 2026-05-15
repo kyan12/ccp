@@ -260,7 +260,20 @@ async function handlePutRepo(key: string, req: http.IncomingMessage, res: http.S
     }
     if (body.nightly !== undefined && typeof body.nightly === 'object') {
       const mappings = repos.mappings as Array<Record<string, unknown>>;
-      mappings[idx].nightly = { ...(mappings[idx].nightly as Record<string, unknown> || {}), ...(body.nightly as Record<string, unknown>) };
+      const incoming = body.nightly as Record<string, unknown>;
+      const nextNightly: Record<string, unknown> = { ...((mappings[idx].nightly as Record<string, unknown>) || {}) };
+      if (incoming.enabled !== undefined) nextNightly.enabled = !!incoming.enabled;
+      if (incoming.autoMerge !== undefined) nextNightly.autoMerge = !!incoming.autoMerge;
+      if (incoming.branch !== undefined) nextNightly.branch = String(incoming.branch || '').trim() || 'main';
+      if (incoming.timeoutSec !== undefined) {
+        const timeoutSec = Number(incoming.timeoutSec);
+        if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) {
+          json(res, 400, { ok: false, error: 'invalid nightly.timeoutSec' });
+          return;
+        }
+        nextNightly.timeoutSec = Math.floor(timeoutSec);
+      }
+      mappings[idx].nightly = nextNightly;
     }
 
     fs.writeFileSync(REPOS_PATH, JSON.stringify(repos, null, 2) + '\n');
