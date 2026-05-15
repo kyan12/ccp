@@ -107,7 +107,7 @@ function verifyVercel(req: http.IncomingMessage): boolean {
   const expected = getSecret(vercelCfg.webhookSecretEnv || 'VERCEL_WEBHOOK_SECRET');
   if (!expected) return true;
   const provided = (req.headers['x-vercel-signature'] || req.headers['x-webhook-secret'] || '') as string;
-  return provided === expected;
+  return !!provided && constantTimeEquals(provided, expected);
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
@@ -481,7 +481,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         const sigHeader = (req.headers['x-signature-256'] || '') as string;
         const rawBody = JSON.stringify(payload);
         const expected = `sha256=${require('crypto').createHmac('sha256', secret).update(rawBody).digest('hex')}`;
-        if (!sigHeader || sigHeader !== expected) {
+        if (!sigHeader || !constantTimeEquals(sigHeader, expected)) {
           json(res, 403, { ok: false, error: 'bad signature' });
           return;
         }
