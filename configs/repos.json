@@ -41,7 +41,7 @@
         "papyrx"
       ],
       "nightly": {
-        "enabled": false,
+        "enabled": true,
         "branch": "main",
         "timeoutSec": 900,
         "autoMerge": false
