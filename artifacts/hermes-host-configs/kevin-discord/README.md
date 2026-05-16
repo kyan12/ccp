@@ -10,8 +10,9 @@ On Kevin's machine:
 
 ```bash
 # 1. Ensure PROTEUSX_API_KEY is in ~/.hermes/.env
-#    (Get the key from 1Password or Code Crab's ~/.hermes/config.yaml)
-grep -q PROTEUSX_API_KEY ~/.hermes/.env || echo "PROTEUSX_API_KEY=<your-key>" >> ~/.hermes/.env
+#    Retrieve the key from 1Password (vault: ProteusX, item: MCP API Key)
+#    or your team's secrets manager — never paste placeholder values.
+grep -q PROTEUSX_API_KEY ~/.hermes/.env || echo "Add PROTEUSX_API_KEY=<value> to ~/.hermes/.env from 1Password"
 
 # 2. Run setup script
 bash /path/to/setup-proteusx-mcp.sh
@@ -30,7 +31,7 @@ cp proteusx-mcp.sh ~/.hermes/bin/proteusx-mcp.sh
 chmod +x ~/.hermes/bin/proteusx-mcp.sh
 
 # 3. Add to Hermes config (preserving existing servers)
-hermes mcp add proteusx --command bash --args "$HOME/.hermes/bin/proteusx-mcp.sh" --timeout 60 --connect-timeout 30
+hermes mcp add proteusx --command bash --args "$HOME/.hermes/bin/proteusx-mcp.sh"
 
 # 4. Verify & reload
 hermes mcp list
