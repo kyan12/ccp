@@ -153,9 +153,9 @@ async function collectPrReviewFeedback(repo: string, prNum: number): Promise<str
   };
 
   const [reviewComments, reviews, issueComments] = await Promise.all([
-    ghApiJson(`repos/${repo}/pulls/${prNum}/comments`) as Promise<Array<Record<string, unknown>>>,
-    ghApiJson(`repos/${repo}/pulls/${prNum}/reviews`) as Promise<Array<Record<string, unknown>>>,
-    ghApiJson(`repos/${repo}/issues/${prNum}/comments`) as Promise<Array<Record<string, unknown>>>,
+    ghApiJson(`repos/${repo}/pulls/${prNum}/comments`).catch((err: Error) => { console.error(`[intake] failed to fetch review comments for ${repo}#${prNum}: ${err.message}`); return []; }) as Promise<Array<Record<string, unknown>>>,
+    ghApiJson(`repos/${repo}/pulls/${prNum}/reviews`).catch((err: Error) => { console.error(`[intake] failed to fetch reviews for ${repo}#${prNum}: ${err.message}`); return []; }) as Promise<Array<Record<string, unknown>>>,
+    ghApiJson(`repos/${repo}/issues/${prNum}/comments`).catch((err: Error) => { console.error(`[intake] failed to fetch issue comments for ${repo}#${prNum}: ${err.message}`); return []; }) as Promise<Array<Record<string, unknown>>>,
   ]);
 
   for (const comment of reviewComments || []) {

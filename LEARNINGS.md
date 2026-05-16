@@ -723,3 +723,32 @@ but was not applied to the other two verification paths.
   directly). Direct `===` comparison leaks information about how many leading bytes match.
 - **Nightly review cadence**: Twenty-one consecutive reviews, each identifying and resolving issues.
 
+## 2026-05-15 — Nightly Review
+
+### Bug Fixed: `collectPrReviewFeedback` Promise.all rejects entirely on single API failure
+
+`collectPrReviewFeedback` in `intake-server.ts` used `Promise.all` to fetch three GitHub
+API endpoints in parallel (review comments, reviews, issue comments). If any single call
+failed (rate limit, network error, repo 404), `Promise.all` rejected immediately and the
+entire review feedback collection was skipped — even though the other two calls might have
+succeeded and returned useful data.
+
+**Impact:** A transient GitHub API failure on any one of the three endpoints would cause
+remediation workers to receive zero review feedback instead of partial feedback. This is
+particularly problematic during GitHub rate limiting, where one endpoint might be throttled
+while others still respond.
+
+**Fix:** Added `.catch(() => [])` with error logging to each individual `ghApiJson` call.
+Each leg now degrades independently — a failure on one endpoint logs the error and returns
+an empty array, while the other two legs continue successfully. Matches the graceful
+degradation pattern from `linear.ts:339` (`ensureLabel(...).catch(() => null)`).
+
+### Patterns Worth Reinforcing
+
+- **Recent commits are high quality**: The per-repo nightly autoMerge toggle (1bf9b54) is
+  well-structured with tests, dashboard UI updates, and proper input validation.
+- **`Promise.all` needs per-leg error handling**: When fetching independent resources in
+  parallel via `Promise.all`, add `.catch()` to each leg so partial failures don't prevent
+  all data from being collected. This was the same pattern flagged in `ensureLabels` (2026-04-03).
+- **Nightly review cadence**: Twenty-two consecutive reviews, each identifying and resolving issues.
+
