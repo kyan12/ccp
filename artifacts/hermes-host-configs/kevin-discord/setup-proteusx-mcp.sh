@@ -23,11 +23,11 @@ echo "=== ProteusX MCP Setup for Kevin's Hermes Host ==="
 # 1. Validate .env has API key (without printing it)
 echo "[1/6] Checking PROTEUSX_API_KEY in ${ENV_FILE}..."
 if [ ! -f "$ENV_FILE" ]; then
-  echo "FATAL: ${ENV_FILE} not found. Create it with: echo 'PROTEUSX_API_KEY=<your-key>' > ${ENV_FILE}"
+  echo "FATAL: ${ENV_FILE} not found. Create it and add PROTEUSX_API_KEY from 1Password or your secrets manager."
   exit 1
 fi
 if ! grep -q '^PROTEUSX_API_KEY=' "$ENV_FILE"; then
-  echo "FATAL: PROTEUSX_API_KEY not found in ${ENV_FILE}. Add it: echo 'PROTEUSX_API_KEY=<your-key>' >> ${ENV_FILE}"
+  echo "FATAL: PROTEUSX_API_KEY not found in ${ENV_FILE}. Add it from 1Password or your secrets manager."
   exit 1
 fi
 echo "  PROTEUSX_API_KEY=REDACTED (present)"
@@ -87,29 +87,25 @@ else
   if command -v hermes &>/dev/null && hermes mcp add --help &>/dev/null 2>&1; then
     hermes mcp add proteusx \
       --command bash \
-      --args "${WRAPPER}" \
-      --timeout 60 \
-      --connect-timeout 30
+      --args "${WRAPPER}"
   else
-    # Manual YAML append — add under mcp_servers if section exists
+    # Manual config patch — insert proteusx block under mcp_servers
     if grep -q '^mcp_servers:' "$CONFIG_FILE"; then
-      cat >> "$CONFIG_FILE" << YAML
-  proteusx:
-    command: bash
-    args:
-    - ${WRAPPER}
-    timeout: 60
-    connect_timeout: 30
-YAML
+      # Insert after the mcp_servers: line to preserve existing servers
+      sed -i.bak '/^mcp_servers:/a\
+  proteusx:\
+    command: bash\
+    args:\
+    - '"${WRAPPER}"'
+' "$CONFIG_FILE" && rm -f "${CONFIG_FILE}.bak"
     else
       cat >> "$CONFIG_FILE" << YAML
+
 mcp_servers:
   proteusx:
     command: bash
     args:
     - ${WRAPPER}
-    timeout: 60
-    connect_timeout: 30
 YAML
     fi
     echo "  Added proteusx to ${CONFIG_FILE}"
