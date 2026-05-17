@@ -752,3 +752,28 @@ degradation pattern from `linear.ts:339` (`ensureLabel(...).catch(() => null)`).
   all data from being collected. This was the same pattern flagged in `ensureLabels` (2026-04-03).
 - **Nightly review cadence**: Twenty-two consecutive reviews, each identifying and resolving issues.
 
+## 2026-05-16 — Nightly Review
+
+### Refactor: Extract duplicated `isNightlyPacket` to pr-policy.ts
+
+The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label === 'nightly' || !!packet?.nightly`) was defined identically in both `jobs.ts:604` and `pr-watcher.ts:212`. This is the same duplication anti-pattern that previously caused drift in `commandExists` (one copy got a cache, the other didn't) and `prReviewPolicy` (both files had independent implementations before extraction).
+
+**Fix:** Extracted `isNightlyPacket()` helper to `pr-policy.ts` (where the nightly policy logic lives). Both consumers now import from the single source. Added 8 test cases covering null/undefined/empty/non-nightly/all-three-indicators.
+
+### Code Health Observations
+
+- **Advisory lock pattern** (`jobs.ts:103-137`): Still uses sleep-polling advisory lock.
+  Lower priority since CCP typically runs single-instance and cycle overlap is now fixed.
+- **Open PR #65**: Repo progress summaries to Discord threads. Open since 2026-05-07.
+
+### Patterns Worth Reinforcing
+
+- **Recent commits are high quality**: The per-repo nightly autoMerge toggle (1bf9b54) and
+  graceful degradation for PR review feedback (cf16f84) are well-structured with proper tests
+  and input validation.
+- **Extract shared logic early**: The `isNightlyPacket` pattern — identical logic in two files —
+  is the same drift risk that has been resolved multiple times in this project (shell.ts,
+  pr-policy.ts, webhook-callback.ts). Extracting early prevents one copy from evolving
+  independently.
+- **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
+

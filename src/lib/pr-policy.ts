@@ -8,6 +8,14 @@ interface PRReviewPolicyOptions {
   isNightly?: boolean;
 }
 
+/**
+ * Determine whether a job packet represents a nightly compound job.
+ * Extracted here so both jobs.ts and pr-watcher.ts use the same logic.
+ */
+function isNightlyPacket(packet: { source?: string; label?: string; nightly?: unknown } | null | undefined): boolean {
+  return packet?.source === 'nightly' || packet?.label === 'nightly' || !!packet?.nightly;
+}
+
 function prReviewPolicy(repoPath?: string, options: PRReviewPolicyOptions = {}): { enabled: boolean; autoMerge: boolean; mergeMethod: string } {
   const globalAutoMerge = String(process.env.CCP_PR_AUTOMERGE || 'false').toLowerCase() === 'true';
   const globalMergeMethod = process.env.CCP_PR_MERGE_METHOD || 'squash';
@@ -29,5 +37,5 @@ function prReviewPolicy(repoPath?: string, options: PRReviewPolicyOptions = {}):
   };
 }
 
-module.exports = { prReviewPolicy };
-export { prReviewPolicy };
+module.exports = { prReviewPolicy, isNightlyPacket };
+export { prReviewPolicy, isNightlyPacket };

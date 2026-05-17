@@ -19,7 +19,7 @@ const {
 
 const DISCORD_STATUS_CHANNEL: string = process.env.CCP_DISCORD_STATUS_CHANNEL || process.env.CCP_DISCORD_REVIEW_CHANNEL || '';
 const DISCORD_ERRORS_CHANNEL: string = process.env.CCP_DISCORD_ERRORS_CHANNEL || '';
-const { prReviewPolicy } = require('./pr-policy');
+const { prReviewPolicy, isNightlyPacket } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
 const { maybeFireMergeHandoffCallback } = require('./handoff-callback');
 
@@ -209,8 +209,7 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
     };
 
     // Get per-repo policy for autoMerge/mergeMethod
-    const isNightly = packet?.source === 'nightly' || packet?.label === 'nightly' || !!packet?.nightly;
-    const policy = prReviewPolicy(packet?.repo || undefined, { isNightly });
+    const policy = prReviewPolicy(packet?.repo || undefined, { isNightly: isNightlyPacket(packet) });
 
     // Review live PR state
     let review: PRReviewResult;

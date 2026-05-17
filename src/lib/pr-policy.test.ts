@@ -33,7 +33,7 @@ fs.writeFileSync(path.join(root, 'configs', 'repos.json'), JSON.stringify({
   ],
 }, null, 2) + '\n');
 
-const { prReviewPolicy } = require('./pr-policy') as typeof import('./pr-policy');
+const { prReviewPolicy, isNightlyPacket } = require('./pr-policy') as typeof import('./pr-policy');
 
 console.log('\nTest: prReviewPolicy honors nightly autoMerge override only for nightly jobs');
 {
@@ -49,6 +49,18 @@ console.log('\nTest: prReviewPolicy honors nightly autoMerge override only for n
   const nightlyOn = prReviewPolicy(path.join(root, 'nightly-on'), { isNightly: true });
   assert.equal(nightlyOn.autoMerge, true, 'nightly override can enable autoMerge');
   assert.equal(nightlyOn.mergeMethod, 'merge', 'nightly override does not change merge method');
+}
+
+console.log('\nTest: isNightlyPacket identifies nightly packets correctly');
+{
+  assert.equal(isNightlyPacket(null), false, 'null packet');
+  assert.equal(isNightlyPacket(undefined), false, 'undefined packet');
+  assert.equal(isNightlyPacket({}), false, 'empty packet');
+  assert.equal(isNightlyPacket({ source: 'linear' }), false, 'non-nightly source');
+  assert.equal(isNightlyPacket({ source: 'nightly' }), true, 'source=nightly');
+  assert.equal(isNightlyPacket({ label: 'nightly' }), true, 'label=nightly');
+  assert.equal(isNightlyPacket({ nightly: { branch: 'main' } }), true, 'has nightly config');
+  assert.equal(isNightlyPacket({ source: 'nightly', label: 'nightly', nightly: {} }), true, 'all indicators');
 }
 
 fs.rmSync(root, { recursive: true, force: true });
