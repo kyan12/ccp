@@ -22,7 +22,7 @@ const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./
 const { dispatchLinearIssues } = require('./linear-dispatch');
 const { reviewPr } = require('./pr-review');
 const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = require('./outage');
-const { prReviewPolicy } = require('./pr-policy');
+const { prReviewPolicy, isNightlyPacket } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
 const { fireHandoffCallback } = require('./handoff-callback');
 const {
@@ -601,8 +601,7 @@ function formatPrReview(review: PRReviewResult | null): string | null {
 
 function maybeReviewPr(jobId: string, result: JobResult): PRReviewResult & { skipped?: boolean; reason?: string } {
   const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
-  const isNightly = packet?.source === 'nightly' || packet?.label === 'nightly' || !!packet?.nightly;
-  const policy = prReviewPolicy(packet?.repo || undefined, { isNightly });
+  const policy = prReviewPolicy(packet?.repo || undefined, { isNightly: isNightlyPacket(packet) });
   if (!policy.enabled || !result?.pr_url) {
     return { ok: false, skipped: true, reason: !result?.pr_url ? 'no PR URL' : 'PR review disabled' } as PRReviewResult & { skipped?: boolean; reason?: string };
   }
