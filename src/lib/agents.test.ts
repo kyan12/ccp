@@ -225,7 +225,7 @@ console.log('\nTest: codexDriver.buildCommand builds the expected headless shell
   assert(cmd.shellCmd.startsWith("cat '/tmp/prompt.txt' | "), 'pipes prompt on stdin');
   assert(cmd.shellCmd.includes("'/usr/local/bin/codex' exec"), 'uses `codex exec`');
   assert(cmd.shellCmd.includes('--color never'), 'disables ANSI color');
-  assert(cmd.shellCmd.includes('--sandbox workspace-write'), 'uses workspace-write sandbox');
+  assert(cmd.shellCmd.includes('--sandbox danger-full-access'), 'uses danger-full-access sandbox for git metadata writes');
   assert(cmd.shellCmd.includes('--skip-git-repo-check'), 'skips git repo check (worker cwd varies)');
   assert(cmd.env === undefined || Object.keys(cmd.env).length === 0, 'no extra env for codex driver');
 }
