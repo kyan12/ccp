@@ -833,7 +833,8 @@ export interface JobResult {
    * record so callers (notifier helpers, webhook/handoff callbacks)
    * read it from result.json. Notifier renders it as the
    * "Auto-remediation: ..." line; callbacks downgrade `failed`
-   * statuses when `superseding=true`.
+   * statuses when the disposition means CCP has a non-terminal automatic next
+   * step (`queued`, `existing`, `pending-watcher`, or `superseded`).
    */
   autoRemediation?: AutoRemediationStatus;
   /**

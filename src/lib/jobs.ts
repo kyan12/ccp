@@ -585,6 +585,92 @@ function sendToThread(threadId: string, message: string): DiscordMessageResult {
   return sendDiscordMessage(threadId, message);
 }
 
+type FinalNotificationChannel = 'errors' | 'status';
+interface FinalNotificationSignal {
+  channel: FinalNotificationChannel;
+  isBlocking: boolean;
+  heading: string;
+  body: string;
+}
+
+const NON_BLOCKING_AUTO_REMEDIATION = new Set(['queued', 'existing', 'pending-watcher', 'superseded']);
+
+function truncateSignal(text: string | null | undefined, max = 1800): string {
+  const s = text && text.trim() ? text.trim() : 'none captured';
+  return s.length > max ? s.slice(0, max - 3) + '...' : s;
+}
+
+function blockingExplanation(result: Partial<JobResult>, exitCode: number): string {
+  const raw = truncateSignal(result.blocker || result.summary || null);
+  const auto = result.autoRemediation;
+  const noAutomation = auto?.reason ? ` no automated remediation applies (${auto.reason})` : ' no automated remediation applies';
+
+  if (result.state === 'harness-failure' && result.harnessFailure?.kind === 'reporting-contract') {
+    return `Blocking because CCP cannot determine whether durable work exists after the worker omitted the final-summary contract and no PR/commit was recovered;${noAutomation}. Operator action: inspect worker.log and the target repo, then reconcile if work exists or rerun/refile if it does not. Raw signal: ${raw}`;
+  }
+  if (result.state === 'dirty-repo') {
+    return `Blocking because the worker left uncommitted repository changes without a durable commit/PR, so CCP cannot safely continue or mark the job complete. Operator action: inspect the dirty diff, commit/recover it if valid, or discard/rerun. Raw signal: ${raw}`;
+  }
+  if (result.blocker_type === 'operator-decision') {
+    return `Blocking because the worker needs an explicit operator decision before CCP can safely proceed. Required decision: ${raw}`;
+  }
+  if (result.blocker_type === 'validation-failed') {
+    return `Blocking because a required validation gate failed and${noAutomation}; CCP cannot treat the work as safe to merge/ship until the gate is fixed. Raw signal: ${raw}`;
+  }
+  if (result.blocker_type === 'smoke-failed') {
+    return `Blocking because the deployment smoke gate failed and${noAutomation}; CCP cannot treat the change as production-ready until runtime behavior is verified. Raw signal: ${raw}`;
+  }
+  if (result.blocker_type === 'pr-check-failed' || result.blocker_type === 'review' || result.blocker_type === 'merge' || result.blocker_type === 'deploy') {
+    return `Blocking because the PR is not currently mergeable/green and${noAutomation}; CCP must not merge or mark done until the PR blocker is resolved. Raw signal: ${raw}`;
+  }
+  if (exitCode !== 0 || result.state === 'failed') {
+    return `Blocking because the worker exited before producing a durable verified outcome and${noAutomation}. Operator action: inspect the failed worker log or rerun after fixing the root cause. Raw signal: ${raw}`;
+  }
+  return `Blocking because CCP has no safe automated next step for state '${result.state || 'unknown'}' and${noAutomation}. Operator action: inspect the job artifacts and either reconcile to durable work or rerun/refile. Raw signal: ${raw}`;
+}
+
+function classifyFinalNotificationSignal(result: Partial<JobResult>, exitCode: number): FinalNotificationSignal {
+  const auto = result.autoRemediation;
+  const autoLine = auto ? formatAutoRemediationLine(auto) : null;
+  const autoDisposition = auto?.disposition || null;
+  const normallyError = exitCode !== 0 || ['blocked', 'failed', 'dirty-repo', 'harness-failure'].includes(String(result.state));
+  const nonBlocking = !!autoDisposition && NON_BLOCKING_AUTO_REMEDIATION.has(autoDisposition);
+
+  if (normallyError && nonBlocking) {
+    const heading = autoDisposition === 'pending-watcher'
+      ? '🟡 WATCHING'
+      : autoDisposition === 'superseded'
+        ? '🟡 SUPERSEDED'
+        : '🔁 AUTO-REMEDIATING';
+    const raw = truncateSignal(result.blocker || result.summary || null, 700);
+    const body = [
+      autoLine || 'Auto-remediation: active',
+      `Non-blocking: CCP has an automated next step, so this is status noise rather than an operator error.`,
+      raw !== 'none captured' ? `Raw signal: ${raw}` : null,
+    ].filter(Boolean).join('\n');
+    return { channel: 'status', isBlocking: false, heading, body };
+  }
+
+  if (normallyError) {
+    const emojiMap: Record<string, string> = {
+      blocked: '🔴 BLOCKED',
+      'dirty-repo': '🟠 DIRTY-REPO',
+      'harness-failure': '🟣 HARNESS-FAILURE',
+      failed: '❌ FAIL',
+    };
+    const heading = emojiMap[String(result.state)] || '❌ FAIL';
+    const body = [blockingExplanation(result, exitCode), autoLine].filter(Boolean).join('\n');
+    return { channel: 'errors', isBlocking: true, heading, body };
+  }
+
+  return {
+    channel: 'status',
+    isBlocking: false,
+    heading: result.state === 'no-op' ? '⏭️ NO-OP' : '✅ DONE',
+    body: autoLine || truncateSignal(result.summary || result.verified || null, 700),
+  };
+}
+
 // prReviewPolicy is now imported from ./pr-policy
 
 function formatPrReview(review: PRReviewResult | null): string | null {
@@ -1660,6 +1746,19 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const validationRemediation = validationGated
     ? maybeEnqueueValidationRemediation(jobId, packet, result)
     : { ok: false, skipped: true, reason: 'validation not gated' } as RemediationResult;
+  const autoRemediation: AutoRemediationStatus = summarizeAutoRemediation({
+    state: result.state,
+    blockerType: result.blocker_type,
+    prUrl: result.pr_url,
+    commitRecovered: !!(result.commit && result.commit !== 'none'),
+    reviewRemediation: remediation,
+    validationRemediation,
+    smokeRemediation: null,
+    remediationDepthLimited: isRemediationJobId(jobId),
+    remediationDisabled: process.env.CCP_PR_REMEDIATE_ENABLED === 'false',
+  });
+  result.autoRemediation = autoRemediation;
+  writeJson(resultPath(jobId), result);
 
   // Post per-comment replies and summary for remediation jobs that have addressedComments
   const isRemediationJob = /__deployfix|__reviewfix/.test(jobId);
@@ -1691,6 +1790,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       },
       remediation,
       validationRemediation,
+      autoRemediation,
       ...(decisionRequest ? { decision: decisionRequest } : {}),
     },
   });
@@ -1701,25 +1801,16 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     const commitShort = result.commit && result.commit !== 'none' ? result.commit.slice(0, 7) : null;
 
     let runsMsg: string;
-    const isErrorState = exitCode !== 0 || ['blocked', 'failed', 'dirty-repo', 'harness-failure'].includes(result.state);
+    const finalSignal = classifyFinalNotificationSignal(result, exitCode);
     // Build a short validation tag (e.g. "validation:ok (pass=3 fail=0 42s)") if validation ran.
     const validationTag = result.validation && !result.validation.skipped
       ? `validation:${summarizeReport(result.validation)}`
       : null;
     if (result.state === 'no-op') {
       runsMsg = `⏭️ NO-OP — ${ticket} | ${repoName}\n${result.summary || 'No changes needed — already resolved'}`;
-    } else if (isErrorState) {
-      const maxBlocker = 1800;
-      const blocker = result.blocker ? (result.blocker.length > maxBlocker ? result.blocker.slice(0, maxBlocker - 3) + '...' : result.blocker) : 'unknown';
-      const emojiMap: Record<string, string> = {
-        'blocked': '🔴 BLOCKED',
-        'dirty-repo': '🟠 DIRTY-REPO',
-        'harness-failure': '🟣 HARNESS-FAILURE',
-        'failed': '❌ FAIL',
-      };
-      const emoji = emojiMap[result.state] || '❌ FAIL';
+    } else if (finalSignal.isBlocking || finalSignal.heading !== '✅ DONE') {
       const exitInfo = exitCode !== 0 ? ` (exit ${exitCode})` : '';
-      runsMsg = `${emoji} — ${ticket} | ${repoName}${exitInfo}\n${blocker}`;
+      runsMsg = `${finalSignal.heading} — ${ticket} | ${repoName}${exitInfo}\n${finalSignal.body}`;
       if (decisionRequest) runsMsg += `\n\n${formatDecisionRequestForDiscord(decisionRequest)}`;
       if (validationTag) runsMsg += `\n${validationTag}`;
       if (validationRemediation.ok && !validationRemediation.skipped && validationRemediation.job_id) {
@@ -1738,9 +1829,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       runsMsg = parts.join(' | ');
     }
 
-    // Route: successes + no-ops → status channel, all failures/blocked → errors channel
-    const isFailure = exitCode !== 0 || ['blocked', 'failed', 'dirty-repo', 'harness-failure'].includes(result.state);
-    const target = isFailure ? DISCORD_ERRORS_CHANNEL : DISCORD_STATUS_CHANNEL;
+    // Route: actionable blockers → errors; auto-remediating/superseded noise → status.
+    const target = finalSignal.channel === 'errors' ? DISCORD_ERRORS_CHANNEL : DISCORD_STATUS_CHANNEL;
     const sentMain = sendDiscordMessage(target, runsMsg);
 
     if (result.pr_url && prReview.ok) {
@@ -1758,11 +1848,12 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
 
     appendLog(jobId, `[${nowIso()}] FINAL notify: ${sentMain.ok ? 'ok' : (sentMain.stderr || 'failed')}`);
 
-    const isCleanMerge = exitCode === 0
+    const isCleanMerge = !finalSignal.isBlocking
+      && exitCode === 0
       && !['blocked', 'failed', 'dirty-repo', 'harness-failure'].includes(result.state)
       && (!result.pr_url || (prReview.ok && prReview.autoMergeEnabled));
     let threadId: string | null = null;
-    if (!isCleanMerge && sentMain.ok && sentMain.messageId) {
+    if (!isCleanMerge && finalSignal.isBlocking && sentMain.ok && sentMain.messageId) {
       const threadName = `${ticket} — ${packet.goal || packet.ticket_id || repoName}`;
       const thread = createDiscordThread(target, sentMain.messageId, threadName);
       if (thread.ok && thread.threadId) {
@@ -1800,7 +1891,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     blocked: 'failed', failed: 'failed',
     'no-op': 'completed', 'dirty-repo': 'failed', 'harness-failure': 'failed',
   };
-  const webhookStatus = statusMap[finalState] || 'in_progress';
+  const baseWebhookStatus = statusMap[finalState] || 'in_progress';
+  const webhookStatus = downgradeWebhookStatus(baseWebhookStatus, result.autoRemediation);
   const whLog = fireWebhookCallback({
     packet, jobId, status: webhookStatus,
     prUrl: result.pr_url || null, error: result.blocker || null,
@@ -1813,7 +1905,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     blocked: 'blocked', failed: 'failed',
     'no-op': 'done', 'dirty-repo': 'failed', 'harness-failure': 'failed',
   };
-  const handoffStatus = handoffStatusMap[finalState] || 'failed';
+  const baseHandoffStatus = handoffStatusMap[finalState] || 'failed';
+  const handoffStatus = downgradeHandoffStatus(baseHandoffStatus, result.autoRemediation);
   const hcLog = fireHandoffCallback({
     packet,
     status: handoffStatus,
@@ -2736,6 +2829,7 @@ module.exports = {
   extractWorkerFailureContext,
   extractPrReferences,
   classifyHarnesslessSuccess,
+  classifyFinalNotificationSignal,
   createJob,
   listJobs,
   jobsByState,
@@ -2776,6 +2870,7 @@ export {
   extractWorkerFailureContext,
   extractPrReferences,
   classifyHarnesslessSuccess,
+  classifyFinalNotificationSignal,
   createJob,
   listJobs,
   jobsByState,

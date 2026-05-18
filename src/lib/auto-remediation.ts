@@ -214,14 +214,18 @@ export function formatAutoRemediationLine(status: AutoRemediationStatus): string
 
 /**
  * Map an auto-remediation status onto a downgraded webhook callback status.
- * When the parent attempt is being superseded by a replacement, a `failed`
- * webhook would mislead the requestor — return `in_progress` instead.
+ * When CCP already has an automatic next step, a `failed` webhook would
+ * mislead the requestor — return `in_progress` instead.
  */
+function isNonTerminalDisposition(auto: AutoRemediationStatus | undefined): boolean {
+  return !!auto && ['queued', 'existing', 'pending-watcher', 'superseded'].includes(auto.disposition);
+}
+
 export function downgradeWebhookStatus(
   baseStatus: string,
   auto: AutoRemediationStatus | undefined,
 ): string {
-  if (!auto || !auto.superseding) return baseStatus;
+  if (!isNonTerminalDisposition(auto)) return baseStatus;
   if (baseStatus === 'failed') return 'in_progress';
   return baseStatus;
 }
@@ -229,13 +233,13 @@ export function downgradeWebhookStatus(
 /**
  * Map an auto-remediation status onto a downgraded handoff callback status.
  * `failed` becomes `blocked` so Hermes treats this as "still in flight,
- * waiting on a replacement attempt" rather than terminal.
+ * waiting on an automatic next step" rather than terminal.
  */
 export function downgradeHandoffStatus(
   baseStatus: 'done' | 'blocked' | 'failed',
   auto: AutoRemediationStatus | undefined,
 ): 'done' | 'blocked' | 'failed' {
-  if (!auto || !auto.superseding) return baseStatus;
+  if (!isNonTerminalDisposition(auto)) return baseStatus;
   if (baseStatus === 'failed') return 'blocked';
   return baseStatus;
 }
