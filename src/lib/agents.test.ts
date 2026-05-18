@@ -53,11 +53,11 @@ console.log('\nTest: registry lists known agents');
 }
 
 // ── resolveAgent default ──
-console.log('\nTest: resolveAgent falls back to claude-code when nothing is set');
+console.log('\nTest: resolveAgent falls back to codex when nothing is set');
 {
   withEnv('CCP_AGENT', undefined, () => {
     const r = resolveAgent(null, null);
-    assert(r.driver === claudeCodeDriver, 'driver = claude-code');
+    assert(r.driver === codexDriver, 'driver = codex');
     assert(r.source === 'default', 'source = default');
     assert(r.requested === null, 'requested = null');
     assert(r.fellBack === false, 'fellBack = false (nothing was requested)');
@@ -97,7 +97,7 @@ console.log('\nTest: resolveAgent: packet.agent is highest precedence');
 }
 
 // ── resolveAgent: unknown name → graceful fallback ──
-console.log('\nTest: resolveAgent: unknown agent name falls back to claude-code with fellBack=true');
+console.log('\nTest: resolveAgent: unknown agent name falls back to codex with fellBack=true');
 {
   const origWarn = console.warn;
   const warnings: string[] = [];
@@ -105,7 +105,7 @@ console.log('\nTest: resolveAgent: unknown agent name falls back to claude-code 
   try {
     withEnv('CCP_AGENT', undefined, () => {
       const r = resolveAgent({ agent: 'codex-v9' }, null);
-      assert(r.driver === claudeCodeDriver, 'driver still claude-code');
+      assert(r.driver === codexDriver, 'driver falls back to default codex');
       assert(r.fellBack === true, 'fellBack = true');
       assert(r.requested === 'codex-v9', 'requested echoes unknown name');
       assert(r.source === 'default', 'source = default after fall-back');
@@ -385,7 +385,7 @@ console.log('\nTest: resolveAgent routes to devin via explicit config only');
 {
   withEnv('CCP_AGENT', undefined, () => {
     const defaulted = resolveAgent(null, null);
-    assert(defaulted.driver === claudeCodeDriver, 'default remains claude-code (devin inactive by default)');
+    assert(defaulted.driver === codexDriver, 'default is codex');
     const byRepo = resolveAgent(null, { agent: 'devin' });
     assert(byRepo.driver === devinDriver, 'repo.agent=devin selects devin');
     assert(byRepo.source === 'repo', 'repo selection source');

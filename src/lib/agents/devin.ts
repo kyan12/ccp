@@ -4,7 +4,7 @@
  * This is intentionally a dormant scaffold: registering the driver makes CCP
  * capable of routing a job to Devin when explicitly selected (`agent:devin`,
  * repo.agent, or CCP_AGENT=devin), but the built-in default remains
- * claude-code and no repo config is changed here.
+ * the registry default (`codex`) and no repo config is changed here.
  *
  * Devin's terminal product is still evolving, so the invocation is
  * configurable through CCP_DEVIN_COMMAND. The default assumes a future/simple
