@@ -313,8 +313,8 @@ console.log('\nTest: downgradeWebhookStatus');
     'failed → in_progress when superseding',
   );
   assert(
-    downgradeWebhookStatus('failed', { disposition: 'queued', superseding: false }) === 'failed',
-    'failed stays failed when not superseding',
+    downgradeWebhookStatus('failed', { disposition: 'queued', superseding: false }) === 'in_progress',
+    'failed → in_progress when auto-remediation is queued',
   );
   assert(
     downgradeWebhookStatus('done', { disposition: 'superseded', superseding: true }) === 'done',
@@ -335,8 +335,8 @@ console.log('\nTest: downgradeHandoffStatus');
     'failed → blocked when superseding',
   );
   assert(
-    downgradeHandoffStatus('failed', { disposition: 'queued', superseding: false }) === 'failed',
-    'failed stays failed when not superseding',
+    downgradeHandoffStatus('failed', { disposition: 'queued', superseding: false }) === 'blocked',
+    'failed → blocked when auto-remediation is queued',
   );
   assert(
     downgradeHandoffStatus('done', { disposition: 'superseded', superseding: true }) === 'done',

@@ -1,4 +1,4 @@
-import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, extractPrReferences, classifyHarnesslessSuccess } from './jobs';
+import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, extractPrReferences, classifyHarnesslessSuccess, classifyFinalNotificationSignal } from './jobs';
 import type { JobPacket, RepoProof } from '../types';
 
 let passed = 0;
@@ -435,6 +435,72 @@ console.log('\nTest: recovered PR URL flips local-commit-not-pushed away from bl
     blockedWithRecovery === null,
     'PRO-593: with recovered pr_url, scenario is non-blocked (the fix)',
   );
+}
+
+// ── Test: final notifications distinguish actionable blockers from auto-remediating noise ──
+console.log('\nTest: final notification signal routes auto-remediating blockers away from errors');
+{
+  const signal = classifyFinalNotificationSignal(
+    {
+      state: 'blocked',
+      blocker_type: 'validation-failed',
+      blocker: 'typecheck failed',
+      autoRemediation: {
+        disposition: 'queued',
+        superseding: false,
+        source: 'validation',
+        remediationJobId: 'linear_pro_999__valfix',
+        reason: 'fix job enqueued: linear_pro_999__valfix',
+      },
+    },
+    0,
+  );
+  assert(signal.channel === 'status', 'queued auto-remediation is status, not errors');
+  assert(signal.isBlocking === false, 'queued auto-remediation is non-blocking');
+  assert(signal.heading.includes('AUTO-REMEDIATING'), 'non-blocking signal headline says auto-remediating');
+  assert(signal.body.includes('Auto-remediation: queued'), 'renders remediation line');
+}
+
+console.log('\nTest: final notification signal explains true blocking reason, not just raw error');
+{
+  const signal = classifyFinalNotificationSignal(
+    {
+      state: 'harness-failure',
+      blocker: 'raw worker omitted State line',
+      harnessFailure: { kind: 'reporting-contract', prRecovered: false, commitRecovered: false },
+      autoRemediation: {
+        disposition: 'not-applicable',
+        superseding: false,
+        source: 'none',
+        reason: 'harness-failure: no PR/commit recovered — operator must rerun or refile',
+      },
+    },
+    0,
+  );
+  assert(signal.channel === 'errors', 'unrecoverable harness-failure stays in errors');
+  assert(signal.isBlocking === true, 'unrecoverable harness-failure is blocking');
+  assert(signal.body.includes('Blocking because CCP cannot determine whether durable work exists'), 'explains why it blocks');
+  assert(signal.body.includes('no automated remediation applies'), 'explains remediation gap');
+  assert(signal.body.includes('Raw signal:'), 'raw error is secondary context only');
+}
+
+console.log('\nTest: pending watcher is non-blocking while GitHub review signal is still settling');
+{
+  const signal = classifyFinalNotificationSignal(
+    {
+      state: 'coded',
+      pr_url: 'https://github.com/kyan12/ccp/pull/99',
+      autoRemediation: {
+        disposition: 'pending-watcher',
+        superseding: false,
+        source: 'review',
+        reason: 'PR present; awaiting pr-watcher review/check signal',
+      },
+    },
+    0,
+  );
+  assert(signal.channel === 'status', 'pending watcher signal is status');
+  assert(signal.isBlocking === false, 'pending watcher signal is non-blocking');
 }
 
 // ── Summary ──
