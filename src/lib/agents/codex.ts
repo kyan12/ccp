@@ -6,15 +6,16 @@
  *
  * Non-interactive invocation shape used here:
  *
- *   cat <promptFile> | codex exec --color never --sandbox workspace-write --skip-git-repo-check
+ *   cat <promptFile> | codex exec --color never --sandbox danger-full-access --skip-git-repo-check
  *
  * Notes on the flags:
  *   - `exec` is the documented headless entrypoint (equivalent to
  *     Claude Code's `--print`).
  *   - `--color never` strips ANSI so worker.log is readable.
- *   - `--sandbox workspace-write` grants write access only within the cwd
- *     (the per-job repo checkout), matching how the supervisor shells
- *     Claude with `--permission-mode bypassPermissions` inside its cwd.
+ *   - `--sandbox danger-full-access` is required for real CCP jobs because
+ *     Codex's `workspace-write` sandbox blocks `.git` ref/index lock writes
+ *     even when the repo is the cwd, causing every branch/commit/PR task to
+ *     report a false "git repository is locked" blocker.
  *   - `--skip-git-repo-check` prevents Codex from refusing to operate
  *     because the working directory isn't exactly the git root Codex
  *     would expect.
@@ -89,7 +90,7 @@ export const codexDriver: AgentDriver = {
     // drivers behave identically from the supervisor's tmux-worker view.
     const shellCmd =
       `cat ${shellQuote(ctx.promptPath)} | ` +
-      `${shellQuote(ctx.bin)} exec --color never --sandbox workspace-write --skip-git-repo-check`;
+      `${shellQuote(ctx.bin)} exec --color never --sandbox danger-full-access --skip-git-repo-check`;
     return { shellCmd };
   },
 
