@@ -486,7 +486,7 @@ export function compactMemory(opts: CompactMemoryOptions): CompactionOutcome {
 export function compactionArgsFor(agentName: string): string[] {
   switch (agentName) {
     case 'claude-code':
-      return ['--print', '--permission-mode', 'bypassPermissions'];
+      return ['--print', '--model', 'sonnet', '--permission-mode', 'bypassPermissions'];
     case 'codex':
       // Match the codex driver's buildCommand() shape, which pipes the
       // prompt on stdin (`cat prompt | codex exec ...`). We MUST NOT

@@ -140,8 +140,8 @@ console.log('\nTest: claudeCodeDriver.buildCommand builds the pre-refactor shell
     bin: '/usr/local/bin/claude',
   });
   assert(
-    cmd.shellCmd === "cat '/tmp/prompt.txt' | '/usr/local/bin/claude' --print --permission-mode bypassPermissions",
-    `shellCmd has expected shape: ${cmd.shellCmd}`,
+    cmd.shellCmd === "cat '/tmp/prompt.txt' | '/usr/local/bin/claude' --print --model sonnet --permission-mode bypassPermissions",
+    `shellCmd pins standard-context Sonnet: ${cmd.shellCmd}`,
   );
   assert(cmd.env === undefined || Object.keys(cmd.env).length === 0, 'no extra env for claude driver');
 }
@@ -155,6 +155,7 @@ console.log('\nTest: claudeCodeDriver.buildCommand shell-quotes paths with speci
     packet: { job_id: 'x', ticket_id: null, repo: '/tmp/repo', goal: '', source: '', kind: '', label: '' },
     bin: '/opt/bin with space/claude',
   });
+  assert(cmd.shellCmd.includes("--model sonnet"), 'standard-context Sonnet model is pinned');
   assert(cmd.shellCmd.includes("'/tmp/space dir/prompt.txt'"), 'prompt path is quoted');
   assert(cmd.shellCmd.includes("'/opt/bin with space/claude'"), 'binary path is quoted');
 }
