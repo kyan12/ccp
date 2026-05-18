@@ -4,7 +4,10 @@
  * Wraps the existing Claude Code invocation shape so behavior is unchanged
  * when this is the resolved driver:
  *
- *   cat <promptFile> | <claude> --print --permission-mode bypassPermissions
+ *   cat <promptFile> | <claude> --print --model sonnet --permission-mode bypassPermissions
+ *
+ * Explicitly pinning standard-context Sonnet avoids Claude Code falling into
+ * 1M-context mode on hosts where extra usage is not enabled.
  *
  * Preflight prefers claude-opus (if that symlink exists on the host) before
  * falling back to the default `claude` binary — matches the pre-refactor
@@ -59,10 +62,10 @@ export const claudeCodeDriver: AgentDriver = {
 
   buildCommand(ctx: AgentBuildContext): AgentCommand {
     // Pipe prompt via stdin to avoid OS ARG_MAX limits on large prompts.
-    // This is the exact command shape jobs.ts used pre-refactor.
+    // Pin standard-context Sonnet so jobs do not require Claude 1M extra usage.
     const shellCmd =
       `cat ${shellQuote(ctx.promptPath)} | ` +
-      `${shellQuote(ctx.bin)} --print --permission-mode bypassPermissions`;
+      `${shellQuote(ctx.bin)} --print --model sonnet --permission-mode bypassPermissions`;
     return { shellCmd };
   },
 

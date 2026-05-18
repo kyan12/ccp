@@ -332,6 +332,7 @@ console.log('\nTest: compactionArgsFor emits agent-appropriate flags');
     const { compactionArgsFor } = require('./memory-compaction');
     const claudeArgs = compactionArgsFor('claude-code');
     assert(claudeArgs.includes('--print'), 'claude-code uses --print for one-shot');
+    assert(claudeArgs.includes('--model') && claudeArgs.includes('sonnet'), 'claude-code pins standard-context Sonnet');
     assert(claudeArgs.includes('bypassPermissions'), 'claude-code bypasses permissions for compaction');
     const codexArgs = compactionArgsFor('codex');
     assert(codexArgs[0] === 'exec', 'codex uses exec subcommand');
