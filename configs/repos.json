@@ -21,18 +21,6 @@
       "productionUrl": "https://seo.proteusx.ai"
     },
     {
-      "key": "coding-control-plane",
-      "ownerRepo": null,
-      "gitUrl": null,
-      "localPath": "/Users/crab/coding-control-plane",
-      "aliases": [
-        "control plane",
-        "coding-control-plane",
-        "ccp"
-      ],
-      "autoMerge": true
-    },
-    {
       "key": "papyrx",
       "ownerRepo": "kyan12/Papyrx",
       "gitUrl": "git@github.com:kyan12/Papyrx.git",
@@ -62,6 +50,27 @@
       "autoMerge": true,
       "baseBranch": "main",
       "productionUrl": "https://www.g8events.com"
+    },
+    {
+      "key": "g8-nyc-ios",
+      "ownerRepo": "ProteusX-Consulting/g8-nyc-ios",
+      "gitUrl": "git@github.com:ProteusX-Consulting/g8-nyc-ios.git",
+      "localPath": "/Users/crab/repos/g8-nyc-ios",
+      "aliases": [
+        "g8-nyc-ios",
+        "g8 nyc ios",
+        "g8 ios",
+        "g8 iphone",
+        "g8 app",
+        "g8 mobile",
+        "g8 nyc app"
+      ],
+      "autoMerge": false,
+      "baseBranch": "main",
+      "mergeMethod": "squash",
+      "nightly": {
+        "enabled": false
+      }
     },
     {
       "key": "kjevents",
@@ -122,7 +131,9 @@
       "localPath": "/Users/crab/coding-control-plane",
       "aliases": [
         "coding-control-plane",
-        "codeplane"
+        "codeplane",
+        "control plane",
+        "ccp"
       ],
       "autoMerge": true,
       "mergeMethod": "squash",
