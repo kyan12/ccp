@@ -1,4 +1,4 @@
-import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, extractPrReferences, classifyHarnesslessSuccess, classifyFinalNotificationSignal } from './jobs';
+import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, workerLogForCurrentAttempt, extractPrReferences, classifyHarnesslessSuccess, classifyFinalNotificationSignal } from './jobs';
 import type { JobPacket, RepoProof } from '../types';
 
 let passed = 0;
@@ -501,6 +501,25 @@ console.log('\nTest: pending watcher is non-blocking while GitHub review signal 
   );
   assert(signal.channel === 'status', 'pending watcher signal is status');
   assert(signal.isBlocking === false, 'pending watcher signal is non-blocking');
+}
+
+console.log('\nTest: workerLogForCurrentAttempt ignores stale earlier attempt rate-limit text');
+{
+  const log = [
+    '[2026-05-19T01:00:00.000Z] preflight start',
+    '[2026-05-19T01:00:00.100Z] agent: claude-code',
+    'API Error: You\'ve hit your limit, resets 2pm',
+    'WORKER_EXIT_CODE: 1',
+    '[2026-05-19T02:00:00.000Z] preflight start',
+    '[2026-05-19T02:00:00.100Z] agent: codex',
+    'State: verified',
+    'Commit: abc123',
+    'WORKER_EXIT_CODE: 0',
+  ].join('\n');
+  const current = workerLogForCurrentAttempt(log);
+  assert(current.includes('agent: codex'), 'keeps latest attempt');
+  assert(!current.includes('hit your limit'), 'drops stale earlier rate-limit line');
+  assert(current.includes('WORKER_EXIT_CODE: 0'), 'keeps latest exit marker');
 }
 
 // ── Summary ──

@@ -136,15 +136,28 @@ const RATE_LIMIT_PATTERNS: RegExp[] = [
  * Detect rate limit in worker log and extract the reset time.
  * Returns the parsed ISO reset timestamp, or null if no rate limit detected.
  */
+function isLikelyProviderRateLimitLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (/^(PASS|FAIL):\s/i.test(trimmed)) return false;
+  if (/^[+\-]\s/.test(trimmed)) return false;
+  if (/^(assert|console\.|const\s|let\s|var\s|return\s|\/\/|\*)/i.test(trimmed)) return false;
+  if (/\bmatches\s+["'`]?hit your limit/i.test(trimmed)) return false;
+  return /(?:api\s*error|error:|you['’]?ve hit your limit|usage\s+limit|rate.?limit)/i.test(trimmed);
+}
+
 export function detectRateLimit(logText: string): { resetAt: string; reason: string } | null {
-  for (const re of RATE_LIMIT_PATTERNS) {
-    const match = logText.match(re);
-    if (match) {
-      const timeStr = (match[1] || '').trim();
-      const tz = (match[2] || 'America/New_York').trim();
-      const resetAt = parseResetTime(timeStr, tz);
-      if (resetAt) {
-        return { resetAt, reason: match[0].trim().slice(0, 120) };
+  for (const line of logText.split(/\r?\n/)) {
+    if (!isLikelyProviderRateLimitLine(line)) continue;
+    for (const re of RATE_LIMIT_PATTERNS) {
+      const match = line.match(re);
+      if (match) {
+        const timeStr = (match[1] || '').trim();
+        const tz = (match[2] || 'America/New_York').trim();
+        const resetAt = parseResetTime(timeStr, tz);
+        if (resetAt) {
+          return { resetAt, reason: match[0].trim().slice(0, 120) };
+        }
       }
     }
   }
@@ -344,5 +357,7 @@ export function clearOutage(agent: string = DEFAULT_AGENT): void {
   state.outage = false;
   state.consecutiveApiFailures = 0;
   state.outageSince = null;
+  state.rateLimitResetAt = null;
+  state.rateLimitReason = null;
   saveState(state, agent);
 }

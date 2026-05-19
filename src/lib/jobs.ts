@@ -993,6 +993,18 @@ function notifyStart(jobId: string): void {
   saveStatus(jobId, { notifications: { start: sent.ok, final: false } });
 }
 
+function workerLogForCurrentAttempt(logText: string): string {
+  const re = /(^|\n)\[\d{4}-\d{2}-\d{2}T[^\]]+\]\s+preflight start\b/g;
+  let match: RegExpExecArray | null;
+  let last: RegExpExecArray | null = null;
+  while ((match = re.exec(logText)) !== null) {
+    last = match;
+  }
+  if (!last) return logText;
+  const start = (last.index || 0) + (last[1] === '\n' ? 1 : 0);
+  return logText.slice(start);
+}
+
 function parseSummary(logText: string): Record<string, string> & { addressedComments?: AddressedComment[] } {
   const fields: Record<string, string> & { addressedComments?: AddressedComment[] } = {};
   for (const key of ['State', 'Commit', 'Prod', 'Verified', 'Blocker', 'Risk', 'Summary']) {
@@ -1454,6 +1466,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const status = loadStatus(jobId);
   const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   const logText = fs.readFileSync(path.join(jobDir(jobId), 'worker.log'), 'utf8');
+  const currentAttemptLog = workerLogForCurrentAttempt(logText);
 
   // Phase 6e: capture per-agent token / cost usage from the worker
   // log's self-report before we touch the state machine. This is
@@ -1466,7 +1479,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   let capturedUsage: AgentUsage | null = null;
   try {
     capturedUsage = driverForUsage.parseUsage
-      ? driverForUsage.parseUsage({ jobDir: jobDir(jobId), workerLog: logText })
+      ? driverForUsage.parseUsage({ jobDir: jobDir(jobId), workerLog: currentAttemptLog })
       : null;
   } catch (err) {
     appendLog(
@@ -1475,8 +1488,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     );
     capturedUsage = null;
   }
-  const summary = parseSummary(logText);
-  const exitCodeMatch = logText.match(/WORKER_EXIT_CODE:\s*(\d+)/);
+  const summary = parseSummary(currentAttemptLog);
+  const exitCodeMatch = currentAttemptLog.match(/WORKER_EXIT_CODE:\s*(\d+)/);
   const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : (status.exit_code ?? 0);
   const provisionalState = exitCode === 0 ? (summary.state || 'coded') : (summary.state || 'failed');
   // Phase 3: operate on the per-job worktree if one was allocated, else
@@ -1505,7 +1518,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     const gh = commandExists('gh');
     if (gh) {
       // (3) Verify any PR # references found in worker log against the repo.
-      const refs = extractPrReferences(logText);
+      const refs = extractPrReferences(currentAttemptLog);
       const verified = verifyPrCandidates(refs, ownerRepo);
       if (verified) {
         prUrl = verified;
@@ -1941,7 +1954,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   // ultimate default.
   const activeAgent = status.agent || packet.agent || 'claude-code';
   const activeDriverLabel = (getAgent(activeAgent) || claudeCodeDriver).label;
-  const wasApiFailure = (exitCode !== 0 || ['blocked', 'harness-failure'].includes(finalState)) && isApiOutageLog(logText, activeAgent);
+  const wasApiFailure = (exitCode !== 0 || ['blocked', 'harness-failure'].includes(finalState)) && isApiOutageLog(currentAttemptLog, activeAgent);
   const { enteredOutage } = recordJobOutcome(wasApiFailure, activeAgent);
   if (enteredOutage) {
     const outagePct = packet.ticket_id || jobId;
@@ -1955,7 +1968,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   // wall-clock reset phrasing is currently parseable, so Codex jobs will
   // generally take the generic API-error path above instead.
   const { detectRateLimit: detectRL, recordRateLimit } = require('./outage');
-  const rateLimit = detectRL(logText);
+  const finalStateCanPauseForRateLimit = exitCode !== 0 || ['blocked', 'failed', 'harness-failure'].includes(finalState);
+  const rateLimit = finalStateCanPauseForRateLimit ? detectRL(currentAttemptLog) : null;
   if (rateLimit) {
     recordRateLimit(rateLimit.resetAt, rateLimit.reason, activeAgent);
     const resetDate = new Date(rateLimit.resetAt);
@@ -2827,6 +2841,7 @@ module.exports = {
   isNoOpOutcome,
   inferBlockedReason,
   extractWorkerFailureContext,
+  workerLogForCurrentAttempt,
   extractPrReferences,
   classifyHarnesslessSuccess,
   classifyFinalNotificationSignal,
@@ -2868,6 +2883,7 @@ export {
   isNoOpOutcome,
   inferBlockedReason,
   extractWorkerFailureContext,
+  workerLogForCurrentAttempt,
   extractPrReferences,
   classifyHarnesslessSuccess,
   classifyFinalNotificationSignal,

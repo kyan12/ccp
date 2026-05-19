@@ -142,9 +142,11 @@ console.log('\nTest: clearOutage is scoped to the requested agent');
     mod.recordJobOutcome(true, 'claude-code');
     mod.recordJobOutcome(true, 'codex');
     mod.recordJobOutcome(true, 'codex');
+    mod.recordRateLimit(new Date(Date.now() + 60_000).toISOString(), 'operator test', 'claude-code');
 
     mod.clearOutage('claude-code');
     assert(mod.getOutageStatus('claude-code').outage === false, 'claude-code cleared');
+    assert(mod.getOutageStatus('claude-code').rateLimitResetAt === null, 'claude-code rate-limit pause cleared');
     assert(mod.getOutageStatus('codex').outage === true, 'codex still in outage');
   });
 }
@@ -212,6 +214,26 @@ console.log('\nTest: getAllOutageStatuses returns each unique driver exactly onc
       assert(typeof st.outage === 'boolean', `${name}: outage is boolean`);
       assert(st.agent === name, `${name}: agent field matches key`);
     }
+  });
+}
+
+console.log('\nTest: rate-limit detection ignores test/source echoes');
+{
+  const root = freshRoot('rate-limit-noise');
+  withRoot(root, (mod) => {
+    const noisySuccessfulTestOutput = [
+      'Test: codex rate limit regex',
+      '  PASS: matches "hit your limit, resets 2pm"',
+      '+  assert(!!m, \'matches "hit your limit, resets 2pm"\');',
+      'State: verified',
+      'WORKER_EXIT_CODE: 0',
+    ].join('\n');
+    assert(mod.detectRateLimit(noisySuccessfulTestOutput) === null, 'ignores PASS/source-code echoes');
+
+    const realCliError = 'API Error: You\'ve hit your limit, resets 2pm (America/New_York)';
+    const rate = mod.detectRateLimit(realCliError);
+    assert(!!rate, 'detects actual provider rate-limit line');
+    assert(!!rate && rate.reason.toLowerCase().includes('hit your limit'), 'keeps provider reason');
   });
 }
 
