@@ -2,6 +2,27 @@
 
 Operational insights from nightly reviews. Each entry includes the date, what was found, and the action taken.
 
+## 2026-05-18 - Nightly Review
+
+### Bug Fixed: nightly-compound rejects malformed repo config shapes
+
+`nightly-compound.ts` already handled missing or invalid JSON in `configs/repos.json`, but valid
+JSON with the wrong shape, such as `{}`, still reached `mappings.filter()` and crashed the
+scheduled nightly dispatcher. The fix validates that `mappings` is an array and falls back to
+an empty mapping list with an explicit log message.
+
+### Patterns Worth Reinforcing
+
+- Runtime config loaders should validate both parseability and shape before consumers call
+  collection methods.
+- Recent agent-dispatch fixes consistently pair small production changes with focused tests,
+  which keeps nightly maintenance work shippable.
+
+### Code Health Observations
+
+- Generated `dist/` artifacts can contain stale test files that are not represented in `src/`;
+  test coverage should be added in source and wired through `package.json`.
+
 ## 2026-03-26 — Nightly Review
 
 ### Bug Fixed: Overly broad regex in outage detection
@@ -776,4 +797,3 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   pr-policy.ts, webhook-callback.ts). Extracting early prevents one copy from evolving
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
-
