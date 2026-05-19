@@ -52,11 +52,15 @@
       "productionUrl": "https://www.g8events.com"
     },
     {
-      "key": "g8-nyc-ios",
-      "ownerRepo": "ProteusX-Consulting/g8-nyc-ios",
-      "gitUrl": "git@github.com:ProteusX-Consulting/g8-nyc-ios.git",
-      "localPath": "/Users/crab/repos/g8-nyc-ios",
+      "key": "g8-events-ios",
+      "ownerRepo": "ProteusX-Consulting/g8-events-ios",
+      "gitUrl": "git@github.com:ProteusX-Consulting/g8-events-ios.git",
+      "localPath": "/Users/crab/repos/g8-events-ios",
       "aliases": [
+        "g8-events-ios",
+        "g8 events ios",
+        "g8 events app",
+        "g8 events iphone",
         "g8-nyc-ios",
         "g8 nyc ios",
         "g8 ios",
