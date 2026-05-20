@@ -2,6 +2,29 @@
 
 Operational insights from nightly reviews. Each entry includes the date, what was found, and the action taken.
 
+## 2026-05-19 — Nightly Review
+
+### Bug Fixed: Repo config mapping shape now fails closed
+
+Recent commits focused on repo mapping churn and agent dispatch reliability. `repos.ts` assumed
+`configs/repos.json:mappings` was always an array, so a malformed config object could crash repo
+resolution paths that use `.for...of` or `.flatMap`. The repo config loader now logs the invalid
+shape and falls back to empty mappings, matching the existing corrupted-JSON fail-closed pattern.
+
+### Patterns Worth Reinforcing
+
+- **Config hardening with tests**: Recent rate-limit and agent fixes paired behavior changes with
+  regression tests. Keep adding narrow tests around control-plane failure modes.
+- **Canonical repo aliases matter**: Multiple recent commits adjusted G8 Events mappings. Mapping
+  changes should preserve exact-match aliases and avoid broad fuzzy aliases that can steal jobs.
+- **Actionable blocker routing**: The recent blocker classifier work reduces noisy failure states;
+  continue separating operator-actionable blockers from expected waiting states.
+
+### Code Health Observations
+
+- Open PR #78 already hardens `nightly-compound.ts` against malformed repo mappings and should
+  be merged rather than duplicated.
+
 ## 2026-03-26 — Nightly Review
 
 ### Bug Fixed: Overly broad regex in outage detection
@@ -776,4 +799,3 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   pr-policy.ts, webhook-callback.ts). Extracting early prevents one copy from evolving
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
-
