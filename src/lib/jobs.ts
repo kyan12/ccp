@@ -1005,12 +1005,29 @@ function workerLogForCurrentAttempt(logText: string): string {
   return logText.slice(start);
 }
 
+function isFinalSummaryTemplateValue(value: string): boolean {
+  return /^<[^>]+>$/.test(value.trim());
+}
+
+function workerExitCodeForFinalize(logText: string, statusExitCode?: number | null): number {
+  const exitCodeMatch = logText.match(/WORKER_EXIT_CODE:\s*(\d+)/);
+  if (exitCodeMatch) return Number(exitCodeMatch[1]);
+  // The wrapper is expected to append WORKER_EXIT_CODE after the agent exits.
+  // If that marker is missing, treat the run as interrupted/failed even when
+  // launchd/tmux reports a clean shell exit, otherwise provider/auth failures
+  // can be silently finalized as successful placeholder states.
+  if (typeof statusExitCode === 'number' && statusExitCode !== 0) return statusExitCode;
+  return 1;
+}
+
 function parseSummary(logText: string): Record<string, string> & { addressedComments?: AddressedComment[] } {
   const fields: Record<string, string> & { addressedComments?: AddressedComment[] } = {};
   for (const key of ['State', 'Commit', 'Prod', 'Verified', 'Blocker', 'Risk', 'Summary']) {
     const re = new RegExp(`^${key}:\\s*(.+)$`, 'gmi');
-    const matches = [...logText.matchAll(re)];
-    if (matches.length) fields[key.toLowerCase()] = matches[matches.length - 1][1].trim();
+    const matches = [...logText.matchAll(re)]
+      .map((match) => match[1].trim())
+      .filter((value) => !isFinalSummaryTemplateValue(value));
+    if (matches.length) fields[key.toLowerCase()] = matches[matches.length - 1];
   }
   // Extract PR URL — try multiple patterns workers use:
   // 1. "PR created: <url>"
@@ -1489,8 +1506,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     capturedUsage = null;
   }
   const summary = parseSummary(currentAttemptLog);
-  const exitCodeMatch = currentAttemptLog.match(/WORKER_EXIT_CODE:\s*(\d+)/);
-  const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : (status.exit_code ?? 0);
+  const exitCode = workerExitCodeForFinalize(currentAttemptLog, status.exit_code);
   const provisionalState = exitCode === 0 ? (summary.state || 'coded') : (summary.state || 'failed');
   // Phase 3: operate on the per-job worktree if one was allocated, else
   // fall back to packet.repo (pre-Phase-3 behavior). Every repo-path
@@ -1623,7 +1639,11 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   // text. Only fires when the job is actually blocked and no more
   // specific blocker_type is set later (validation-failed,
   // smoke-failed, or a pr-review blockerType override below).
-  const resolvedBlocker = inferredBlocker || (summary.blocker && summary.blocker !== 'none' ? summary.blocker : null);
+  const resolvedBlocker = inferredBlocker
+    || (summary.blocker && summary.blocker !== 'none' ? summary.blocker : null)
+    || (exitCode !== 0
+      ? `worker exited ${exitCode} before producing a durable verified outcome. Worker said: ${workerContextForHarness}`
+      : null);
   let initialBlockerType: string | null = null;
   if (finalState === 'blocked' && resolvedBlocker) {
     const { classifyAmbiguityOrDefault } = require('./blocker-classifier') as typeof import('./blocker-classifier');
@@ -2845,6 +2865,8 @@ module.exports = {
   extractPrReferences,
   classifyHarnesslessSuccess,
   classifyFinalNotificationSignal,
+  parseSummary,
+  workerExitCodeForFinalize,
   createJob,
   listJobs,
   jobsByState,
@@ -2887,6 +2909,8 @@ export {
   extractPrReferences,
   classifyHarnesslessSuccess,
   classifyFinalNotificationSignal,
+  parseSummary,
+  workerExitCodeForFinalize,
   createJob,
   listJobs,
   jobsByState,

@@ -20,3 +20,6 @@ configs/linear-smartadvocateai.json
 configs/outage-*.json
 dist/
 configs/scheduling.json
+artifacts/handoffs/
+supervisor/codex-home/
+tmp/

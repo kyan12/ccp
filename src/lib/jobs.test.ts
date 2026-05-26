@@ -1,4 +1,4 @@
-import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, workerLogForCurrentAttempt, extractPrReferences, classifyHarnesslessSuccess, classifyFinalNotificationSignal } from './jobs';
+import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, workerLogForCurrentAttempt, extractPrReferences, classifyHarnesslessSuccess, classifyFinalNotificationSignal, parseSummary, workerExitCodeForFinalize } from './jobs';
 import type { JobPacket, RepoProof } from '../types';
 
 let passed = 0;
@@ -319,6 +319,30 @@ console.log('\nTest: extractWorkerFailureContext');
   const ctx3 = extractWorkerFailureContext('WORKER_EXIT_CODE: 0');
   // Should return last non-empty lines or fallback
   assert(typeof ctx3 === 'string' && ctx3.length > 0, 'returns fallback context');
+}
+
+// ── Test: placeholder final-summary template text is ignored ──
+console.log('\nTest: placeholder final-summary template text is ignored');
+{
+  const summary = parseSummary([
+    'Ticket: NIGHTLY-papyrx',
+    'At the end, output labels:',
+    'State: <coded/deployed/verified/blocked>',
+    'Commit: <hash or none>',
+    'Summary: <1-3 sentence description of what you did>',
+    'ERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication',
+  ].join('\n'));
+  assert(!summary.state, 'template State placeholder is not treated as final state');
+  assert(!summary.commit, 'template Commit placeholder is not treated as final commit');
+  assert(!summary.summary, 'template Summary placeholder is not treated as final summary');
+}
+
+// ── Test: missing worker exit marker is failed, not clean exit 0 ──
+console.log('\nTest: missing worker exit marker defaults to failed');
+{
+  assert(workerExitCodeForFinalize('State: coded\nWORKER_EXIT_CODE: 0', 1) === 0, 'explicit marker wins');
+  assert(workerExitCodeForFinalize('ERROR: 401 Unauthorized', 0) === 1, 'missing marker with shell exit 0 becomes failure');
+  assert(workerExitCodeForFinalize('ERROR: process died', 7) === 7, 'nonzero shell exit is preserved');
 }
 
 // ── Test: harness-failure scenario (exit 0, no summary fields) ──
