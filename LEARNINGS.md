@@ -777,3 +777,21 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
 
+## 2026-05-30 — Nightly Review
+
+### Bug Fixed: Rate-limit reset parser missed documented `resets at ...` phrasing
+
+The outage detector accepted Claude-style rate-limit lines like `You've hit your limit,
+resets 2pm`, but the project docs and agent type comments also document `resets at ...`.
+That small wording difference meant CCP could classify the worker failure as an API issue
+but miss the reset timestamp, so dispatch would not pause until the provider's reset time.
+
+**Fix:** Allow an optional `at` after `resets` in both the outage parser and Claude agent
+rate-limit pattern. Added regression tests for `resets at 3:30pm`.
+
+### Patterns Worth Reinforcing
+
+- **Keep operational docs and parsers aligned**: If docs list accepted provider log shapes,
+  the parser tests should include those exact variants.
+- **Recent commits are focused and well tested**: The last changes narrowly harden Codex
+  finalization, rate-limit detection, and repo mapping without broad refactors.

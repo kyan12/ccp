@@ -234,6 +234,10 @@ console.log('\nTest: rate-limit detection ignores test/source echoes');
     const rate = mod.detectRateLimit(realCliError);
     assert(!!rate, 'detects actual provider rate-limit line');
     assert(!!rate && rate.reason.toLowerCase().includes('hit your limit'), 'keeps provider reason');
+
+    const resetAt = mod.detectRateLimit('API Error: You\'ve hit your limit, resets at 3:30pm (America/New_York)');
+    assert(!!resetAt, 'detects provider rate-limit line with "resets at"');
+    assert(!!resetAt && resetAt.reason.toLowerCase().includes('resets at'), 'keeps "resets at" provider reason');
   });
 }
 
