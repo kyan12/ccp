@@ -2,6 +2,23 @@
 
 Operational insights from nightly reviews. Each entry includes the date, what was found, and the action taken.
 
+## 2026-05-31 — Nightly Review
+
+### Bug Fixed: Finalization blocker diagnostics used stale prior-attempt log text
+
+Recent work correctly scoped summary parsing and rate-limit detection to the latest worker attempt, but three finalization diagnostics still read the full `worker.log`: harness failure context, dirty-repo context, and `inferBlockedReason` context. When a job retried after an earlier failure, stale blocker text from the first attempt could appear in the current attempt's final blocker, making operators chase the wrong failure.
+
+**Fix:** `finalizeJob` now passes `currentAttemptLog` into those diagnostic paths. Added a regression test proving an earlier attempt's blocker is excluded from the current no-commit blocker reason.
+
+### Patterns Worth Reinforcing
+
+- **Attempt-scoped finalization**: Any final-state classification or operator-facing diagnostic should use the current worker attempt unless it is intentionally summarizing history.
+- **Recent commits are high quality**: The latest job-finalization changes add tests around placeholder summaries, missing worker exit markers, and stale rate-limit text, matching CCP's pattern of production incidents becoming focused regressions.
+
+### Code Health Observations
+
+- **Open draft PRs**: Recent nightly branches remain open (#82-84), including closely related work on current-attempt finalization context and rate-limit reset handling. Keep changes narrow to avoid overlapping those PRs.
+
 ## 2026-03-26 — Nightly Review
 
 ### Bug Fixed: Overly broad regex in outage detection
@@ -776,4 +793,3 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   pr-policy.ts, webhook-callback.ts). Extracting early prevents one copy from evolving
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
-
