@@ -777,3 +777,32 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
 
+## 2026-06-01 — Nightly Review
+
+### Bug Fixed: Codex relative rate-limit windows were not persisted
+
+Recent work changed the default agent to Codex and tightened false-positive rate-limit handling.
+The outage pause path still only parsed wall-clock reset strings like "resets 2pm", while Codex
+and OpenAI often report relative retry windows such as "try again in 30 seconds". That meant a
+Codex rate-limit failure could finish as an error without pausing dispatch until the provider's
+own retry window elapsed.
+
+**Fix:** `detectRateLimit` now parses conservative relative retry windows (`try again in ...` /
+`retry after ...`) with seconds, milliseconds, and minutes, and persists the computed reset
+timestamp on the active agent's outage state.
+
+### Patterns Worth Reinforcing
+
+- **False-positive resistant parsing**: Recent rate-limit fixes correctly avoid parsing echoed
+  test output or source diffs. New provider-output parsing should keep that guardrail and add
+  representative tests for both real CLI phrasing and noisy logs.
+- **Codex default requires Codex-first hardening**: After the dispatch default moved to Codex,
+  operational paths like rate limits, probes, git permissions, and final summaries should be
+  reviewed against actual Codex CLI output rather than Claude-only assumptions.
+
+### Code Health Observations
+
+- **Silent best-effort catches remain in supervisor health paths** (`jobs.ts`): Some dashboard
+  health probes intentionally ignore launchctl/du/heartbeat errors. They are lower priority than
+  dispatch correctness, but future cleanup should log failures where the operator would otherwise
+  see incomplete health data.
