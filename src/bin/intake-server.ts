@@ -486,7 +486,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       return;
     }
 
-    // ── App intake (proteusx-seo control-plane client) ──
+    // ── App intake (proteusx-os control-plane client) ──
     if (url.pathname === '/api/intake') {
       // Verify HMAC signature if CONTROL_PLANE_SECRET is set
       const secret = process.env.CONTROL_PLANE_SECRET;

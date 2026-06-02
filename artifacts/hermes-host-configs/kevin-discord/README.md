@@ -22,7 +22,7 @@ Or manually:
 
 ```bash
 # 1. Pull/build MCP server
-cd ~/repos/proteusx-seo && git pull origin main && pnpm install
+cd ~/repos/proteusx-os && git pull origin main && pnpm install
 cd packages/mcp-server && pnpm build
 
 # 2. Install wrapper script

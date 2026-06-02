@@ -371,7 +371,7 @@ console.log('\nTest: harness-failure detection logic');
   const recovered = classifyHarnesslessSuccess({
     exitCode: 0,
     hasSummaryOutput: false,
-    prUrl: 'https://github.com/ProteusX-Consulting/proteusx-seo/pull/429',
+    prUrl: 'https://github.com/ProteusX-Consulting/proteusx-os/pull/429',
     recoveredCommit: '789b8d146c011e1d4634e6db214fe96d60a17765',
   });
   assert(recovered.state === 'coded', 'exit 0 + PR + recovered commit is coded, not harness-failure');
@@ -449,7 +449,7 @@ console.log('\nTest: recovered PR URL flips local-commit-not-pushed away from bl
 
   // After recovery hydrates pr_url, the same proof must NOT be blocked —
   // hasReviewDelivery short-circuits the local-commit-not-pushed rule.
-  const recoveredUrl = 'https://github.com/ProteusX-Consulting/proteusx-seo/pull/465';
+  const recoveredUrl = 'https://github.com/ProteusX-Consulting/proteusx-os/pull/465';
   const blockedWithRecovery = inferBlockedReason(
     workerLog,
     { state: 'coded', commit: 'd5c9765a3a202d0566547a18707e7f1ff0cf5440', prod: 'no', verified: 'not yet', pr_url: recoveredUrl },

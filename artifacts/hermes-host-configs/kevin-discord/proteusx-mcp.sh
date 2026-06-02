@@ -23,14 +23,14 @@ if [ -z "${PROTEUSX_API_KEY:-}" ]; then
 fi
 
 # Default API URL if not overridden in .env
-export PROTEUSX_API_URL="${PROTEUSX_API_URL:-https://seo.proteusx.ai}"
+export PROTEUSX_API_URL="${PROTEUSX_API_URL:-https://app.proteusx.ai}"
 
 # Path to built MCP server — adjust if repo is elsewhere
-MCP_SERVER="${PROTEUSX_MCP_SERVER:-$HOME/repos/proteusx-seo/packages/mcp-server/dist/index.js}"
+MCP_SERVER="${PROTEUSX_MCP_SERVER:-$HOME/repos/proteusx-os/packages/mcp-server/dist/index.js}"
 
 if [ ! -f "$MCP_SERVER" ]; then
   echo "FATAL: MCP server not found at $MCP_SERVER" >&2
-  echo "Run: cd ~/repos/proteusx-seo && git pull origin main && pnpm install && cd packages/mcp-server && pnpm build" >&2
+  echo "Run: cd ~/repos/proteusx-os && git pull origin main && pnpm install && cd packages/mcp-server && pnpm build" >&2
   exit 1
 fi
 

@@ -277,7 +277,7 @@ console.log('\nTest: maybeFireMergeHandoffCallback — fires for stale-worker me
       ticket_id: 'PRO-580',
     }),
     jobId: 'linear_pro_580',
-    prUrl: 'https://github.com/ProteusX-Consulting/proteusx-seo/pull/445',
+    prUrl: 'https://github.com/ProteusX-Consulting/proteusx-os/pull/445',
     commit: 'abc123def4567',
     branch: 'fix/koka-crawl-respectrobotstxt',
     alreadyFired: false,

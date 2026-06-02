@@ -1,15 +1,20 @@
 {
   "mappings": [
     {
-      "key": "proteusx-seo",
-      "ownerRepo": "ProteusX-Consulting/proteusx-seo",
-      "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-seo.git",
-      "localPath": "/Users/crab/repos/proteusx-seo",
+      "key": "proteusx-os",
+      "ownerRepo": "ProteusX-Consulting/proteusx-os",
+      "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-os.git",
+      "localPath": "/Users/crab/repos/proteusx-os",
       "aliases": [
+        "proteusx os",
+        "proteusx-os",
+        "proteusx app",
+        "proteusx-app",
         "proteusx seo",
         "proteusx-seo",
         "seo",
-        "seo.proteusx.ai"
+        "seo.proteusx.ai",
+        "app.proteusx.ai"
       ],
       "autoMerge": true,
       "mergeMethod": "squash",
@@ -18,7 +23,7 @@
         "branch": "main",
         "timeoutSec": 1200
       },
-      "productionUrl": "https://seo.proteusx.ai"
+      "productionUrl": "https://app.proteusx.ai"
     },
     {
       "key": "papyrx",

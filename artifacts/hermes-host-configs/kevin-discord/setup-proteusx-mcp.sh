@@ -4,7 +4,7 @@
 #
 # Prerequisites:
 #   1. PROTEUSX_API_KEY in ~/.hermes/.env  (e.g. PROTEUSX_API_KEY=<key>)
-#   2. proteusx-seo repo cloned at ~/repos/proteusx-seo (or set PROTEUSX_REPO)
+#   2. proteusx-os repo cloned at ~/repos/proteusx-os (or set PROTEUSX_REPO)
 #   3. Node.js >= 18, pnpm available
 #
 # Usage: bash setup-proteusx-mcp.sh
@@ -15,7 +15,7 @@ HERMES_HOME="${HOME}/.hermes"
 BIN_DIR="${HERMES_HOME}/bin"
 ENV_FILE="${HERMES_HOME}/.env"
 CONFIG_FILE="${HERMES_HOME}/config.yaml"
-REPO_DIR="${PROTEUSX_REPO:-${HOME}/repos/proteusx-seo}"
+REPO_DIR="${PROTEUSX_REPO:-${HOME}/repos/proteusx-os}"
 WRAPPER="${BIN_DIR}/proteusx-mcp.sh"
 
 echo "=== ProteusX MCP Setup for Kevin's Hermes Host ==="
@@ -35,8 +35,8 @@ echo "  PROTEUSX_API_KEY=REDACTED (present)"
 # 2. Build MCP server from current origin/main
 echo "[2/6] Building MCP server from ${REPO_DIR}..."
 if [ ! -d "$REPO_DIR" ]; then
-  echo "  Cloning proteusx-seo..."
-  git clone https://github.com/ProteusX-Consulting/proteusx-seo.git "$REPO_DIR"
+  echo "  Cloning proteusx-os..."
+  git clone https://github.com/ProteusX-Consulting/proteusx-os.git "$REPO_DIR"
 fi
 cd "$REPO_DIR"
 git fetch origin main
@@ -67,8 +67,8 @@ if [ -z "${PROTEUSX_API_KEY:-}" ]; then
   echo "FATAL: PROTEUSX_API_KEY not set. Add it to $ENV_FILE" >&2
   exit 1
 fi
-export PROTEUSX_API_URL="${PROTEUSX_API_URL:-https://seo.proteusx.ai}"
-MCP_SERVER="${PROTEUSX_MCP_SERVER:-$HOME/repos/proteusx-seo/packages/mcp-server/dist/index.js}"
+export PROTEUSX_API_URL="${PROTEUSX_API_URL:-https://app.proteusx.ai}"
+MCP_SERVER="${PROTEUSX_MCP_SERVER:-$HOME/repos/proteusx-os/packages/mcp-server/dist/index.js}"
 if [ ! -f "$MCP_SERVER" ]; then
   echo "FATAL: MCP server not found at $MCP_SERVER" >&2
   exit 1
