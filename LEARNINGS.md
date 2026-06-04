@@ -2,6 +2,31 @@
 
 Operational insights from nightly reviews. Each entry includes the date, what was found, and the action taken.
 
+## 2026-06-03 — Nightly Review
+
+### Bug Fixed: Worker exit marker parsing used the first loose match
+
+Recent job-finalization hardening correctly treats missing `WORKER_EXIT_CODE` markers as failed
+runs, but the parser still accepted the first loose `WORKER_EXIT_CODE: N` substring in the worker
+log. Agent output can include prompt snippets, grep results, or test fixtures that mention the
+marker before the wrapper appends the real final line.
+
+**Fix:** `workerExitCodeForFinalize` now only accepts line-anchored wrapper markers and uses the
+last one in the current attempt log. This keeps echoed source text from changing finalization and
+handles repeated wrapper markers conservatively.
+
+### Patterns Worth Reinforcing
+
+- **Finalization contract tests**: Recent fixes around placeholder summaries and missing exit
+  markers are high leverage because a bad final state can misroute jobs and callbacks.
+- **Small parser hardening beats broad refactors**: The highest-impact nightly work remains narrow
+  reliability fixes with focused tests in the orchestration path.
+
+### Code Health Observations
+
+- Several draft nightly PRs are still open, so future nightly runs should avoid duplicating those
+  branches and keep choosing small independent hardening changes.
+
 ## 2026-03-26 — Nightly Review
 
 ### Bug Fixed: Overly broad regex in outage detection
@@ -776,4 +801,3 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   pr-policy.ts, webhook-callback.ts). Extracting early prevents one copy from evolving
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
-
