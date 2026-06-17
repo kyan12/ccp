@@ -63,7 +63,20 @@ function ghJson(args: string[]): Record<string, unknown> {
   if (out.status !== 0) {
     throw new Error((out.stderr || out.stdout || 'gh command failed').trim());
   }
-  return JSON.parse(out.stdout || '{}');
+  return parseGhJsonOutput(out.stdout);
+}
+
+function parseGhJsonOutput(stdout: string | null | undefined): Record<string, unknown> {
+  const raw = stdout || '{}';
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('expected JSON object');
+    }
+    return parsed as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(`failed to parse gh JSON output: ${(err as Error).message}`);
+  }
 }
 
 interface StatusCheckItem {
@@ -247,6 +260,7 @@ module.exports = {
   reviewPr,
   classifyPr,
   extractPreviewUrl,
+  parseGhJsonOutput,
 };
 
 export { parsePrUrl, reviewPr, classifyPr };
