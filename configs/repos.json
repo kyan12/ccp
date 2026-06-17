@@ -385,6 +385,26 @@
       "autoMerge": false,
       "mergeMethod": "squash",
       "baseBranch": "main"
+    },
+    {
+      "key": "moshi-ai",
+      "ownerRepo": "ProteusX-Consulting/moshi-ai",
+      "gitUrl": "git@github.com:ProteusX-Consulting/moshi-ai.git",
+      "localPath": "/Users/crab/repos/moshi-ai",
+      "aliases": [
+        "moshi-ai",
+        "moshi ai",
+        "moshi",
+        "moshi drinks",
+        "brooklyn food and beverage",
+        "brooklyn food & beverage",
+        "quickbooks connector",
+        "qb connector"
+      ],
+      "autoMerge": false,
+      "baseBranch": "main",
+      "mergeMethod": "squash",
+      "productionUrl": "https://moshi-ai.vercel.app"
     }
   ]
 }
