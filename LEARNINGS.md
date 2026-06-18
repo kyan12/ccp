@@ -777,3 +777,30 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
 
+## 2026-06-17 — Nightly Review
+
+### Bug Fixed: nightly-compound crashed on malformed repo config shape
+
+`nightly-compound.ts` already caught unreadable or syntactically invalid `configs/repos.json`,
+but a valid JSON object without a `mappings` array still flowed into `mappings.filter(...)` and
+crashed the command. This is the same config-resilience class CCP has been steadily hardening in
+the supervisor, Linear dispatch, and outage paths.
+
+**Fix:** Validate that `mappings` is an array before returning loaded repo config. Invalid shapes
+now log a clear error and degrade to an empty repo list, allowing `--list` and dispatch runs to
+exit cleanly.
+
+### Code Health Observations
+
+- **Source/dist test drift**: `dist/bin/nightly-compound.test.js` existed, but the corresponding
+  `src/bin/nightly-compound.test.ts` was missing and `npm test` did not run it. Regression tests
+  need to live in source and be wired into the canonical suite.
+- **Open nightly PR backlog**: Several draft nightly PRs are open for similar parser/finalization
+  hardening. Keep fixes small and mergeable to avoid duplicating work across branches.
+
+### Patterns Worth Reinforcing
+
+- **Validate parsed config shape, not just JSON syntax**: Catching `JSON.parse` is not enough when
+  callers assume specific arrays or objects immediately after load.
+- **Hardening requires executable regression coverage**: A test in generated `dist` is a clue, but
+  it does not protect future source changes unless it is checked in under `src` and run by `npm test`.
