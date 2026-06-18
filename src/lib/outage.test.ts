@@ -237,5 +237,33 @@ console.log('\nTest: rate-limit detection ignores test/source echoes');
   });
 }
 
+console.log('\nTest: malformed persisted rate-limit reset is cleared');
+{
+  const root = freshRoot('bad-rate-limit-reset');
+  const statePath = path.join(root, 'configs', 'outage-codex.json');
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      outage: false,
+      consecutiveApiFailures: 0,
+      lastFailureAt: null,
+      outageSince: null,
+      lastProbeAt: null,
+      lastProbeResult: null,
+      rateLimitResetAt: 'not-a-date',
+      rateLimitReason: 'bad persisted state',
+      agent: 'codex',
+    }, null, 2),
+  );
+
+  withRoot(root, (mod) => {
+    const limited = mod.isRateLimited('codex');
+    assert(limited.paused === false, 'invalid reset timestamp does not pause dispatch forever');
+    const status = mod.getOutageStatus('codex');
+    assert(status.rateLimitResetAt === null, 'invalid reset timestamp cleared');
+    assert(status.rateLimitReason === null, 'invalid reset reason cleared');
+  });
+}
+
 console.log(`\nTotal: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

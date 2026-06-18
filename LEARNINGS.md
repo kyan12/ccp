@@ -2,6 +2,25 @@
 
 Operational insights from nightly reviews. Each entry includes the date, what was found, and the action taken.
 
+## 2026-05-29 — Nightly Review
+
+### Bug Fixed: Malformed persisted rate-limit reset could pause dispatch forever
+
+`isRateLimited()` parsed `state.rateLimitResetAt` with `new Date(...).getTime()` but did not
+guard against invalid persisted values. If an outage state file contained a malformed reset
+timestamp, `getTime()` returned `NaN`; because `Date.now() >= NaN` is always false, CCP treated
+the agent as still rate-limited and could pause dispatch indefinitely.
+
+**Fix:** Invalid `rateLimitResetAt` values are now logged, cleared with `rateLimitReason`, and
+treated as not paused. Added a regression test covering malformed persisted state.
+
+### Patterns Worth Reinforcing
+
+- **Persisted control-plane state needs validation on read/use**: A single malformed timestamp
+  should not become an indefinite scheduler stop. Degrade to a clear default and log the problem.
+- **Recent commits are high quality**: The latest work tightens finalization classification and
+  Codex rate-limit detection with focused tests, matching the repo's bug-fix-first cadence.
+
 ## 2026-03-26 — Nightly Review
 
 ### Bug Fixed: Overly broad regex in outage detection
@@ -776,4 +795,3 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   pr-policy.ts, webhook-callback.ts). Extracting early prevents one copy from evolving
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
-
