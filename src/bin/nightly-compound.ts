@@ -12,7 +12,12 @@ const REPOS_FILE: string = path.join(ROOT, 'configs', 'repos.json');
 
 function loadRepos(): { mappings: RepoMapping[] } {
   try {
-    return JSON.parse(fs.readFileSync(REPOS_FILE, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(REPOS_FILE, 'utf8')) as { mappings?: unknown };
+    if (!Array.isArray(parsed.mappings)) {
+      console.error(`[ccp] nightly-compound: ${REPOS_FILE} mappings must be an array`);
+      return { mappings: [] };
+    }
+    return { mappings: parsed.mappings as RepoMapping[] };
   } catch (err) {
     console.error(`[ccp] nightly-compound: failed to read/parse ${REPOS_FILE}:`, err);
     return { mappings: [] };
