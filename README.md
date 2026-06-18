@@ -59,7 +59,7 @@ Linear Ticket → CCP → Coding Agent → PR → CI → Auto-Merge → Deploy
 ### Prerequisites
 
 - **Node.js** 20+
-- **Claude Code** (`npm i -g @anthropic-ai/claude-code`) or another coding agent
+- **OpenAI Codex** (`npm i -g @openai/codex`) or another coding agent
 - **GitHub CLI** (`gh`) authenticated
 - **Linear** account with API key
 
