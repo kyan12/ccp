@@ -341,6 +341,7 @@ console.log('\nTest: placeholder final-summary template text is ignored');
 console.log('\nTest: missing worker exit marker defaults to failed');
 {
   assert(workerExitCodeForFinalize('State: coded\nWORKER_EXIT_CODE: 0', 1) === 0, 'explicit marker wins');
+  assert(workerExitCodeForFinalize('WORKER_EXIT_CODE: 1\nState: coded\nWORKER_EXIT_CODE: 0', 1) === 0, 'latest explicit marker wins');
   assert(workerExitCodeForFinalize('ERROR: 401 Unauthorized', 0) === 1, 'missing marker with shell exit 0 becomes failure');
   assert(workerExitCodeForFinalize('ERROR: process died', 7) === 7, 'nonzero shell exit is preserved');
 }
