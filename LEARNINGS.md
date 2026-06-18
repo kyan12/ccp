@@ -777,3 +777,27 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
 
+## 2026-05-28 — Nightly Review
+
+### Bug Fixed: Finalization blocker context used stale worker attempts
+
+Recent fixes made summary parsing and rate-limit detection operate on the latest worker attempt,
+but some finalization diagnostics still read the full historical `worker.log`. A retry could
+therefore inherit an earlier attempt's success summary, blocker text, or decision request when
+classifying the current attempt.
+
+**Fix:** Bound harness-failure context, dirty-repo context, blocked-reason inference, and decision
+request parsing to `workerLogForCurrentAttempt()`.
+
+### Patterns Worth Reinforcing
+
+- **Attempt-scoped parsing:** Any finalization signal derived from `worker.log` should use the
+  latest attempt unless it is explicitly historical telemetry.
+- **Contract-hardening tests:** Recent job fixes paired parser/classifier changes with small
+  regression tests, which is the right shape for CCP's supervisor-critical paths.
+
+### Code Health Observations
+
+- **Repo config churn is frequent:** Multiple recent commits only changed `configs/repos.json`.
+  Keep hardening around malformed mappings high priority, but avoid mixing config edits with
+  supervisor behavior changes.
