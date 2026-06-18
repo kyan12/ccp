@@ -2,6 +2,36 @@
 
 Operational insights from nightly reviews. Each entry includes the date, what was found, and the action taken.
 
+## 2026-06-17 — Nightly Review
+
+### Bug Fixed: Malformed `gh` JSON in PR review now reports an actionable error
+
+Recent work has focused on preventing stale or placeholder agent output from driving incorrect
+job state transitions. The same defensive parsing pattern applies to GitHub CLI output: `pr-review.ts`
+treated a successful `gh` exit as valid JSON and allowed malformed or truncated stdout to surface as
+a generic `SyntaxError`.
+
+**Fix:** Added a `parseGhJson` helper that keeps empty output compatible with the existing `{}` fallback
+but wraps malformed output in a `gh returned invalid JSON` error with a short stdout excerpt. Added
+offline regression coverage in `pr-review.test.ts`.
+
+### Patterns Worth Reinforcing
+
+- **Current-attempt scoping**: Recent jobs fixes avoid letting stale logs or earlier attempts influence
+  blocker/rate-limit/finalization decisions.
+- **Exit markers over summaries**: Placeholder summaries should never be accepted without the expected
+  worker exit marker; explicit completion signals are the safer source of truth.
+- **Repo mappings stay operationally important**: Several recent commits were mapping updates, so small
+  config drift can block the whole dispatch path even when code is healthy.
+
+### Code Health Observations
+
+- **Open nightly PR backlog**: Multiple open nightly branches still target parsing and current-attempt
+  hardening. Future nightly work should avoid duplicating those branches and prefer merge-ready gaps on
+  main.
+- **CLI JSON boundaries**: Remaining `JSON.parse(stdout)` paths should either degrade gracefully or emit
+  errors that identify the command boundary and include bounded output context.
+
 ## 2026-03-26 — Nightly Review
 
 ### Bug Fixed: Overly broad regex in outage detection
@@ -776,4 +806,3 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   pr-policy.ts, webhook-callback.ts). Extracting early prevents one copy from evolving
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
-
