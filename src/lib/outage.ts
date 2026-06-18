@@ -127,7 +127,7 @@ export function isApiOutageLog(logText: string, agent?: string | null): boolean 
  * into a wall-clock reset). OpenAI's "try again in 30s" shape is best-effort
  * scanned but not used for pause-until-timestamp yet. */
 const RATE_LIMIT_PATTERNS: RegExp[] = [
-  /hit your limit.*resets?\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:\(([^)]+)\))?/i,
+  /hit your limit.*resets?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:\(([^)]+)\))?/i,
   /rate.?limit.*reset.*?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
   /usage.*limit.*reset.*?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
 ];
