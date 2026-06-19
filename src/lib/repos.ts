@@ -4,7 +4,12 @@ import type { RepoMapping, ReposConfig, IntakePayload } from '../types';
 const { loadConfig } = require('./config');
 
 function repoConfig(): ReposConfig {
-  return loadConfig('repos', { mappings: [] }) as ReposConfig;
+  const cfg = loadConfig('repos', { mappings: [] }) as Partial<ReposConfig>;
+  if (!Array.isArray(cfg.mappings)) {
+    console.error('[ccp] invalid repos config: mappings must be an array; using empty mappings');
+    return { mappings: [] };
+  }
+  return { ...cfg, mappings: cfg.mappings } as ReposConfig;
 }
 
 function normalize(text: unknown): string {
