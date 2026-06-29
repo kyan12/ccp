@@ -47,13 +47,13 @@ node src/bin/intake-server.ts
 
 ```bash
 node src/bin/install-launchd.ts
-launchctl load ~/Library/LaunchAgents/ai.openclaw.coding-control-plane.plist
-launchctl start ai.openclaw.coding-control-plane
-launchctl load ~/Library/LaunchAgents/ai.openclaw.coding-control-plane.intake.plist
-launchctl start ai.openclaw.coding-control-plane.intake
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.ccp.supervisor.plist
+launchctl kickstart -k gui/$(id -u)/ai.ccp.supervisor
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.ccp.intake.plist
+launchctl kickstart -k gui/$(id -u)/ai.ccp.intake
 ```
 
-The generated plists inject a PATH that includes Homebrew binaries so `tmux`, `node`, `openclaw`, `claude`, and `op` are available under launchd. The intake service defaults to port `4318`.
+The generated plists inject a PATH that includes Homebrew binaries so `tmux`, `node`, `claude`/`codex`, and `op` are available under launchd. The intake service defaults to port `4318`.
 
 Note: if macOS prompts that `node` wants access to another app during first live intake handling, allow it. That permission was required on this machine before launchd-managed intake requests would complete.
 

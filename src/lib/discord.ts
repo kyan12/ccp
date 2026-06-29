@@ -1,23 +1,17 @@
 import path = require('path');
 import { spawnSync } from 'child_process';
 import type { DiscordMessageResult, DiscordThreadResult } from '../types';
-const { commandExists, run } = require('./shell');
+const { commandExists } = require('./shell');
 
-const OPENCLAW_CMD = 'openclaw';
 const HERMES_PYTHON = path.join(process.env.HOME || '/Users/crab', '.hermes', 'hermes-agent', 'venv', 'bin', 'python');
 const DISCORD_BRIDGE = path.join(process.env.CCP_ROOT || path.join(__dirname, '..', '..'), 'scripts', 'discord_bridge.py');
 
 interface DiscordTransportStatus {
-  transport: 'hermes-discord' | 'openclaw' | 'none';
+  transport: 'hermes-discord' | 'none';
   botTokenPresent: boolean;
-  openclawPath: string;
   apiOk: boolean | null;
   botUser: string | null;
   error: string | null;
-}
-
-function openclawPath(): string {
-  return commandExists(OPENCLAW_CMD);
 }
 
 function hermesPythonPath(): string {
@@ -25,7 +19,8 @@ function hermesPythonPath(): string {
 }
 
 function hasDiscordTransport(): boolean {
-  return !!hermesPythonPath() || !!openclawPath();
+  const status = inspectDiscordTransport();
+  return status.transport !== 'none' && status.apiOk === true;
 }
 
 function runBridge(action: 'send' | 'inspect' | 'thread-create', payload?: Record<string, unknown>): { ok: boolean; data: Record<string, unknown>; stderr: string } {
@@ -35,6 +30,7 @@ function runBridge(action: 'send' | 'inspect' | 'thread-create', payload?: Recor
     encoding: 'utf8',
     input: payload ? JSON.stringify(payload) : undefined,
     cwd: path.join(process.env.HOME || '/Users/crab', '.hermes', 'hermes-agent'),
+    env: process.env,
   });
   let data: Record<string, unknown> = {};
   try {
@@ -43,38 +39,6 @@ function runBridge(action: 'send' | 'inspect' | 'thread-create', payload?: Recor
     data = {};
   }
   return { ok: out.status === 0, data, stderr: (out.stderr || '').trim() };
-}
-
-function fallbackSendDiscordMessage(channelId: string, message: string): DiscordMessageResult {
-  const out = run(OPENCLAW_CMD, ['message', 'send', '--channel', 'discord', '--target', `channel:${channelId}`, '--message', message]);
-  let messageId: string | null = null;
-  try {
-    const parsed = JSON.parse(out.stdout || '{}') as { messageId?: string; id?: string };
-    messageId = parsed.messageId || parsed.id || null;
-  } catch {
-    const match = (out.stdout || '').match(/(\d{17,20})/);
-    messageId = match ? match[1] : null;
-  }
-  return { ok: out.status === 0, stdout: out.stdout, stderr: out.stderr, messageId };
-}
-
-function fallbackCreateDiscordThread(channelId: string, messageId: string, threadName: string): DiscordThreadResult {
-  const out = run(OPENCLAW_CMD, [
-    'message', 'thread-create',
-    '--channel', 'discord',
-    '--channel-id', channelId,
-    '--message-id', messageId,
-    '--thread-name', threadName.slice(0, 100),
-  ]);
-  let threadId: string | null = null;
-  try {
-    const parsed = JSON.parse(out.stdout || '{}') as { threadId?: string; id?: string };
-    threadId = parsed.threadId || parsed.id || null;
-  } catch {
-    const match = (out.stdout || '').match(/(\d{17,20})/);
-    threadId = match ? match[1] : null;
-  }
-  return { ok: out.status === 0, threadId, stdout: out.stdout, stderr: out.stderr };
 }
 
 function sendDiscordMessage(channelId: string, message: string): DiscordMessageResult {
@@ -87,7 +51,6 @@ function sendDiscordMessage(channelId: string, message: string): DiscordMessageR
       messageId: (bridge.data.message_id as string) || (bridge.data.messageId as string) || null,
     };
   }
-  if (openclawPath()) return fallbackSendDiscordMessage(channelId, message);
   return {
     ok: false,
     stdout: JSON.stringify(bridge.data),
@@ -106,7 +69,6 @@ function createDiscordThread(channelId: string, messageId: string, threadName: s
       stderr: '',
     };
   }
-  if (openclawPath()) return fallbackCreateDiscordThread(channelId, messageId, threadName);
   return {
     ok: false,
     threadId: null,
@@ -121,27 +83,14 @@ function inspectDiscordTransport(): DiscordTransportStatus {
     return {
       transport: 'hermes-discord',
       botTokenPresent: true,
-      openclawPath: openclawPath(),
       apiOk: true,
       botUser: (bridge.data.botUser as string) || null,
       error: null,
     };
   }
-  if (openclawPath()) {
-    const out = run(OPENCLAW_CMD, ['status']);
-    return {
-      transport: 'openclaw',
-      botTokenPresent: false,
-      openclawPath: openclawPath(),
-      apiOk: out.status === 0,
-      botUser: null,
-      error: out.status === 0 ? null : (out.stderr || out.stdout || 'openclaw status failed').trim(),
-    };
-  }
   return {
     transport: 'none',
     botTokenPresent: false,
-    openclawPath: '',
     apiOk: null,
     botUser: null,
     error: (bridge.data.error as string) || bridge.stderr || 'No Discord transport configured',

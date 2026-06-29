@@ -8,12 +8,20 @@ const { loadConfig } = require('../lib/config');
 
 const home: string = process.env.HOME || '/Users/crab';
 const launchAgentsDir: string = path.join(home, 'Library', 'LaunchAgents');
-const supervisorPlistPath: string = path.join(launchAgentsDir, 'ai.openclaw.coding-control-plane.plist');
-const intakePlistPath: string = path.join(launchAgentsDir, 'ai.openclaw.coding-control-plane.intake.plist');
+const supervisorPlistPath: string = path.join(launchAgentsDir, 'ai.ccp.supervisor.plist');
+const intakePlistPath: string = path.join(launchAgentsDir, 'ai.ccp.intake.plist');
 
 function readOpSecret(ref: string): string {
   const out = spawnSync('op', ['read', ref], { encoding: 'utf8', env: process.env as Record<string, string> });
   return out.status === 0 ? (out.stdout || '').trim() : '';
+}
+
+function readExistingLaunchdEnv(envName: string): string {
+  for (const plistPath of [supervisorPlistPath, intakePlistPath]) {
+    const out = spawnSync('/usr/libexec/PlistBuddy', ['-c', `Print :EnvironmentVariables:${envName}`, plistPath], { encoding: 'utf8' });
+    if (out.status === 0 && (out.stdout || '').trim()) return (out.stdout || '').trim();
+  }
+  return '';
 }
 
 function resolveLaunchdSecrets(): Record<string, string> {
@@ -29,9 +37,14 @@ function resolveLaunchdSecrets(): Record<string, string> {
       if (key && value) extraEnv[key] = value;
     }
   }
-  for (const envName of ['LINEAR_API_KEY', 'LINEAR_SMA_API_KEY', 'VERCEL_TOKEN', 'SENTRY_AUTH_TOKEN', 'VERCEL_WEBHOOK_SECRET']) {
+  for (const envName of ['LINEAR_API_KEY', 'LINEAR_SMA_API_KEY', 'VERCEL_TOKEN', 'SENTRY_AUTH_TOKEN', 'VERCEL_WEBHOOK_SECRET', 'DISCORD_BOT_TOKEN']) {
     if (process.env[envName]) {
       extraEnv[envName] = process.env[envName]!;
+      continue;
+    }
+    const existing = readExistingLaunchdEnv(envName);
+    if (existing) {
+      extraEnv[envName] = existing;
       continue;
     }
     const entry = onePassword.items?.[envName];
@@ -46,7 +59,7 @@ function resolveLaunchdSecrets(): Record<string, string> {
 fs.mkdirSync(launchAgentsDir, { recursive: true });
 fs.mkdirSync(path.join(ROOT, 'supervisor', 'daemon'), { recursive: true });
 const extraEnv = resolveLaunchdSecrets();
-fs.writeFileSync(supervisorPlistPath, buildSupervisorPlist(), 'utf8');
+fs.writeFileSync(supervisorPlistPath, buildSupervisorPlist({ extraEnv }), 'utf8');
 fs.writeFileSync(intakePlistPath, buildIntakePlist({ extraEnv }), 'utf8');
 
 process.stdout.write(JSON.stringify({

@@ -50,11 +50,11 @@ function buildEnvBlock(options: LaunchdOptions = {}): string {
 }
 
 function buildSupervisorPlist(options: LaunchdOptions = {}): string {
-  const label = options.label || 'ai.openclaw.coding-control-plane';
+  const label = options.label || 'ai.ccp.supervisor';
   const intervalMs = Number(options.intervalMs || process.env.CCP_SUPERVISOR_INTERVAL_MS || 15000);
   const maxConcurrent = Number(options.maxConcurrent || process.env.CCP_MAX_CONCURRENT || 1);
   const nodePath = options.nodePath || process.execPath;
-  const program = path.join(ROOT, 'src', 'bin', 'supervisor.js');
+  const program = path.join(ROOT, 'dist', 'bin', 'supervisor.js');
   const stdoutPath = path.join(ROOT, 'supervisor', 'daemon', 'launchd.stdout.log');
   const stderrPath = path.join(ROOT, 'supervisor', 'daemon', 'launchd.stderr.log');
   const workingDirectory = ROOT;
@@ -89,10 +89,10 @@ ${buildEnvBlock(options)}
 }
 
 function buildIntakePlist(options: LaunchdOptions = {}): string {
-  const label = options.label || 'ai.openclaw.coding-control-plane.intake';
+  const label = options.label || 'ai.ccp.intake';
   const port = Number(options.port || process.env.CCP_INTAKE_PORT || 4318);
   const nodePath = options.nodePath || process.execPath;
-  const program = path.join(ROOT, 'src', 'bin', 'intake-server.js');
+  const program = path.join(ROOT, 'dist', 'bin', 'intake-server.js');
   const stdoutPath = path.join(ROOT, 'supervisor', 'daemon', 'intake.stdout.log');
   const stderrPath = path.join(ROOT, 'supervisor', 'daemon', 'intake.stderr.log');
   const workingDirectory = ROOT;

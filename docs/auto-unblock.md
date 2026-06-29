@@ -149,7 +149,7 @@ fleet-wide without touching any repo mapping. Any other value
    `autoUnblock.enabled: true`.
 2. Tune `retryAfterSec` / `maxRetries` if the default 10-min / 2-retry
    shape isn't right for your build cadence.
-3. Reload the supervisor (`launchctl kickstart -k gui/$(id -u)/ai.openclaw.coding-control-plane`)
+3. Reload the supervisor (`launchctl kickstart -k gui/$(id -u)/ai.ccp.supervisor`)
    or wait for the config watcher.
 
 ### Disable fleet-wide (incident response)

@@ -251,7 +251,7 @@ function inspectEnvironment(repo: string | null, agent?: AgentDriver): Record<st
   const tmux = commandExists('tmux');
   const git = commandExists('git');
   const node = commandExists('node');
-  const openclaw = commandExists('openclaw');
+  const discordStatus = inspectDiscordTransport();
   const shell = process.env.SHELL || '';
   const home = process.env.HOME || '';
 
@@ -279,10 +279,6 @@ function inspectEnvironment(repo: string | null, agent?: AgentDriver): Record<st
     };
   }
 
-  const openclawStatus = openclaw ? run('openclaw', ['status']) : null;
-
-  // `commands.claude_opus` / `commands.claude` stay populated so existing
-  // dashboards/logs keep working; drivers return them in their commands map.
   const agentCmds = agentPreflight.commands || {};
 
   return {
@@ -296,7 +292,6 @@ function inspectEnvironment(repo: string | null, agent?: AgentDriver): Record<st
       claude: agentCmds.claude || '',
       git,
       node,
-      openclaw,
       // Driver-specific entries (e.g. future 'codex') flow through verbatim.
       ...Object.fromEntries(
         Object.entries(agentCmds).filter(([k]) => k !== 'claude' && k !== 'claude_opus'),
@@ -309,11 +304,7 @@ function inspectEnvironment(repo: string | null, agent?: AgentDriver): Record<st
     // consumers; represents whichever driver is active.
     claude_version: agentVersion,
     agent_version: agentVersion,
-    openclaw_status: openclawStatus ? {
-      ok: openclawStatus.status === 0,
-      stdout: (openclawStatus.stdout || '').trim(),
-      stderr: (openclawStatus.stderr || '').trim(),
-    } : null,
+    discord_status: discordStatus,
   };
 }
 
@@ -433,7 +424,10 @@ function preflight(jobId: string): PreflightResult {
   if (!agentPf.ok) failures.push(...agentPf.failures);
   if (!cmds.git) failures.push('git not found on PATH');
   if (!cmds.node) failures.push('node not found on PATH');
-  if (!cmds.openclaw) failures.push('openclaw not found on PATH');
+  const discordStatus = (env.discord_status || {}) as { transport?: string; apiOk?: boolean | null; error?: string | null };
+  if (discordStatus.transport === 'none' || discordStatus.apiOk !== true) {
+    failures.push(`Discord transport unavailable: ${discordStatus.error || 'DISCORD_BOT_TOKEN missing or invalid'}`);
+  }
 
   return {
     ok: failures.length === 0,
@@ -2830,10 +2824,8 @@ function healthCheck(): Record<string, unknown> {
   try {
     const out = run('launchctl', ['list']);
     if (out.status === 0) {
-      launchdSupervisor = out.stdout.includes('ai.ccp.supervisor')
-        || out.stdout.includes('ai.openclaw.coding-control-plane');
-      launchdPrWatcher = out.stdout.includes('ai.ccp.intake')
-        || out.stdout.includes('ai.openclaw.coding-control-plane.intake');
+      launchdSupervisor = out.stdout.includes('ai.ccp.supervisor');
+      launchdPrWatcher = out.stdout.includes('ai.ccp.intake');
     }
   } catch { /* ignore */ }
 

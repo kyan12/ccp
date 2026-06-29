@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import sys
 import urllib.error
 import urllib.request
@@ -37,8 +38,32 @@ def read_payload() -> dict[str, Any]:
 def token() -> str:
     value = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
     if not value:
+        value = token_from_launchd_plist()
+    if not value:
         emit({"ok": False, "error": "DISCORD_BOT_TOKEN missing"}, 2)
     return value
+
+
+def token_from_launchd_plist() -> str:
+    """Recover the CCP Discord token when invoked from an operator shell.
+
+    launchd-managed CCP processes receive DISCORD_BOT_TOKEN directly. Manual
+    smoke checks usually do not, so read the same generated plist instead of
+    falling back to the retired OpenClaw CLI.
+    """
+    home = os.environ.get("HOME", "/Users/crab")
+    for name in ("ai.ccp.supervisor.plist", "ai.ccp.intake.plist"):
+        path = os.path.join(home, "Library", "LaunchAgents", name)
+        try:
+            with open(path, "rb") as fh:
+                data = plistlib.load(fh)
+            env = data.get("EnvironmentVariables") or {}
+            value = str(env.get("DISCORD_BOT_TOKEN") or "").strip()
+            if value:
+                return value
+        except Exception:
+            continue
+    return ""
 
 
 def request_json(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
