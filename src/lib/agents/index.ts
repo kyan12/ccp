@@ -8,9 +8,9 @@
  *                               label, dashboard, /ccp retry --agent ...)
  *   2. RepoMapping.agent      — per-repo default from configs/repos.json
  *   3. process.env.CCP_AGENT  — global default (ops override)
- *   4. 'codex'                — built-in default
+ *   4. 'claude-code'          — built-in default
  *
- * Resolver falls back to the codex driver if the requested agent name
+ * Resolver falls back to the Claude Code driver if the requested agent name
  * is unknown (with a warning on stderr), so a typo in repos.json never hard-
  * blocks dispatch.
  *
@@ -110,15 +110,15 @@ export function resolveAgent(
   }
 
   if (!primary && candidates.length > 0) {
-    // Requested an agent but it's unknown → fall back to codex but tell us.
+    // Requested an agent but it's unknown → fall back to Claude Code but tell us.
     const requested = candidates[0].name;
     // eslint-disable-next-line no-console
     console.warn(
       `[agents] unknown agent '${requested}' requested (source=${candidates[0].source}); ` +
-        `falling back to codex. known: ${listAgents().join(', ')}`,
+        `falling back to claude-code. known: ${listAgents().join(', ')}`,
     );
     primary = {
-      driver: codexDriver,
+      driver: claudeCodeDriver,
       source: 'default',
       requested,
       fellBack: true,
@@ -128,7 +128,7 @@ export function resolveAgent(
 
   if (!primary) {
     primary = {
-      driver: codexDriver,
+      driver: claudeCodeDriver,
       source: 'default',
       requested: null,
       fellBack: false,

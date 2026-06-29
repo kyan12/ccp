@@ -4,14 +4,15 @@
  * Wraps the existing Claude Code invocation shape so behavior is unchanged
  * when this is the resolved driver:
  *
- *   cat <promptFile> | <claude> --print --model sonnet --permission-mode bypassPermissions
+ *   cat <promptFile> | <claude> --print --permission-mode bypassPermissions
  *
- * Explicitly pinning standard-context Sonnet avoids Claude Code falling into
- * 1M-context mode on hosts where extra usage is not enabled.
+ * Do not pass --model here. CCP should inherit Claude Code's configured default
+ * model (for example the user-level `model: opus` alias), so Claude Code can
+ * advance to the latest Opus release without a CCP code change.
  *
- * Preflight prefers claude-opus (if that symlink exists on the host) before
- * falling back to the default `claude` binary — matches the pre-refactor
- * logic in jobs.ts:inspectEnvironment / preflight.
+ * Preflight uses the default `claude` binary. A legacy `claude-opus` symlink is
+ * still reported for diagnostics, but not selected; model choice belongs in
+ * Claude Code settings, not CCP shell aliases.
  *
  * failurePatterns are lifted directly from the pre-refactor outage.ts module
  * so detection parity is preserved.
@@ -51,7 +52,7 @@ function resolveClaudeBinary(): { bin: string; commands: Record<string, string> 
   const claudeOpus = commandExists('claude-opus');
   const claude = commandExists('claude');
   return {
-    bin: claudeOpus || claude || '',
+    bin: claude || claudeOpus || '',
     commands: { claude_opus: claudeOpus, claude },
   };
 }
@@ -62,10 +63,9 @@ export const claudeCodeDriver: AgentDriver = {
 
   buildCommand(ctx: AgentBuildContext): AgentCommand {
     // Pipe prompt via stdin to avoid OS ARG_MAX limits on large prompts.
-    // Pin standard-context Sonnet so jobs do not require Claude 1M extra usage.
     const shellCmd =
       `cat ${shellQuote(ctx.promptPath)} | ` +
-      `${shellQuote(ctx.bin)} --print --model sonnet --permission-mode bypassPermissions`;
+      `${shellQuote(ctx.bin)} --print --permission-mode bypassPermissions`;
     return { shellCmd };
   },
 
@@ -86,10 +86,8 @@ export const claudeCodeDriver: AgentDriver = {
 
   probe(): AgentProbeResult {
     // Minimal "am I up?" check — mirrors the pre-refactor probeAnthropicApi().
-    // Resolve the binary the same way preflight() does so that on boxes where
-    // only `claude-opus` (the preferred symlink) is on PATH, probe() still
-    // runs. Falls back to the literal `claude` string only if nothing is
-    // resolvable — which is also what the old implementation did.
+    // Resolve the binary the same way preflight() does. Falls back to the
+    // literal `claude` string only if nothing is resolvable.
     const { bin } = resolveClaudeBinary();
     const probeBin = bin || 'claude';
     const result = spawnSync(

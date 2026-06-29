@@ -5,7 +5,7 @@
  *  - resolveAgent precedence: packet > repo > env > default
  *  - alias handling (claude → claude-code)
  *  - unknown name → graceful fallback with `fellBack=true`
- *  - claudeCodeDriver.buildCommand returns the exact pre-refactor shell shape
+ *  - claudeCodeDriver.buildCommand inherits Claude Code's configured default model
  *  - claudeCodeDriver.failurePatterns match the strings outage.ts flagged before
  */
 
@@ -53,11 +53,11 @@ console.log('\nTest: registry lists known agents');
 }
 
 // ── resolveAgent default ──
-console.log('\nTest: resolveAgent falls back to codex when nothing is set');
+console.log('\nTest: resolveAgent falls back to claude-code when nothing is set');
 {
   withEnv('CCP_AGENT', undefined, () => {
     const r = resolveAgent(null, null);
-    assert(r.driver === codexDriver, 'driver = codex');
+    assert(r.driver === claudeCodeDriver, 'driver = claude-code');
     assert(r.source === 'default', 'source = default');
     assert(r.requested === null, 'requested = null');
     assert(r.fellBack === false, 'fellBack = false (nothing was requested)');
@@ -97,7 +97,7 @@ console.log('\nTest: resolveAgent: packet.agent is highest precedence');
 }
 
 // ── resolveAgent: unknown name → graceful fallback ──
-console.log('\nTest: resolveAgent: unknown agent name falls back to codex with fellBack=true');
+console.log('\nTest: resolveAgent: unknown agent name falls back to claude-code with fellBack=true');
 {
   const origWarn = console.warn;
   const warnings: string[] = [];
@@ -105,7 +105,7 @@ console.log('\nTest: resolveAgent: unknown agent name falls back to codex with f
   try {
     withEnv('CCP_AGENT', undefined, () => {
       const r = resolveAgent({ agent: 'codex-v9' }, null);
-      assert(r.driver === codexDriver, 'driver falls back to default codex');
+      assert(r.driver === claudeCodeDriver, 'driver falls back to default claude-code');
       assert(r.fellBack === true, 'fellBack = true');
       assert(r.requested === 'codex-v9', 'requested echoes unknown name');
       assert(r.source === 'default', 'source = default after fall-back');
@@ -131,7 +131,7 @@ console.log('\nTest: resolveAgent: empty CCP_AGENT is ignored');
 }
 
 // ── claudeCodeDriver.buildCommand shape ──
-console.log('\nTest: claudeCodeDriver.buildCommand builds the pre-refactor shell command');
+console.log('\nTest: claudeCodeDriver.buildCommand inherits the Claude Code default model');
 {
   const cmd = claudeCodeDriver.buildCommand({
     promptPath: '/tmp/prompt.txt',
@@ -140,8 +140,8 @@ console.log('\nTest: claudeCodeDriver.buildCommand builds the pre-refactor shell
     bin: '/usr/local/bin/claude',
   });
   assert(
-    cmd.shellCmd === "cat '/tmp/prompt.txt' | '/usr/local/bin/claude' --print --model sonnet --permission-mode bypassPermissions",
-    `shellCmd pins standard-context Sonnet: ${cmd.shellCmd}`,
+    cmd.shellCmd === "cat '/tmp/prompt.txt' | '/usr/local/bin/claude' --print --permission-mode bypassPermissions",
+    `shellCmd should not pass --model: ${cmd.shellCmd}`,
   );
   assert(cmd.env === undefined || Object.keys(cmd.env).length === 0, 'no extra env for claude driver');
 }
@@ -155,7 +155,7 @@ console.log('\nTest: claudeCodeDriver.buildCommand shell-quotes paths with speci
     packet: { job_id: 'x', ticket_id: null, repo: '/tmp/repo', goal: '', source: '', kind: '', label: '' },
     bin: '/opt/bin with space/claude',
   });
-  assert(cmd.shellCmd.includes("--model sonnet"), 'standard-context Sonnet model is pinned');
+  assert(!cmd.shellCmd.includes('--model'), 'model is inherited from Claude Code settings');
   assert(cmd.shellCmd.includes("'/tmp/space dir/prompt.txt'"), 'prompt path is quoted');
   assert(cmd.shellCmd.includes("'/opt/bin with space/claude'"), 'binary path is quoted');
 }
@@ -385,7 +385,7 @@ console.log('\nTest: resolveAgent routes to devin via explicit config only');
 {
   withEnv('CCP_AGENT', undefined, () => {
     const defaulted = resolveAgent(null, null);
-    assert(defaulted.driver === codexDriver, 'default is codex');
+    assert(defaulted.driver === claudeCodeDriver, 'default is claude-code');
     const byRepo = resolveAgent(null, { agent: 'devin' });
     assert(byRepo.driver === devinDriver, 'repo.agent=devin selects devin');
     assert(byRepo.source === 'repo', 'repo selection source');
