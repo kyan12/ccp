@@ -270,6 +270,26 @@
       "mergeMethod": "squash"
     },
     {
+      "key": "licatesi-law-ai-workspace",
+      "ownerRepo": "ProteusX-Consulting/licatesi-law-ai-workspace",
+      "gitUrl": "git@github.com:ProteusX-Consulting/licatesi-law-ai-workspace.git",
+      "localPath": "/Users/crab/repos/licatesi-law-ai-workspace",
+      "aliases": [
+        "licatesi-law-ai-workspace",
+        "licatesi ai workspace",
+        "licatesi workspace",
+        "licatesi ai",
+        "licatesi-law-chat",
+        "licatesi chat",
+        "licatesi law chat",
+        "licatesi law ai workspace"
+      ],
+      "autoMerge": false,
+      "baseBranch": "main",
+      "mergeMethod": "squash",
+      "productionUrl": "https://licatesi-law-chat.vercel.app"
+    },
+    {
       "key": "av-chemist",
       "ownerRepo": "ProteusX-Consulting/av-chemist",
       "gitUrl": "git@github.com:ProteusX-Consulting/av-chemist.git",
