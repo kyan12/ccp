@@ -11,9 +11,11 @@
 
 import type { JobPacket, CompletionRouting } from '../types';
 
-const DEFAULT_HERMES_WEBHOOK_URL = 'http://127.0.0.1:8644/webhooks/code-crab-completion';
+const DEFAULT_HERMES_WEBHOOK_URL = 'http://127.0.0.1:8644/webhooks/code-crab-complete';
 
 export interface HandoffCallbackPayload {
+  /** Hermes dynamic webhook event filter. */
+  event_type: string;
   handoff_id: string;
   status: 'done' | 'blocked' | 'failed';
   /** Explicit routing — 'direct' or 'relay'. Never inferred. */
@@ -107,6 +109,7 @@ function buildHandoffPayload(opts: HandoffCallbackOpts): HandoffCallbackPayload 
   const routing: CompletionRouting = opts.packet.completion_routing || 'direct';
 
   const payload: HandoffCallbackPayload = {
+    event_type: process.env.HERMES_WEBHOOK_EVENT || 'code_crab_task_done',
     handoff_id,
     status: opts.status,
     completion_routing: routing,
@@ -150,10 +153,13 @@ function fireHandoffCallback(opts: HandoffCallbackOpts): string | null {
   const body = JSON.stringify(payload);
   const callbackUrl = resolveCallbackUrl(opts.packet);
 
-  // HMAC signing — uses the same CONTROL_PLANE_SECRET as webhook-callback.ts
-  const secret = process.env.CONTROL_PLANE_SECRET;
+  // Hermes generic webhook HMAC V2 binds a timestamp to the exact body bytes.
+  // Prefer the dedicated webhook secret; CONTROL_PLANE_SECRET remains a
+  // compatibility fallback for older installations.
+  const secret = process.env.HERMES_WEBHOOK_SECRET || process.env.CONTROL_PLANE_SECRET;
+  const timestamp = String(Math.floor(Date.now() / 1000));
   const sig = secret
-    ? `sha256=${require('crypto').createHmac('sha256', secret).update(body).digest('hex')}`
+    ? require('crypto').createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')
     : '';
 
   try {
@@ -164,8 +170,12 @@ function fireHandoffCallback(opts: HandoffCallbackOpts): string | null {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Handoff-ID': handoffId,
+      'X-Request-ID': `ccp-handoff-${handoffId}-${opts.status}`,
     };
-    if (sig) headers['X-Signature-256'] = sig;
+    if (sig) {
+      headers['X-Webhook-Timestamp'] = timestamp;
+      headers['X-Webhook-Signature-V2'] = sig;
+    }
 
     const req = mod.request(parsed, {
       method: 'POST',

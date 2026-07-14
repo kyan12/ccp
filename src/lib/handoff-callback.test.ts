@@ -33,7 +33,7 @@ function makePacket(overrides: Partial<JobPacket> = {}): JobPacket {
     origin: 'discord:#business-code-handoff',
     requestor: 'Kevin',
     callback_required: true,
-    callback_url: 'http://127.0.0.1:8644/webhooks/code-crab-completion',
+    callback_url: 'http://127.0.0.1:8644/webhooks/code-crab-complete',
     completion_routing: 'direct',
     metadata: {
       origin_channel_id: '123456789',
@@ -81,7 +81,7 @@ console.log('\nTest: extractHandoffId — null when absent');
 console.log('\nTest: resolveCallbackUrl — packet callback_url');
 {
   const url = resolveCallbackUrl(makePacket());
-  assert(url === 'http://127.0.0.1:8644/webhooks/code-crab-completion', 'uses packet callback_url');
+  assert(url === 'http://127.0.0.1:8644/webhooks/code-crab-complete', 'uses packet callback_url');
 }
 
 console.log('\nTest: resolveCallbackUrl — metadata fallback');
@@ -98,7 +98,7 @@ console.log('\nTest: resolveCallbackUrl — default when absent');
   const origEnv = process.env.HERMES_WEBHOOK_URL;
   delete process.env.HERMES_WEBHOOK_URL;
   const url = resolveCallbackUrl(makePacket({ callback_url: undefined, metadata: {} }));
-  assert(url === 'http://127.0.0.1:8644/webhooks/code-crab-completion', 'uses default URL');
+  assert(url === 'http://127.0.0.1:8644/webhooks/code-crab-complete', 'uses default URL');
   if (origEnv) process.env.HERMES_WEBHOOK_URL = origEnv;
 }
 
@@ -116,6 +116,7 @@ console.log('\nTest: buildHandoffPayload — full payload shape');
     writeback_notes: ['Updated architecture docs'],
   });
   assert(payload.handoff_id === 'hc_20260423_001', 'payload has correct handoff_id');
+  assert(payload.event_type === 'code_crab_task_done', 'payload has Hermes webhook event type');
   assert(payload.status === 'done', 'payload has correct status');
   assert(payload.completion_routing === 'direct', 'payload has explicit routing');
   assert(payload.summary === 'Implemented handoff callback', 'payload has summary');
