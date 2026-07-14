@@ -16,7 +16,7 @@ interface LaunchdOptions {
 
 function baseEnv(options: LaunchdOptions = {}): { pathEnv: string; homeEnv: string; shellEnv: string; opServiceAccountToken: string } {
   return {
-    pathEnv: options.pathEnv || '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+    pathEnv: options.pathEnv || process.env.CCP_PATH_ENV || '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
     homeEnv: options.homeEnv || process.env.HOME || '/Users/crab',
     shellEnv: options.shellEnv || process.env.SHELL || '/bin/zsh',
     opServiceAccountToken: options.opServiceAccountToken || process.env.OP_SERVICE_ACCOUNT_TOKEN || '',
