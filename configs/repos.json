@@ -34,7 +34,7 @@
         "papyrx"
       ],
       "nightly": {
-        "enabled": true,
+        "enabled": false,
         "branch": "main",
         "timeoutSec": 900,
         "autoMerge": false
@@ -54,7 +54,10 @@
       ],
       "autoMerge": true,
       "baseBranch": "main",
-      "productionUrl": "https://www.g8events.com"
+      "productionUrl": "https://www.g8events.com",
+      "nightly": {
+        "autoMerge": false
+      }
     },
     {
       "key": "g8events-ios",
@@ -152,7 +155,7 @@
       "autoMerge": true,
       "mergeMethod": "squash",
       "nightly": {
-        "enabled": true,
+        "enabled": false,
         "branch": "main",
         "timeoutSec": 900
       }
