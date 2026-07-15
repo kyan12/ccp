@@ -1004,8 +1004,8 @@ function isFinalSummaryTemplateValue(value: string): boolean {
 }
 
 function workerExitCodeForFinalize(logText: string, statusExitCode?: number | null): number {
-  const exitCodeMatch = logText.match(/WORKER_EXIT_CODE:\s*(\d+)/);
-  if (exitCodeMatch) return Number(exitCodeMatch[1]);
+  const exitCodeMatches = [...logText.matchAll(/^WORKER_EXIT_CODE:\s*(\d+)\s*$/gmi)];
+  if (exitCodeMatches.length) return Number(exitCodeMatches[exitCodeMatches.length - 1][1]);
   // The wrapper is expected to append WORKER_EXIT_CODE after the agent exits.
   // If that marker is missing, treat the run as interrupted/failed even when
   // launchd/tmux reports a clean shell exit, otherwise provider/auth failures
