@@ -42,6 +42,9 @@ function resolveLaunchdSecrets(): Record<string, string> {
       extraEnv[envName] = process.env[envName]!;
       continue;
     }
+    // A protected host-local env file is an explicit operator override. Do not
+    // replace it with a stale value from the currently installed plist.
+    if (extraEnv[envName]) continue;
     const existing = readExistingLaunchdEnv(envName);
     if (existing) {
       extraEnv[envName] = existing;
