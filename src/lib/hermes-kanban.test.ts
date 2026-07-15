@@ -143,6 +143,55 @@ console.log('\nTest: Kanban handoff action completes when status is done and sta
   assert((out.handoff as Record<string, unknown>)?.action === 'complete', 'done status is authoritative even when result state is stale coded');
 }
 
+console.log('\nTest: Kanban handoff action completes for successful no-op result');
+{
+  resetRoot();
+  const { submitKanbanJob, serializeKanbanJobResult } = require('./hermes-kanban');
+  const { saveStatus, resultPath } = require('./jobs');
+  const created = submitKanbanJob({ task_id: 't_action_noop_success', title: 'No-op action', body: 'Do it', repo: '/tmp/repo' });
+  saveStatus(created.job_id, { state: 'no-op', exit_code: 0, last_output_excerpt: 'already satisfied' });
+  fs.writeFileSync(resultPath(created.job_id), JSON.stringify({
+    job_id: created.job_id,
+    state: 'no-op',
+    commit: 'none',
+    branch: 'main',
+    pushed: 'no',
+    pr_url: null,
+    prod: 'no',
+    verified: 'npm test and clean repo evidence passed',
+    blocker: null,
+    worker_exit_code: 0,
+    summary: 'No product change required; verification passed.',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  }, null, 2) + '\n');
+  const out = serializeKanbanJobResult(created.job_id);
+  assert((out.handoff as Record<string, unknown>)?.action === 'complete', 'successful no-op handoff action is complete');
+  assert(out.terminal === true, 'successful no-op is terminal for Kanban');
+}
+
+console.log('\nTest: Kanban handoff action blocks when no-op has blocker');
+{
+  resetRoot();
+  const { submitKanbanJob, serializeKanbanJobResult } = require('./hermes-kanban');
+  const { saveStatus, resultPath } = require('./jobs');
+  const created = submitKanbanJob({ task_id: 't_action_noop_blocked', title: 'No-op blocked action', body: 'Do it', repo: '/tmp/repo' });
+  saveStatus(created.job_id, { state: 'no-op', exit_code: 0, last_output_excerpt: 'needs human review' });
+  fs.writeFileSync(resultPath(created.job_id), JSON.stringify({
+    job_id: created.job_id,
+    state: 'no-op',
+    commit: 'none',
+    prod: 'no',
+    verified: 'not yet',
+    blocker: 'needs human review',
+    worker_exit_code: 0,
+    summary: 'No-op could not be accepted without review.',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  }, null, 2) + '\n');
+  const out = serializeKanbanJobResult(created.job_id);
+  assert((out.handoff as Record<string, unknown>)?.action === 'block', 'blocked no-op handoff action is block');
+  assert((out.handoff as Record<string, unknown>)?.block_reason === 'needs human review', 'blocked no-op preserves blocker reason');
+}
+
 console.log('\nTest: Kanban handoff action waits for coded and running states');
 {
   resetRoot();
