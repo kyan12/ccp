@@ -9,6 +9,7 @@ import type { IntakeToLinearResult } from '../types';
 const { intakeToLinear } = require('../lib/intake-runner');
 const { loadConfig } = require('../lib/config');
 const { getSecret } = require('../lib/secrets');
+const { constantTimeEquals: safeEquals, verifyHmacSha256, isLoopbackAddress } = require('../lib/webhook-auth');
 const { listJobs, jobsByState, loadStatus, readJson, healthCheck, packetPath, resultPath, jobDir } = require('../lib/jobs');
 
 const port: number = Number(process.env.CCP_INTAKE_PORT || 4318);
@@ -88,13 +89,21 @@ function json(res: http.ServerResponse, status: number, payload: unknown): void 
   res.end(JSON.stringify(payload, null, 2) + '\n');
 }
 
-function parseBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+interface ParsedBody {
+  payload: Record<string, unknown>;
+  rawBody: Buffer;
+}
+
+function parseBody(req: http.IncomingMessage): Promise<ParsedBody> {
   return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (chunk: string) => { data += chunk; });
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
     req.on('end', () => {
       try {
-        resolve(data ? JSON.parse(data) : {});
+        const rawBody = Buffer.concat(chunks);
+        resolve({ payload: rawBody.length ? JSON.parse(rawBody.toString('utf8')) : {}, rawBody });
       } catch (error) {
         reject(error);
       }
@@ -105,16 +114,27 @@ function parseBody(req: http.IncomingMessage): Promise<Record<string, unknown>> 
 
 function verifyVercel(req: http.IncomingMessage): boolean {
   const expected = getSecret(vercelCfg.webhookSecretEnv || 'VERCEL_WEBHOOK_SECRET');
-  if (!expected) return true;
+  if (!expected) return false;
   const provided = (req.headers['x-vercel-signature'] || req.headers['x-webhook-secret'] || '') as string;
-  return !!provided && constantTimeEquals(provided, expected);
+  return !!provided && safeEquals(provided, expected);
 }
 
-function constantTimeEquals(a: string, b: string): boolean {
-  const crypto = require('crypto');
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && crypto.timingSafeEqual(left, right);
+function verifyGitHub(req: http.IncomingMessage, rawBody: Buffer): boolean {
+  const expected = getSecret('GITHUB_WEBHOOK_SECRET');
+  const provided = String(req.headers['x-hub-signature-256'] || '');
+  return verifyHmacSha256(expected, rawBody, provided, 'sha256=');
+}
+
+function verifyLinear(req: http.IncomingMessage, rawBody: Buffer): boolean {
+  const expected = getSecret('LINEAR_WEBHOOK_SECRET');
+  const provided = String(req.headers['linear-signature'] || '');
+  return verifyHmacSha256(expected, rawBody, provided);
+}
+
+function verifySentry(req: http.IncomingMessage, rawBody: Buffer): boolean {
+  const expected = getSecret('SENTRY_CLIENT_SECRET');
+  const provided = String(req.headers['sentry-hook-signature'] || '');
+  return verifyHmacSha256(expected, rawBody, provided);
 }
 
 function verifyDecisionApi(req: http.IncomingMessage): boolean {
@@ -123,7 +143,11 @@ function verifyDecisionApi(req: http.IncomingMessage): boolean {
   const auth = String(req.headers.authorization || '');
   const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
   const provided = bearer || String(req.headers['x-control-plane-token'] || req.headers['x-decision-token'] || '').trim();
-  return !!provided && constantTimeEquals(provided, expected);
+  return !!provided && safeEquals(provided, expected);
+}
+
+function verifyAdminApi(req: http.IncomingMessage): boolean {
+  return isLoopbackAddress(req.socket.remoteAddress) || verifyDecisionApi(req);
 }
 
 function isSafeJobId(jobId: string): boolean {
@@ -245,7 +269,7 @@ function handleGetRepos(res: http.ServerResponse): void {
 
 async function handlePutRepo(key: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
-    const body = await parseBody(req);
+    const { payload: body } = await parseBody(req);
     const repos = readJson(REPOS_PATH);
     const idx = (repos.mappings as Array<Record<string, unknown>>).findIndex((r) => r.key === key);
     if (idx === -1) { json(res, 404, { ok: false, error: 'repo not found: ' + key }); return; }
@@ -393,7 +417,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
     res.writeHead(204, {
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET, POST, PUT, OPTIONS',
-      'access-control-allow-headers': 'content-type',
+      'access-control-allow-headers': 'content-type, authorization, x-control-plane-token, x-decision-token',
     });
     res.end();
     return;
@@ -428,7 +452,11 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
     // ── API: PUT routes ──
     if (req.method === 'PUT') {
       const repoMatch = url.pathname.match(/^\/api\/repos\/(.+)$/);
-      if (repoMatch) { await handlePutRepo(decodeURIComponent(repoMatch[1]), req, res); return; }
+      if (repoMatch) {
+        if (!verifyAdminApi(req)) { json(res, 403, { ok: false, error: 'admin API auth failed' }); return; }
+        await handlePutRepo(decodeURIComponent(repoMatch[1]), req, res);
+        return;
+      }
     }
 
     // ── Ingest routes (existing) ──
@@ -437,7 +465,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       return;
     }
 
-    const payload = await parseBody(req);
+    const { payload, rawBody } = await parseBody(req);
 
     const decisionMatch = url.pathname.match(/^\/api\/jobs\/(.+)\/decision$/);
     if (decisionMatch || url.pathname === '/api/decide') {
@@ -461,6 +489,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
     }
 
     if (url.pathname === '/ingest/sentry') {
+      if (!verifySentry(req, rawBody)) { json(res, 403, { ok: false, error: 'bad Sentry signature' }); return; }
       const sentryAction = (payload.action || '') as string;
       const sentryResource = (payload.resource || '') as string;
       if (sentryResource === 'installation' || sentryAction === 'installation') {
@@ -482,22 +511,22 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
     }
 
     if (url.pathname === '/ingest/manual') {
+      if (!verifyAdminApi(req)) { json(res, 403, { ok: false, error: 'admin API auth failed' }); return; }
       json(res, 200, await intakeToLinear('manual', payload, { autoDispatch, autoStart, maxConcurrent }));
       return;
     }
 
     // ── App intake (proteusx-os control-plane client) ──
     if (url.pathname === '/api/intake') {
-      // Verify HMAC signature if CONTROL_PLANE_SECRET is set
-      const secret = process.env.CONTROL_PLANE_SECRET;
-      if (secret) {
-        const sigHeader = (req.headers['x-signature-256'] || '') as string;
-        const rawBody = JSON.stringify(payload);
-        const expected = `sha256=${require('crypto').createHmac('sha256', secret).update(rawBody).digest('hex')}`;
-        if (!sigHeader || !constantTimeEquals(sigHeader, expected)) {
-          json(res, 403, { ok: false, error: 'bad signature' });
-          return;
-        }
+      // App intake is public, so fail closed unless a shared HMAC secret is configured.
+      const secret = getSecret('CONTROL_PLANE_SECRET');
+      const sigHeader = String(req.headers['x-signature-256'] || '');
+      const rawValid = verifyHmacSha256(secret, rawBody, sigHeader, 'sha256=');
+      // Keep compatibility with clients that sign their parsed JSON serialization.
+      const legacyValid = verifyHmacSha256(secret, JSON.stringify(payload), sigHeader, 'sha256=');
+      if (!rawValid && !legacyValid) {
+        json(res, 403, { ok: false, error: 'bad signature' });
+        return;
       }
 
       // Map app fix request to Linear ticket
@@ -584,6 +613,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 
     // Onboard a new repo
     if (url.pathname === '/api/onboard') {
+      if (!verifyAdminApi(req)) { json(res, 403, { ok: false, error: 'admin API auth failed' }); return; }
       try {
         const ownerRepo = (payload.ownerRepo || payload.repo) as string | undefined;
         if (!ownerRepo || !ownerRepo.includes('/')) {
@@ -599,6 +629,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 
     // GitHub webhook
     if (url.pathname === '/webhook/github') {
+      if (!verifyGitHub(req, rawBody)) { json(res, 403, { ok: false, error: 'bad GitHub signature' }); return; }
       const ghEvent = (req.headers['x-github-event'] || '') as string;
       const action = (payload.action || '') as string;
 
@@ -815,6 +846,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 
     // Linear webhook
     if (url.pathname === '/webhook/linear') {
+      if (!verifyLinear(req, rawBody)) { json(res, 403, { ok: false, error: 'bad Linear signature' }); return; }
       await handleLinearWebhook(payload, res);
       return;
     }
