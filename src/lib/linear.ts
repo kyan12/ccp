@@ -6,6 +6,7 @@ const { loadConfig } = require('./config');
 const { getSecret } = require('./secrets');
 const { chooseLinearProjectKey, buildLinearLabels } = require('./intake');
 const { ROOT } = require('./paths');
+const { isLinearGloballyDisabled, linearDisabledReasonForPacket } = require('./linear-disabled');
 
 const LINEAR_URL = 'https://api.linear.app/graphql';
 const LINEAR_CACHE_DIR: string = path.join(ROOT, 'supervisor', 'linear');
@@ -23,12 +24,14 @@ function linearConfig(orgKey?: string | null): LinearConfig {
 }
 
 function linearApiKey(orgKey?: string | null): string {
+  if (isLinearGloballyDisabled()) return '';
   const cfg = linearConfig(orgKey);
   const envKey = cfg.apiKeyEnv || 'LINEAR_API_KEY';
   return getSecret(envKey);
 }
 
 function hasLinearCredentials(orgKey?: string | null): boolean {
+  if (isLinearGloballyDisabled()) return false;
   return !!linearApiKey(orgKey);
 }
 
@@ -82,6 +85,9 @@ function parseRateLimitReset(headers: Record<string, string | string[] | number 
 }
 
 function linearRequest(query: string, variables: Record<string, unknown> = {}, orgKey?: string | null): Promise<Record<string, unknown>> {
+  if (isLinearGloballyDisabled()) {
+    return Promise.reject(new Error('Linear disabled by CCP_LINEAR_DISABLED/CCP_DISABLE_LINEAR'));
+  }
   const apiKey = linearApiKey(orgKey);
   if (!apiKey) {
     return Promise.reject(new Error(`LINEAR_API_KEY missing${orgKey ? ` (org: ${orgKey})` : ''}`));
@@ -473,6 +479,11 @@ async function postCompletionComment(
 }
 
 async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; status: JobStatus; result: JobResult }): Promise<LinearSyncResult> {
+  const disabledReason = linearDisabledReasonForPacket(packet);
+  if (disabledReason) {
+    return { ok: false, skipped: true, reason: disabledReason };
+  }
+
   // Resolve which Linear org this job belongs to (e.g. 'smartadvocateai' for redwood)
   const orgKey = resolveLinearOrg(packet);
   if (!hasLinearCredentials(orgKey)) {
