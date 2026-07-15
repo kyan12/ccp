@@ -43,7 +43,7 @@ ssh crab@Codes-Mac-mini.local \
   'cd /Users/crab/coding-control-plane && node dist/bin/hermes-kanban.js result kanban_t_184f6437'
 ```
 
-`result` returns stable JSON containing `status`, `packet`, `result`, and a `handoff` object with an explicit `handoff.action`: `complete`, `block`, or `wait`. Workers should act on `handoff.action`, not on the legacy bare `terminal` flag: use `handoff.summary` plus `handoff.metadata` for `kanban_complete` only when `handoff.action === "complete"`; add the context as a Kanban comment and call `kanban_block` when `handoff.action === "block"`; keep polling/supervising CCP when `handoff.action === "wait"`. Intermediate states such as `coded`, PR-pending, running, and deploy-in-progress intentionally return `wait`.
+`result` returns stable JSON containing `status`, `packet`, `result`, and a `handoff` object with an explicit `handoff.action`: `complete`, `block`, or `wait`. Workers should act on `handoff.action`, not on the legacy bare `terminal` flag: use `handoff.summary` plus `handoff.metadata` for `kanban_complete` only when `handoff.action === "complete"`; add the context as a Kanban comment and call `kanban_block` when `handoff.action === "block"`; keep polling/supervising CCP when `handoff.action === "wait"`. `done`, `verified`, and successful terminal `no-op` statuses (`status.state === "no-op"`, `status.exit_code === 0`, no blocker, and no non-zero `result.worker_exit_code`) return `complete`; blocker precedence still makes any blocked no-op return `block`. Intermediate states such as `coded`, PR-pending, running, and deploy-in-progress intentionally return `wait`.
 
 ## Linear-disabled operation
 

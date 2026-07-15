@@ -39,11 +39,19 @@ const SUCCESSFUL_KANBAN_COMPLETE_STATES = new Set(['done', 'verified']);
 const BLOCKING_KANBAN_STATES = new Set(['blocked', 'failed', 'dirty-repo', 'harness-failure']);
 type KanbanHandoffAction = 'complete' | 'block' | 'wait';
 
+function isSuccessfulNoOp(status: JobStatus, result: JobResult | null): boolean {
+  const statusState = String(status?.state || '');
+  if (statusState !== 'no-op') return false;
+  if (status?.exit_code !== 0) return false;
+  if (typeof result?.worker_exit_code === 'number' && result.worker_exit_code !== 0) return false;
+  return true;
+}
+
 function kanbanHandoffAction(status: JobStatus, result: JobResult | null, blocker: string | null): KanbanHandoffAction {
   const statusState = String(status?.state || '');
   const resultState = String(result?.state || '');
   if (blocker || BLOCKING_KANBAN_STATES.has(statusState) || BLOCKING_KANBAN_STATES.has(resultState)) return 'block';
-  if (SUCCESSFUL_KANBAN_COMPLETE_STATES.has(statusState)) return 'complete';
+  if (SUCCESSFUL_KANBAN_COMPLETE_STATES.has(statusState) || isSuccessfulNoOp(status, result)) return 'complete';
   return 'wait';
 }
 
