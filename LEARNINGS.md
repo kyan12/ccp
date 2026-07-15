@@ -777,3 +777,27 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
 
+## 2026-06-03 — Nightly Review
+
+### Documentation Fix: Agent default docs drifted after Codex became the default
+
+Recent agent work changed CCP's built-in dispatch default from Claude Code to Codex and
+updated the Codex driver to use `--sandbox danger-full-access` so it can write git metadata.
+`docs/agents.md` still documented `claude-code` as the built-in fallback/default and
+`workspace-write` as the Codex sandbox mode. `README.md` also still listed Claude Code as
+the primary coding-agent prerequisite.
+
+**Fix:** Updated the agent docs and README prerequisite to match the current resolver and
+driver behavior.
+
+### Patterns Worth Reinforcing
+
+- **Docs must move with operational defaults**: Agent defaults affect every dispatched job.
+  When changing resolver defaults or driver command flags, update operator-facing docs in the
+  same PR so setup and incident triage guidance does not contradict runtime behavior.
+- **Recent commits continue the right hardening pattern**: The latest fixes reject placeholder
+  summaries without worker exit markers, scope Codex rate-limit detection to the current attempt,
+  and keep agent configuration behavior covered by focused tests.
+- **Open nightly PR backlog needs consolidation**: Several draft nightly PRs are open for
+  related rate-limit, blocker-context, and PR-review hardening. New nightly work should avoid
+  overlapping those branches unless it is explicitly continuing one of them.
