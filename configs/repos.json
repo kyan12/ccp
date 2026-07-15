@@ -411,6 +411,24 @@
       "baseBranch": "main",
       "mergeMethod": "squash",
       "productionUrl": "https://moshi-ai.vercel.app"
+    },
+    {
+      "key": "attention-pipeline-ios",
+      "ownerRepo": "ProteusX-Consulting/attention-pipeline-ios",
+      "gitUrl": "git@github.com:ProteusX-Consulting/attention-pipeline-ios.git",
+      "localPath": "/Users/crab/repos/attention-pipeline-ios",
+      "aliases": [
+        "attention pipeline",
+        "attention-pipeline-ios",
+        "hermes attention pipeline",
+        "supervisor ios",
+        "attention app"
+      ],
+      "autoMerge": false,
+      "baseBranch": "main",
+      "nightly": {
+        "enabled": false
+      }
     }
   ]
 }
