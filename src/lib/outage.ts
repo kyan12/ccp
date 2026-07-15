@@ -132,6 +132,11 @@ const RATE_LIMIT_PATTERNS: RegExp[] = [
   /usage.*limit.*reset.*?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
 ];
 
+const RELATIVE_RATE_LIMIT_PATTERNS: RegExp[] = [
+  /try again in\s+(\d+(?:\.\d+)?)\s*(milliseconds?|ms|seconds?|secs?|s|minutes?|mins?|m)/i,
+  /retry after\s+(\d+(?:\.\d+)?)\s*(milliseconds?|ms|seconds?|secs?|s|minutes?|mins?|m)/i,
+];
+
 /**
  * Detect rate limit in worker log and extract the reset time.
  * Returns the parsed ISO reset timestamp, or null if no rate limit detected.
@@ -143,7 +148,7 @@ function isLikelyProviderRateLimitLine(line: string): boolean {
   if (/^[+\-]\s/.test(trimmed)) return false;
   if (/^(assert|console\.|const\s|let\s|var\s|return\s|\/\/|\*)/i.test(trimmed)) return false;
   if (/\bmatches\s+["'`]?hit your limit/i.test(trimmed)) return false;
-  return /(?:api\s*error|error:|you['’]?ve hit your limit|usage\s+limit|rate.?limit)/i.test(trimmed);
+  return /(?:api\s*error|error:|you['’]?ve hit your limit|usage\s+limit|rate.?limit|too many requests|\b429\b|try again in\s+\d)/i.test(trimmed);
 }
 
 export function detectRateLimit(logText: string): { resetAt: string; reason: string } | null {
@@ -160,8 +165,28 @@ export function detectRateLimit(logText: string): { resetAt: string; reason: str
         }
       }
     }
+    for (const re of RELATIVE_RATE_LIMIT_PATTERNS) {
+      const match = line.match(re);
+      if (!match) continue;
+      const resetAt = parseRelativeResetTime(match[1], match[2]);
+      if (resetAt) {
+        return { resetAt, reason: match[0].trim().slice(0, 120) };
+      }
+    }
   }
   return null;
+}
+
+function parseRelativeResetTime(amountStr: string, unit: string): string | null {
+  const amount = Number(amountStr);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const normalized = unit.toLowerCase();
+  const multiplier = normalized.startsWith('ms')
+    ? 1
+    : normalized.startsWith('m')
+      ? 60_000
+      : 1_000;
+  return new Date(Date.now() + Math.ceil(amount * multiplier)).toISOString();
 }
 
 /**
