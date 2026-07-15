@@ -1573,7 +1573,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   let inferredBlocker: string | null;
   let synthesizedSummary: string | null = null;
 
-  const workerContextForHarness = extractWorkerFailureContext(logText);
+  const workerContextForHarness = extractWorkerFailureContext(currentAttemptLog);
   const harnessless = classifyHarnesslessSuccess({
     exitCode,
     hasSummaryOutput,
@@ -1604,13 +1604,13 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     inferredBlocker = null;
   } else if (proof.dirty && !proof.commitExists && ['coded', 'done', 'verified'].includes(provisionalState)) {
     finalState = 'dirty-repo';
-    const workerContext = extractWorkerFailureContext(logText);
+    const workerContext = extractWorkerFailureContext(currentAttemptLog);
     inferredBlocker = `uncommitted local changes but no commit created — worker may have been interrupted or failed to commit. Branch: ${proof.branch || 'unknown'}. Action: inspect repo changes, commit manually, or discard with git checkout. Worker said: ${workerContext}`;
   } else {
     // PRO-594: prefer the PR's canonical head commit when we recovered a PR
     // — workers sometimes emit a short/local sha while the actual remote
     // commit on the PR is the truth-of-record.
-    inferredBlocker = inferBlockedReason(logText, {
+    inferredBlocker = inferBlockedReason(currentAttemptLog, {
       state: provisionalState,
       commit: recoveredPr.commit || summary.commit || 'none',
       prod: summary.prod || 'no',
@@ -1670,7 +1670,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   if (harnessFailureInfo) {
     result.harnessFailure = harnessFailureInfo;
   }
-  const decisionRequest = finalState === 'blocked' ? parseDecisionRequest(logText, jobId, nowIso()) : null;
+  const decisionRequest = finalState === 'blocked' ? parseDecisionRequest(currentAttemptLog, jobId, nowIso()) : null;
   if (decisionRequest) {
     result.blocker_type = 'operator-decision';
     result.blocker = `Decision needed: ${decisionRequest.question}`;
