@@ -147,7 +147,11 @@ function verifyDecisionApi(req: http.IncomingMessage): boolean {
 }
 
 function verifyAdminApi(req: http.IncomingMessage): boolean {
-  return isLoopbackAddress(req.socket.remoteAddress) || verifyDecisionApi(req);
+  const host = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '');
+  const forwarded = !!(req.headers['x-forwarded-for'] || req.headers['x-forwarded-proto'] || req.headers['forwarded']);
+  const localHost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  const directLoopback = isLoopbackAddress(req.socket.remoteAddress) && localHost && !forwarded;
+  return directLoopback || verifyDecisionApi(req);
 }
 
 function isSafeJobId(jobId: string): boolean {
