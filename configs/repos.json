@@ -424,7 +424,7 @@
         "supervisor ios",
         "attention app"
       ],
-      "autoMerge": false,
+      "autoMerge": true,
       "baseBranch": "main",
       "nightly": {
         "enabled": false

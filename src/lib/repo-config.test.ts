@@ -46,7 +46,7 @@ console.log('\nTest: attention-pipeline-ios mapping is present, locked down, and
   assert.equal(mapping?.gitUrl, 'git@github.com:ProteusX-Consulting/attention-pipeline-ios.git');
   assert.equal(mapping?.localPath, '/Users/crab/repos/attention-pipeline-ios');
   assert.equal(mapping?.baseBranch, 'main');
-  assert.equal(mapping?.autoMerge, false, 'attention-pipeline-ios must not auto-merge');
+  assert.equal(mapping?.autoMerge, true, "attention-pipeline-ios auto-merge is enabled after explicit approval");
   assert.equal(mapping?.nightly?.enabled, false, 'attention-pipeline-ios nightly automation stays disabled');
   assert.deepEqual(mapping?.aliases, [
     'attention pipeline',
