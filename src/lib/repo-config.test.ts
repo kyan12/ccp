@@ -3,6 +3,7 @@ import fs = require('fs');
 import path = require('path');
 import type { RepoMapping } from '../types';
 const { loadConfig } = require('./config') as typeof import('./config');
+const { findRepoMapping, enrichPayloadWithRepo } = require('./repos') as typeof import('./repos');
 
 const LEGACY_PREFIX = '/Users/kyan/code-crab/';
 const CANONICAL_REPO_PREFIX = '/Users/crab/repos/';
@@ -16,7 +17,7 @@ const mappings = cfg.mappings || [];
 
 console.log('\nTest: production repo mappings use canonical Mac mini local paths');
 {
-  assert.equal(mappings.length, 25, 'expected 25 production repo mappings');
+  assert.equal(mappings.length, 26, 'expected 26 production repo mappings');
 
   for (const mapping of mappings) {
     assert.ok(mapping.key, 'mapping has a key');
@@ -34,6 +35,45 @@ console.log('\nTest: production repo mappings use canonical Mac mini local paths
         `${mapping.key} maps under ${CANONICAL_REPO_PREFIX}: ${mapping.localPath}`,
       );
     }
+  }
+}
+
+console.log('\nTest: attention-pipeline-ios mapping is present, locked down, and resolves to an existing git repo');
+{
+  const mapping = mappings.find((entry) => entry.key === 'attention-pipeline-ios') as (RepoMapping & { baseBranch?: string }) | undefined;
+  assert.ok(mapping, 'attention-pipeline-ios mapping exists');
+  assert.equal(mapping?.ownerRepo, 'ProteusX-Consulting/attention-pipeline-ios');
+  assert.equal(mapping?.gitUrl, 'git@github.com:ProteusX-Consulting/attention-pipeline-ios.git');
+  assert.equal(mapping?.localPath, '/Users/crab/repos/attention-pipeline-ios');
+  assert.equal(mapping?.baseBranch, 'main');
+  assert.equal(mapping?.autoMerge, true, "attention-pipeline-ios auto-merge is enabled after explicit approval");
+  assert.equal(mapping?.nightly?.enabled, false, 'attention-pipeline-ios nightly automation stays disabled');
+  assert.deepEqual(mapping?.aliases, [
+    'attention pipeline',
+    'attention-pipeline-ios',
+    'hermes attention pipeline',
+    'supervisor ios',
+    'attention app',
+  ]);
+  for (const alias of [
+    'attention pipeline',
+    'attention-pipeline-ios',
+    'hermes attention pipeline',
+    'supervisor ios',
+    'attention app',
+    'ProteusX-Consulting/attention-pipeline-ios',
+  ]) {
+    const resolved = findRepoMapping({ repo: alias });
+    assert.equal(resolved?.key, 'attention-pipeline-ios', `${alias} resolves to attention-pipeline-ios`);
+  }
+
+  const enriched = enrichPayloadWithRepo({ repo: 'attention app' });
+  assert.equal(enriched.repoResolved, true, 'attention app resolves to an existing checkout');
+  assert.equal(enriched.repoKey, 'attention-pipeline-ios');
+  assert.equal(enriched.repo, '/Users/crab/repos/attention-pipeline-ios');
+
+  if (VALIDATE_LOCAL_PATHS) {
+    assert.ok(fs.existsSync(path.join(mapping!.localPath, '.git')), 'attention-pipeline-ios localPath is an existing git repo');
   }
 }
 
