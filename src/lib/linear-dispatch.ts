@@ -62,6 +62,11 @@ function normalizeLinearOrgKeys(orgs: Array<string | null | undefined>): Array<s
 
 const DEFAULT_DISPATCH_POLL_INTERVAL_MS = 60 * 1000;
 
+function isLinearDispatchDisabled(): boolean {
+  const raw = String(process.env.CCP_LINEAR_DISABLED || process.env.CCP_DISABLE_LINEAR || '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(raw);
+}
+
 function dispatchPollIntervalMs(): number {
   const raw = Number(process.env.CCP_LINEAR_DISPATCH_POLL_INTERVAL_MS || DEFAULT_DISPATCH_POLL_INTERVAL_MS);
   return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_DISPATCH_POLL_INTERVAL_MS;
@@ -478,6 +483,10 @@ async function moveIssueToInProgress(issueId: string, orgKey: string | null | un
 }
 
 async function dispatchLinearIssues(options: { force?: boolean } = {}): Promise<DispatchResult[]> {
+  if (isLinearDispatchDisabled()) {
+    console.error('[ccp] linear-dispatch: disabled by CCP_LINEAR_DISABLED/CCP_DISABLE_LINEAR');
+    return [];
+  }
   const { createJob } = require('./jobs');
   const state = readState();
   clearExpiredRateLimits(state);
@@ -544,6 +553,7 @@ module.exports = {
   markOrgRateLimited,
   shouldSkipOrgForPollInterval,
   markOrgPolled,
+  isLinearDispatchDisabled,
 };
 
 export {
@@ -557,4 +567,5 @@ export {
   markOrgRateLimited,
   shouldSkipOrgForPollInterval,
   markOrgPolled,
+  isLinearDispatchDisabled,
 };
