@@ -81,9 +81,9 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log('\nTest: syncJobToLinear skips Hermes Kanban packets even without global disable env');
+  console.log('\nTest: syncJobToLinear skips Hermes Kanban source packets before credentials/API');
   {
-    process.env.LINEAR_API_KEY = 'fake-key-that-must-not-be-used';
+    delete process.env.LINEAR_API_KEY;
     delete process.env.CCP_LINEAR_DISABLED;
     delete process.env.CCP_DISABLE_LINEAR;
     const https = require('https');
@@ -96,16 +96,44 @@ async function main(): Promise<void> {
     try {
       const { syncJobToLinear } = require('./linear');
       const sync = await syncJobToLinear({
-        packet: { job_id: 'kanban_t_sync', ticket_id: 't_sync001', repo: '/tmp/repo', goal: 'kanban', source: 'hermes-kanban', kind: 'fix', label: 'test', metadata: { source_transport: 'hermes-kanban' } },
+        packet: { job_id: 'kanban_t_sync', ticket_id: 't_sync001', repo: '/tmp/repo', goal: 'kanban', source: 'hermes-kanban', kind: 'fix', label: 'test' },
         status: { job_id: 'kanban_t_sync', ticket_id: 't_sync001', repo: '/tmp/repo', state: 'verified', started_at: null, updated_at: new Date().toISOString(), elapsed_sec: 0, tmux_session: null, last_heartbeat_at: null, last_output_excerpt: '', exit_code: 0 },
         result: { job_id: 'kanban_t_sync', state: 'verified', commit: 'abc123', prod: 'no', verified: 'test', blocker: null },
       });
-      assert(sync.skipped === true, 'Hermes Kanban sync reports skipped');
-      assert(/hermes kanban|linear disabled/i.test(String(sync.reason || '')), 'skip reason names Hermes Kanban/Linear-disabled path');
-      assert(requestCount === 0, 'Hermes Kanban packet does not attempt Linear API request');
+      assert(sync.skipped === true, 'Hermes Kanban source sync reports skipped');
+      assert(/hermes kanban|linear disabled/i.test(String(sync.reason || '')), 'source skip reason names Hermes Kanban/Linear-disabled path');
+      assert(!/api key|credential/i.test(String(sync.reason || '')), 'source skip does not require Linear credentials');
+      assert(requestCount === 0, 'Hermes Kanban source packet does not attempt Linear API request');
     } finally {
       https.request = originalRequest;
-      delete process.env.LINEAR_API_KEY;
+    }
+  }
+
+  console.log('\nTest: syncJobToLinear skips Hermes Kanban source_transport packets before credentials/API');
+  {
+    delete process.env.LINEAR_API_KEY;
+    delete process.env.CCP_LINEAR_DISABLED;
+    delete process.env.CCP_DISABLE_LINEAR;
+    const https = require('https');
+    const originalRequest = https.request;
+    let requestCount = 0;
+    https.request = function blockedLinearRequest(...args: unknown[]) {
+      requestCount++;
+      throw new Error('unexpected Linear API request');
+    };
+    try {
+      const { syncJobToLinear } = require('./linear');
+      const sync = await syncJobToLinear({
+        packet: { job_id: 'kanban_t_transport', ticket_id: 't_sync002', repo: '/tmp/repo', goal: 'kanban transport', source: 'intake', kind: 'fix', label: 'test', metadata: { source_transport: 'hermes-kanban' } },
+        status: { job_id: 'kanban_t_transport', ticket_id: 't_sync002', repo: '/tmp/repo', state: 'verified', started_at: null, updated_at: new Date().toISOString(), elapsed_sec: 0, tmux_session: null, last_heartbeat_at: null, last_output_excerpt: '', exit_code: 0 },
+        result: { job_id: 'kanban_t_transport', state: 'verified', commit: 'abc123', prod: 'no', verified: 'test', blocker: null },
+      });
+      assert(sync.skipped === true, 'Hermes Kanban source_transport sync reports skipped');
+      assert(/hermes kanban|linear disabled/i.test(String(sync.reason || '')), 'source_transport skip reason names Hermes Kanban/Linear-disabled path');
+      assert(!/api key|credential/i.test(String(sync.reason || '')), 'source_transport skip does not require Linear credentials');
+      assert(requestCount === 0, 'Hermes Kanban source_transport packet does not attempt Linear API request');
+    } finally {
+      https.request = originalRequest;
     }
   }
 
