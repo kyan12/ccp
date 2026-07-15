@@ -2,6 +2,7 @@ import fs = require('fs');
 import path = require('path');
 import type { DispatchState, DispatchResult, JobPacket, RepoMapping, CompletionRouting } from '../types';
 const { linearConfig, linearRequest } = require('./linear');
+const { isLinearGloballyDisabled } = require('./linear-disabled');
 const { ROOT } = require('./paths');
 const { findRepoMapping, enrichPayloadWithRepo } = require('./repos');
 
@@ -63,8 +64,7 @@ function normalizeLinearOrgKeys(orgs: Array<string | null | undefined>): Array<s
 const DEFAULT_DISPATCH_POLL_INTERVAL_MS = 60 * 1000;
 
 function isLinearDispatchDisabled(): boolean {
-  const raw = String(process.env.CCP_LINEAR_DISABLED || process.env.CCP_DISABLE_LINEAR || '').trim().toLowerCase();
-  return ['1', 'true', 'yes', 'on'].includes(raw);
+  return isLinearGloballyDisabled();
 }
 
 function dispatchPollIntervalMs(): number {

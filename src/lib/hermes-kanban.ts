@@ -35,7 +35,17 @@ interface KanbanSubmitResult {
   status: JobStatus;
 }
 
-const TERMINAL_STATES = new Set(['done', 'verified', 'blocked', 'failed', 'coded', 'deployed', 'dirty-repo', 'harness-failure']);
+const SUCCESSFUL_KANBAN_COMPLETE_STATES = new Set(['done', 'verified']);
+const BLOCKING_KANBAN_STATES = new Set(['blocked', 'failed', 'dirty-repo', 'harness-failure']);
+type KanbanHandoffAction = 'complete' | 'block' | 'wait';
+
+function kanbanHandoffAction(status: JobStatus, result: JobResult | null, blocker: string | null): KanbanHandoffAction {
+  const statusState = String(status?.state || '');
+  const resultState = String(result?.state || '');
+  if (blocker || BLOCKING_KANBAN_STATES.has(statusState) || BLOCKING_KANBAN_STATES.has(resultState)) return 'block';
+  if (SUCCESSFUL_KANBAN_COMPLETE_STATES.has(statusState) && (!resultState || SUCCESSFUL_KANBAN_COMPLETE_STATES.has(resultState))) return 'complete';
+  return 'wait';
+}
 
 function sanitizeTaskId(taskId: string): string {
   const clean = String(taskId || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
@@ -143,9 +153,10 @@ function serializeKanbanJobResult(jobId: string): Record<string, unknown> {
   const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   const result = loadResultSafe(jobId);
   const taskId = String(packet.metadata?.hermes_kanban_task_id || packet.ticket_id || '').trim();
-  const terminal = TERMINAL_STATES.has(status.state) || TERMINAL_STATES.has(String(result?.state || ''));
   const verification = result?.verified || status.last_output_excerpt || 'not yet';
-  const blocker = result?.blocker || (['blocked', 'failed', 'dirty-repo', 'harness-failure'].includes(status.state) ? status.last_output_excerpt : null);
+  const blocker = result?.blocker || (BLOCKING_KANBAN_STATES.has(status.state) ? status.last_output_excerpt : null);
+  const action = kanbanHandoffAction(status, result, blocker || null);
+  const terminal = action !== 'wait';
   const summaryBits = [
     `CCP job ${jobId} for Kanban task ${taskId || '(unknown)'}`,
     `state=${result?.state || status.state}`,
@@ -172,6 +183,7 @@ function serializeKanbanJobResult(jobId: string): Record<string, unknown> {
     packet,
     result,
     handoff: {
+      action,
       summary: summaryBits.join(' | '),
       block_reason: blocker || null,
       metadata: {

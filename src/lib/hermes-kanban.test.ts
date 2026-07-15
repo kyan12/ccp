@@ -94,5 +94,86 @@ console.log('\nTest: Kanban terminal result serialization is stable for board ha
   assert(out.handoff?.metadata.tests_or_verification === 'npm test', 'verification string mapped for Kanban');
 }
 
+
+console.log('\nTest: Kanban handoff action completes only for final successful states');
+{
+  resetRoot();
+  const { submitKanbanJob, serializeKanbanJobResult } = require('./hermes-kanban');
+  const { saveStatus, resultPath } = require('./jobs');
+  const created = submitKanbanJob({ task_id: 't_action_done', title: 'Done action', body: 'Do it', repo: '/tmp/repo' });
+  saveStatus(created.job_id, { state: 'done', exit_code: 0, last_output_excerpt: 'merged' });
+  fs.writeFileSync(resultPath(created.job_id), JSON.stringify({
+    job_id: created.job_id,
+    state: 'verified',
+    commit: 'abc1234',
+    branch: 'feat/test',
+    pushed: 'yes',
+    pr_url: 'https://github.com/owner/repo/pull/1',
+    prod: 'no',
+    verified: 'npm test and PR merged',
+    blocker: null,
+    summary: 'Merged and verified.',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  }, null, 2) + '\n');
+  const out = serializeKanbanJobResult(created.job_id);
+  assert((out.handoff as Record<string, unknown>)?.action === 'complete', 'done/verified handoff action is complete');
+}
+
+console.log('\nTest: Kanban handoff action waits for coded and running states');
+{
+  resetRoot();
+  const { submitKanbanJob, serializeKanbanJobResult } = require('./hermes-kanban');
+  const { saveStatus, resultPath } = require('./jobs');
+  const coded = submitKanbanJob({ task_id: 't_action_coded', title: 'Coded action', body: 'Do it', repo: '/tmp/repo' });
+  saveStatus(coded.job_id, { state: 'coded', exit_code: 0, last_output_excerpt: 'PR opened' });
+  fs.writeFileSync(resultPath(coded.job_id), JSON.stringify({
+    job_id: coded.job_id,
+    state: 'coded',
+    commit: 'def5678',
+    branch: 'feat/test',
+    pushed: 'yes',
+    pr_url: 'https://github.com/owner/repo/pull/2',
+    prod: 'no',
+    verified: 'tests passed, awaiting PR merge',
+    blocker: null,
+    summary: 'PR open.',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  }, null, 2) + '\n');
+  const codedOut = serializeKanbanJobResult(coded.job_id);
+  assert((codedOut.handoff as Record<string, unknown>)?.action === 'wait', 'coded handoff action is wait');
+
+  const running = submitKanbanJob({ task_id: 't_action_running', title: 'Running action', body: 'Do it', repo: '/tmp/repo' });
+  saveStatus(running.job_id, { state: 'running', exit_code: null, last_output_excerpt: 'working' });
+  const runningOut = serializeKanbanJobResult(running.job_id);
+  assert((runningOut.handoff as Record<string, unknown>)?.action === 'wait', 'running handoff action is wait');
+}
+
+console.log('\nTest: Kanban handoff action blocks for blocked and harness-failure states');
+{
+  resetRoot();
+  const { submitKanbanJob, serializeKanbanJobResult } = require('./hermes-kanban');
+  const { saveStatus, resultPath } = require('./jobs');
+  const blocked = submitKanbanJob({ task_id: 't_action_blocked', title: 'Blocked action', body: 'Do it', repo: '/tmp/repo' });
+  saveStatus(blocked.job_id, { state: 'blocked', exit_code: 1, last_output_excerpt: 'needs API key' });
+  const blockedOut = serializeKanbanJobResult(blocked.job_id);
+  assert((blockedOut.handoff as Record<string, unknown>)?.action === 'block', 'blocked handoff action is block');
+  assert((blockedOut.handoff as Record<string, unknown>)?.block_reason === 'needs API key', 'blocked handoff keeps block reason');
+
+  const harness = submitKanbanJob({ task_id: 't_action_harness', title: 'Harness action', body: 'Do it', repo: '/tmp/repo' });
+  saveStatus(harness.job_id, { state: 'harness-failure', exit_code: 1, last_output_excerpt: 'worker summary missing' });
+  fs.writeFileSync(resultPath(harness.job_id), JSON.stringify({
+    job_id: harness.job_id,
+    state: 'harness-failure',
+    commit: 'none',
+    prod: 'no',
+    verified: 'not yet',
+    blocker: 'worker summary missing',
+    summary: null,
+    updated_at: '2026-01-01T00:00:00.000Z',
+  }, null, 2) + '\n');
+  const harnessOut = serializeKanbanJobResult(harness.job_id);
+  assert((harnessOut.handoff as Record<string, unknown>)?.action === 'block', 'harness-failure handoff action is block');
+}
+
 console.log(`\nTotal: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

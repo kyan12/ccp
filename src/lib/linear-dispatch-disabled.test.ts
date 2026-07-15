@@ -53,6 +53,62 @@ async function main(): Promise<void> {
     delete process.env.CCP_LINEAR_DISABLED;
   }
 
+
+  console.log('\nTest: syncJobToLinear no-ops before credentials/API when global Linear is disabled');
+  {
+    delete process.env.LINEAR_API_KEY;
+    process.env.CCP_LINEAR_DISABLED = '1';
+    const https = require('https');
+    const originalRequest = https.request;
+    let requestCount = 0;
+    https.request = function blockedLinearRequest(...args: unknown[]) {
+      requestCount++;
+      throw new Error('unexpected Linear API request');
+    };
+    try {
+      const { syncJobToLinear } = require('./linear');
+      const sync = await syncJobToLinear({
+        packet: { job_id: 'job_disabled_env', ticket_id: 'PRO-1', repo: '/tmp/repo', goal: 'disabled', source: 'linear', kind: 'fix', label: 'test' },
+        status: { job_id: 'job_disabled_env', ticket_id: 'PRO-1', repo: '/tmp/repo', state: 'done', started_at: null, updated_at: new Date().toISOString(), elapsed_sec: 0, tmux_session: null, last_heartbeat_at: null, last_output_excerpt: '', exit_code: 0 },
+        result: { job_id: 'job_disabled_env', state: 'done', commit: 'abc123', prod: 'no', verified: 'test', blocker: null },
+      });
+      assert(sync.skipped === true, 'sync reports skipped');
+      assert(/linear disabled/i.test(String(sync.reason || '')), 'skip reason is explicit Linear-disabled');
+      assert(requestCount === 0, 'does not attempt Linear API request');
+    } finally {
+      https.request = originalRequest;
+      delete process.env.CCP_LINEAR_DISABLED;
+    }
+  }
+
+  console.log('\nTest: syncJobToLinear skips Hermes Kanban packets even without global disable env');
+  {
+    process.env.LINEAR_API_KEY = 'fake-key-that-must-not-be-used';
+    delete process.env.CCP_LINEAR_DISABLED;
+    delete process.env.CCP_DISABLE_LINEAR;
+    const https = require('https');
+    const originalRequest = https.request;
+    let requestCount = 0;
+    https.request = function blockedLinearRequest(...args: unknown[]) {
+      requestCount++;
+      throw new Error('unexpected Linear API request');
+    };
+    try {
+      const { syncJobToLinear } = require('./linear');
+      const sync = await syncJobToLinear({
+        packet: { job_id: 'kanban_t_sync', ticket_id: 't_sync001', repo: '/tmp/repo', goal: 'kanban', source: 'hermes-kanban', kind: 'fix', label: 'test', metadata: { source_transport: 'hermes-kanban' } },
+        status: { job_id: 'kanban_t_sync', ticket_id: 't_sync001', repo: '/tmp/repo', state: 'verified', started_at: null, updated_at: new Date().toISOString(), elapsed_sec: 0, tmux_session: null, last_heartbeat_at: null, last_output_excerpt: '', exit_code: 0 },
+        result: { job_id: 'kanban_t_sync', state: 'verified', commit: 'abc123', prod: 'no', verified: 'test', blocker: null },
+      });
+      assert(sync.skipped === true, 'Hermes Kanban sync reports skipped');
+      assert(/hermes kanban|linear disabled/i.test(String(sync.reason || '')), 'skip reason names Hermes Kanban/Linear-disabled path');
+      assert(requestCount === 0, 'Hermes Kanban packet does not attempt Linear API request');
+    } finally {
+      https.request = originalRequest;
+      delete process.env.LINEAR_API_KEY;
+    }
+  }
+
   console.log(`\nTotal: ${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 }
