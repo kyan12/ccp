@@ -119,6 +119,30 @@ console.log('\nTest: Kanban handoff action completes only for final successful s
   assert((out.handoff as Record<string, unknown>)?.action === 'complete', 'done/verified handoff action is complete');
 }
 
+console.log('\nTest: Kanban handoff action completes when status is done and stale result is coded');
+{
+  resetRoot();
+  const { submitKanbanJob, serializeKanbanJobResult } = require('./hermes-kanban');
+  const { saveStatus, resultPath } = require('./jobs');
+  const created = submitKanbanJob({ task_id: 't_action_done_stale_coded', title: 'Merged action', body: 'Do it', repo: '/tmp/repo' });
+  saveStatus(created.job_id, { state: 'done', exit_code: 0, last_output_excerpt: 'PR merged' });
+  fs.writeFileSync(resultPath(created.job_id), JSON.stringify({
+    job_id: created.job_id,
+    state: 'coded',
+    commit: 'abc1234',
+    branch: 'feat/test',
+    pushed: 'yes',
+    pr_url: 'https://github.com/owner/repo/pull/1',
+    prod: 'no',
+    verified: 'tests passed before merge',
+    blocker: null,
+    summary: 'PR opened before watcher marked status done.',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  }, null, 2) + '\n');
+  const out = serializeKanbanJobResult(created.job_id);
+  assert((out.handoff as Record<string, unknown>)?.action === 'complete', 'done status is authoritative even when result state is stale coded');
+}
+
 console.log('\nTest: Kanban handoff action waits for coded and running states');
 {
   resetRoot();

@@ -43,7 +43,7 @@ function kanbanHandoffAction(status: JobStatus, result: JobResult | null, blocke
   const statusState = String(status?.state || '');
   const resultState = String(result?.state || '');
   if (blocker || BLOCKING_KANBAN_STATES.has(statusState) || BLOCKING_KANBAN_STATES.has(resultState)) return 'block';
-  if (SUCCESSFUL_KANBAN_COMPLETE_STATES.has(statusState) && (!resultState || SUCCESSFUL_KANBAN_COMPLETE_STATES.has(resultState))) return 'complete';
+  if (SUCCESSFUL_KANBAN_COMPLETE_STATES.has(statusState)) return 'complete';
   return 'wait';
 }
 
