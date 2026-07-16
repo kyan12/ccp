@@ -6,12 +6,23 @@ function truthy(value: unknown): boolean {
   return ['1', 'true', 'yes', 'on'].includes(raw);
 }
 
-function isLinearGloballyDisabled(): boolean {
-  if (truthy(process.env.CCP_LINEAR_DISABLED || process.env.CCP_DISABLE_LINEAR)) return true;
+function linearGlobalDisabledReason(): string | null {
+  if (truthy(process.env.CCP_LINEAR_DISABLED) || truthy(process.env.CCP_DISABLE_LINEAR)) {
+    return 'Linear disabled by CCP_LINEAR_DISABLED/CCP_DISABLE_LINEAR';
+  }
+
   const cfg = loadConfig('linear', {}) as LinearConfig & { disabled?: boolean; dispatchEnabled?: boolean; pollingEnabled?: boolean; syncEnabled?: boolean };
-  if (cfg.disabled === true) return true;
-  if (cfg.dispatchEnabled === false && cfg.pollingEnabled === false && cfg.syncEnabled === false) return true;
-  return false;
+  if (cfg.disabled === true) {
+    return 'Linear disabled by configs/linear.json disabled=true';
+  }
+  if (cfg.dispatchEnabled === false && cfg.pollingEnabled === false && cfg.syncEnabled === false) {
+    return 'Linear disabled by configs/linear.json dispatchEnabled=false, pollingEnabled=false, and syncEnabled=false';
+  }
+  return null;
+}
+
+function isLinearGloballyDisabled(): boolean {
+  return linearGlobalDisabledReason() !== null;
 }
 
 function isHermesKanbanPacket(packet?: Partial<JobPacket> | null): boolean {
@@ -22,8 +33,9 @@ function isHermesKanbanPacket(packet?: Partial<JobPacket> | null): boolean {
 }
 
 function linearDisabledReasonForPacket(packet?: Partial<JobPacket> | null): string | null {
-  if (isLinearGloballyDisabled()) {
-    return 'Linear disabled by CCP_LINEAR_DISABLED/CCP_DISABLE_LINEAR';
+  const globalReason = linearGlobalDisabledReason();
+  if (globalReason) {
+    return globalReason;
   }
   if (isHermesKanbanPacket(packet)) {
     return 'Linear disabled for Hermes Kanban packet';
