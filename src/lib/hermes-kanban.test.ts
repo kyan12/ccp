@@ -314,5 +314,55 @@ console.log('\nTest: Kanban adapter strips legacy Linear comments but accepts na
   assert(serialized.includes('Normal native task prose may mention Linear'), 'normal native Linear cleanup prose is preserved');
 }
 
+console.log('\nTest: Kanban adapter strips marker-bearing string comments before packet/job persistence');
+{
+  const root = resetRoot();
+  const { buildKanbanJobPacket, submitKanbanJob } = require('./hermes-kanban');
+  const input = {
+    task_id: 't_legacy_comment_string_marker',
+    title: 'Native task with contaminated string comment',
+    body: 'Native card body that mentions Linear cleanup but is not migrated.',
+    comments: [
+      '## Prior context\nImported from Linear for local Hermes execution.\nThis stale migrated comment must not persist.',
+      'Native board comment mentioning Linear cleanup remains valid.',
+    ],
+    repo: '/tmp/repo',
+  };
+  const packet: JobPacket = buildKanbanJobPacket(input);
+  const built = JSON.stringify(packet);
+  assert(!built.includes('Imported from Linear for local Hermes execution.'), 'marker-bearing string comment is stripped from built packet');
+  assert(built.includes('Native board comment mentioning Linear cleanup remains valid.'), 'native string comment mentioning Linear is preserved');
+
+  const submitted = submitKanbanJob(input);
+  const packetPath = path.join(root, 'jobs', submitted.job_id, 'packet.json');
+  const persisted = fs.readFileSync(packetPath, 'utf8');
+  assert(!persisted.includes('Imported from Linear for local Hermes execution.'), 'marker-bearing string comment is not persisted to packet.json');
+  assert(persisted.includes('Native board comment mentioning Linear cleanup remains valid.'), 'native string comment persists');
+}
+
+console.log('\nTest: Kanban adapter strips object comments whose body/text/content contains the legacy migration marker');
+{
+  const root = resetRoot();
+  const { submitKanbanJob } = require('./hermes-kanban');
+  const input = {
+    task_id: 't_legacy_comment_object_marker',
+    title: 'Native task with contaminated object comments',
+    body: 'Native card body for Linear cleanup work.',
+    comments: [
+      { heading: 'Decision notes', body: 'Imported from Linear for local Hermes execution. stale body' },
+      { title: 'Different title', text: 'prefix Imported from Linear for local Hermes execution. stale text' },
+      { label: 'Random label', content: 'Imported from Linear for local Hermes execution. stale content' },
+      { body: 'Native object comment mentioning Linear cleanup remains valid.' },
+    ],
+    repo: '/tmp/repo',
+  };
+  const submitted = submitKanbanJob(input);
+  const packetPath = path.join(root, 'jobs', submitted.job_id, 'packet.json');
+  const persisted = fs.readFileSync(packetPath, 'utf8');
+  assert(!persisted.includes('Imported from Linear for local Hermes execution.'), 'marker-bearing object body/text/content comments are not persisted');
+  assert(!persisted.includes('stale body') && !persisted.includes('stale text') && !persisted.includes('stale content'), 'entire contaminated object comments are stripped');
+  assert(persisted.includes('Native object comment mentioning Linear cleanup remains valid.'), 'native object comment mentioning Linear is preserved');
+}
+
 console.log(`\nTotal: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

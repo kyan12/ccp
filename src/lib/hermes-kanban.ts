@@ -101,14 +101,23 @@ function stripLegacyLinearCommentsSection(value: unknown): string {
     .trim();
 }
 
+function containsLegacyLinearMigrationMarker(value: unknown): boolean {
+  return String(value || '').includes(LEGACY_LINEAR_MIGRATION_MARKER);
+}
+
 function isLegacyLinearComment(comment: unknown): boolean {
   if (comment == null) return false;
-  if (typeof comment === 'string') return /^\s*(?:#{1,6}\s*)?Linear comments\b/i.test(comment);
+  if (typeof comment === 'string') {
+    return /^\s*(?:#{1,6}\s*)?Linear comments\b/i.test(comment) || containsLegacyLinearMigrationMarker(comment);
+  }
   if (typeof comment !== 'object') return false;
   const record = comment as Record<string, unknown>;
   for (const key of ['heading', 'title', 'label', 'source', 'created_by']) {
     const value = String(record[key] || '').trim().toLowerCase();
     if (value === 'linear comments' || value === LEGACY_LINEAR_MIGRATION_VALUE) return true;
+  }
+  for (const key of ['body', 'text', 'content']) {
+    if (containsLegacyLinearMigrationMarker(record[key])) return true;
   }
   return false;
 }
