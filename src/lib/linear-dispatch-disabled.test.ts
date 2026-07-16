@@ -27,7 +27,7 @@ console.log('\nTest: Linear dispatch disable switch recognizes truthy env values
   process.env.CCP_LINEAR_DISABLED = 'yes';
   assert(isLinearDispatchDisabled() === true, 'CCP_LINEAR_DISABLED=yes disables dispatch');
   process.env.CCP_LINEAR_DISABLED = 'false';
-  assert(isLinearDispatchDisabled() === false, 'CCP_LINEAR_DISABLED=false does not disable dispatch');
+  assert(isLinearDispatchDisabled() === true, 'durable configs/linear.json disable still blocks dispatch when CCP_LINEAR_DISABLED=false');
   delete process.env.CCP_LINEAR_DISABLED;
 }
 

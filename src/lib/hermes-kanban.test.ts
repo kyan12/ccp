@@ -254,5 +254,65 @@ console.log('\nTest: Kanban handoff action blocks for blocked and harness-failur
   assert((harnessOut.handoff as Record<string, unknown>)?.action === 'block', 'harness-failure handoff action is block');
 }
 
+
+console.log('\nTest: Kanban adapter rejects legacy Linear migration envelopes without persisting a job');
+{
+  const root = resetRoot();
+  const { submitKanbanJob } = require('./hermes-kanban');
+  let message = '';
+  try {
+    submitKanbanJob({
+      task_id: 't_legacy_linear',
+      title: 'Legacy migrated card',
+      body: 'Imported from Linear for local Hermes execution.\n\nDo not run this stale card.',
+      repo: '/tmp/repo',
+    });
+  } catch (error) {
+    message = String((error as Error).message || error);
+  }
+  assert(/archive\/recreate|archive and recreate|recreate/i.test(message), 'legacy migration rejection tells board owner to archive/recreate natively');
+  assert(!fs.existsSync(path.join(root, 'jobs', 'kanban_t_legacy_linear')), 'legacy migration rejection does not persist a job directory');
+}
+
+console.log('\nTest: Kanban adapter rejects linear-migration metadata without persisting packet');
+{
+  const root = resetRoot();
+  const { buildKanbanJobPacket, submitKanbanJob } = require('./hermes-kanban');
+  let buildMessage = '';
+  try {
+    buildKanbanJobPacket({ task_id: 't_legacy_meta_build', title: 'Legacy meta', body: 'Plain body', metadata: { created_by: 'linear-migration' } });
+  } catch (error) {
+    buildMessage = String((error as Error).message || error);
+  }
+  assert(/legacy Linear/i.test(buildMessage), 'created_by=linear-migration is rejected during packet build');
+  let submitMessage = '';
+  try {
+    submitKanbanJob({ task_id: 't_legacy_meta_submit', title: 'Legacy meta', body: 'Plain body', metadata: { source: 'linear-migration' } });
+  } catch (error) {
+    submitMessage = String((error as Error).message || error);
+  }
+  assert(/legacy Linear/i.test(submitMessage), 'source=linear-migration is rejected during submit');
+  assert(!fs.existsSync(path.join(root, 'jobs', 'kanban_t_legacy_meta_submit')), 'linear-migration metadata rejection does not persist packet');
+}
+
+console.log('\nTest: Kanban adapter strips legacy Linear comments but accepts native Linear cleanup prose');
+{
+  resetRoot();
+  const { buildKanbanJobPacket } = require('./hermes-kanban');
+  const packet: JobPacket = buildKanbanJobPacket({
+    task_id: 't_native_linear_cleanup',
+    title: 'Retire Linear cleanup path',
+    body: 'Normal native task prose may mention Linear for cleanup work.\n\n## Linear comments\n- stale imported discussion that must not enter the CCP packet',
+    worker_context: '# Context\nKeep native Hermes Kanban Linear-free.\n\n### Linear comments\nold migrated comments',
+    comments: [{ heading: 'Linear comments', body: 'stale migrated discussion' }, { body: 'native board comment' }],
+    repo: '/tmp/repo',
+  });
+  const serialized = JSON.stringify(packet);
+  assert(packet.job_id === 'kanban_t_native_linear_cleanup', 'native task mentioning Linear uses kanban job id');
+  assert(packet.metadata?.source_transport === 'hermes-kanban', 'native task keeps hermes-kanban transport');
+  assert(!serialized.includes('stale imported discussion') && !serialized.includes('old migrated comments'), 'legacy Linear comments are not copied into packet metadata/body/context');
+  assert(serialized.includes('Normal native task prose may mention Linear'), 'normal native Linear cleanup prose is preserved');
+}
+
 console.log(`\nTotal: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

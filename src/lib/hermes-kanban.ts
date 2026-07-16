@@ -37,6 +37,8 @@ interface KanbanSubmitResult {
 
 const SUCCESSFUL_KANBAN_COMPLETE_STATES = new Set(['done', 'verified']);
 const BLOCKING_KANBAN_STATES = new Set(['blocked', 'failed', 'dirty-repo', 'harness-failure']);
+const LEGACY_LINEAR_MIGRATION_MARKER = 'Imported from Linear for local Hermes execution.';
+const LEGACY_LINEAR_MIGRATION_VALUE = 'linear-migration';
 type KanbanHandoffAction = 'complete' | 'block' | 'wait';
 
 function isSuccessfulNoOp(status: JobStatus, result: JobResult | null): boolean {
@@ -70,11 +72,60 @@ function normalizeStringArray(value: unknown): string[] {
   return value.map((item) => String(item || '').trim()).filter(Boolean);
 }
 
+
+function metadataValue(input: KanbanSubmitInput, key: string): string {
+  return String((input.metadata || {})[key] || '').trim().toLowerCase();
+}
+
+function assertNotLegacyLinearMigration(input: KanbanSubmitInput): void {
+  const text = [input.body, input.worker_context].map((value) => String(value || '')).join('\n');
+  const createdBy = metadataValue(input, 'created_by');
+  const source = metadataValue(input, 'source');
+  if (
+    text.includes(LEGACY_LINEAR_MIGRATION_MARKER) ||
+    createdBy === LEGACY_LINEAR_MIGRATION_VALUE ||
+    source === LEGACY_LINEAR_MIGRATION_VALUE
+  ) {
+    throw new Error(
+      'Blocked legacy Linear migration envelope: archive/recreate this Kanban card natively. ' +
+      'Linear migration history is not task context and must not be executed through CCP.'
+    );
+  }
+}
+
+function stripLegacyLinearCommentsSection(value: unknown): string {
+  const text = String(value || '');
+  if (!text) return '';
+  return text
+    .replace(/(^|\n)#{1,6}\s*Linear comments\s*\n[\s\S]*?(?=\n#{1,6}\s|$)/gi, '$1')
+    .trim();
+}
+
+function isLegacyLinearComment(comment: unknown): boolean {
+  if (comment == null) return false;
+  if (typeof comment === 'string') return /^\s*(?:#{1,6}\s*)?Linear comments\b/i.test(comment);
+  if (typeof comment !== 'object') return false;
+  const record = comment as Record<string, unknown>;
+  for (const key of ['heading', 'title', 'label', 'source', 'created_by']) {
+    const value = String(record[key] || '').trim().toLowerCase();
+    if (value === 'linear comments' || value === LEGACY_LINEAR_MIGRATION_VALUE) return true;
+  }
+  return false;
+}
+
+function sanitizeKanbanComments(comments: unknown): unknown[] {
+  if (!Array.isArray(comments)) return [];
+  return comments.filter((comment) => !isLegacyLinearComment(comment));
+}
+
 function buildKanbanJobPacket(input: KanbanSubmitInput): JobPacket {
+  assertNotLegacyLinearMigration(input);
   const taskId = String(input.task_id || '').trim();
   if (!taskId) throw new Error('Kanban task_id is required');
 
-  const body = input.body || input.worker_context || '';
+  const body = stripLegacyLinearCommentsSection(input.body || input.worker_context || '');
+  const workerContext = stripLegacyLinearCommentsSection(input.worker_context || '');
+  const kanbanBody = stripLegacyLinearCommentsSection(input.body || '');
   const acceptance = normalizeStringArray(input.acceptance_criteria);
   const verification = normalizeStringArray(input.verification_steps);
   const constraints = normalizeStringArray(input.constraints);
@@ -102,9 +153,9 @@ function buildKanbanJobPacket(input: KanbanSubmitInput): JobPacket {
     source_transport: 'hermes-kanban',
     hermes_kanban_task_id: taskId,
     kanban_title: input.title || null,
-    kanban_body: input.body || null,
-    kanban_worker_context: input.worker_context || null,
-    kanban_comments: Array.isArray(input.comments) ? input.comments : [],
+    kanban_body: kanbanBody || null,
+    kanban_worker_context: workerContext || null,
+    kanban_comments: sanitizeKanbanComments(input.comments),
   };
 
   const packet: JobPacket = {

@@ -219,7 +219,7 @@ Minimal packet:
 }
 ```
 
-For Kanban-only operation, set `CCP_LINEAR_DISABLED=true` (or `configs/linear.json` → `{ "disabled": true }`). This disables Linear dispatch, polling, and sync, but leaves intake and supervisor services operational for native jobs.
+For Kanban-only operation, keep `configs/linear.json` at `disabled=true`, `dispatchEnabled=false`, `pollingEnabled=false`, and `syncEnabled=false` (optionally also set `CCP_LINEAR_DISABLED=true`). This disables Linear dispatch, polling, and sync, but leaves intake and supervisor services operational for native jobs. Linear history/comments are not task context; no importer may create Kanban cards from Linear issues, and old migrated cards must be archived/recreated natively.
 
 ## CLI Tools
 
