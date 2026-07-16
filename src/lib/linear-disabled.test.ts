@@ -47,5 +47,21 @@ console.log('\nTest: Linear disable reason names config-file source');
   fs.rmSync(path.join(TEST_ROOT, 'configs', 'linear.json'), { force: true });
 }
 
+
+console.log('\nTest: Linear disable config flags disable dispatch/poll/sync as defense in depth');
+{
+  clearLinearDisableEnv();
+  fs.writeFileSync(path.join(TEST_ROOT, 'configs', 'linear.json'), JSON.stringify({
+    apiKeyEnv: 'LINEAR_API_KEY',
+    disabled: true,
+    dispatchEnabled: false,
+    pollingEnabled: false,
+    syncEnabled: false,
+  }, null, 2) + '\n');
+  assert(isLinearGloballyDisabled() === true, 'configs/linear.json disabled=true with dispatch/poll/sync false disables Linear globally');
+  const reason = String(linearDisabledReasonForPacket({ source: 'linear' }) || '');
+  assert(/configs\/linear\.json|linear\.json|config/i.test(reason), 'durable config disable reports config source');
+}
+
 console.log(`\nTotal: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

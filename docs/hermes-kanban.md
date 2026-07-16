@@ -1,6 +1,6 @@
 # Hermes Kanban intake
 
-Linear is no longer required for CCP code-work intake. A spawned Hermes Kanban worker can submit or resume a CCP job directly on the Code Crab Mac mini with the `ccp-hermes-kanban` CLI.
+Linear is retired for CCP code-work intake. A spawned Hermes Kanban worker submits or resumes a CCP job directly on the Code Crab Mac mini with the `ccp-hermes-kanban` CLI; no importer may create Kanban cards from Linear issues.
 
 ## Submit or resume from a Kanban worker
 
@@ -26,7 +26,7 @@ Minimum packet:
 }
 ```
 
-The CLI builds a normal CCP `JobPacket` and calls existing `createJob`/supervisor machinery. It does not fork the worker harness. It persists `source: hermes-kanban`, `metadata.source_transport: hermes-kanban`, and `metadata.hermes_kanban_task_id` with the exact Kanban task id.
+The CLI builds a normal CCP `JobPacket` and calls existing `createJob`/supervisor machinery. It does not fork the worker harness. It persists `source: hermes-kanban`, `metadata.source_transport: hermes-kanban`, and `metadata.hermes_kanban_task_id` with the exact Kanban task id. Native packets always use deterministic `kanban_<task_id>` job ids, never legacy `linear_<issue>` ids.
 
 ## Dedupe behavior
 
@@ -47,4 +47,9 @@ ssh crab@Codes-Mac-mini.local \
 
 ## Linear-disabled operation
 
-Set `CCP_LINEAR_DISABLED=1` (or `CCP_DISABLE_LINEAR=1`) in launchd/runtime env to make Linear dispatch and Linear sync paths no-op before credentials or network access. Hermes Kanban packets (`source: hermes-kanban` or `metadata.source_transport: hermes-kanban`) also skip Linear sync defensively even if the env flag is absent. The supervisor still reconciles/runs jobs, PR watcher, auto-unblock, archiving, and health normally.
+Durable defense-in-depth lives in `configs/linear.json`: keep `disabled=true`, `dispatchEnabled=false`, `pollingEnabled=false`, and `syncEnabled=false`. `CCP_LINEAR_DISABLED=1` (or `CCP_DISABLE_LINEAR=1`) may also be set in launchd/runtime env. These switches make Linear dispatch and Linear sync paths no-op before credentials or network access. Hermes Kanban packets (`source: hermes-kanban` or `metadata.source_transport: hermes-kanban`) also skip Linear sync defensively even if the env flag is absent. The supervisor still reconciles/runs jobs, PR watcher, auto-unblock, archiving, and health normally.
+
+
+## Legacy Linear migration envelopes
+
+Linear history is not task context. `ccp-hermes-kanban submit` rejects old locally migrated cards that contain the exact marker `Imported from Linear for local Hermes execution.` or metadata `created_by`/`source` equal to `linear-migration`. The terminal error tells the board owner to archive/recreate the card natively. Do not copy old `Linear comments` sections into prompts, packets, jobs, or writeback; recreate the current ask as native Kanban prose instead. Native cleanup tasks may still mention the word Linear when the work itself is about retiring Linear paths.
