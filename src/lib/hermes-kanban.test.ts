@@ -364,5 +364,28 @@ console.log('\nTest: Kanban adapter strips object comments whose body/text/conte
   assert(persisted.includes('Native object comment mentioning Linear cleanup remains valid.'), 'native object comment mentioning Linear is preserved');
 }
 
+console.log('\nTest: Kanban adapter strips object comments with marker in alternate or nested fields');
+{
+  const root = resetRoot();
+  const { submitKanbanJob } = require('./hermes-kanban');
+  const input = {
+    task_id: 't_legacy_comment_object_marker_nested',
+    title: 'Native task with nested contaminated object comments',
+    body: 'Native card body for Linear cleanup work.',
+    comments: [
+      { description: 'Imported from Linear for local Hermes execution. stale description' },
+      { metadata: { note: 'Imported from Linear for local Hermes execution. stale nested note' } },
+      { message: 'Native message mentioning Linear cleanup remains valid.' },
+    ],
+    repo: '/tmp/repo',
+  };
+  const submitted = submitKanbanJob(input);
+  const packetPath = path.join(root, 'jobs', submitted.job_id, 'packet.json');
+  const persisted = fs.readFileSync(packetPath, 'utf8');
+  assert(!persisted.includes('Imported from Linear for local Hermes execution.'), 'marker-bearing alternate/nested object fields are not persisted');
+  assert(!persisted.includes('stale description') && !persisted.includes('stale nested note'), 'entire alternate/nested contaminated object comments are stripped');
+  assert(persisted.includes('Native message mentioning Linear cleanup remains valid.'), 'native alternate-field object comment mentioning Linear is preserved');
+}
+
 console.log(`\nTotal: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -101,8 +101,18 @@ function stripLegacyLinearCommentsSection(value: unknown): string {
     .trim();
 }
 
-function containsLegacyLinearMigrationMarker(value: unknown): boolean {
-  return String(value || '').includes(LEGACY_LINEAR_MIGRATION_MARKER);
+function containsLegacyLinearMigrationMarker(value: unknown, seen = new WeakSet<object>()): boolean {
+  if (value == null) return false;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).includes(LEGACY_LINEAR_MIGRATION_MARKER);
+  }
+  if (typeof value !== 'object') return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((item) => containsLegacyLinearMigrationMarker(item, seen));
+  }
+  return Object.values(value as Record<string, unknown>).some((item) => containsLegacyLinearMigrationMarker(item, seen));
 }
 
 function isLegacyLinearComment(comment: unknown): boolean {
@@ -116,10 +126,7 @@ function isLegacyLinearComment(comment: unknown): boolean {
     const value = String(record[key] || '').trim().toLowerCase();
     if (value === 'linear comments' || value === LEGACY_LINEAR_MIGRATION_VALUE) return true;
   }
-  for (const key of ['body', 'text', 'content']) {
-    if (containsLegacyLinearMigrationMarker(record[key])) return true;
-  }
-  return false;
+  return containsLegacyLinearMigrationMarker(record);
 }
 
 function sanitizeKanbanComments(comments: unknown): unknown[] {
