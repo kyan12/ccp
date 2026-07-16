@@ -37,13 +37,34 @@ interface KanbanSubmitResult {
 
 const SUCCESSFUL_KANBAN_COMPLETE_STATES = new Set(['done', 'verified']);
 const BLOCKING_KANBAN_STATES = new Set(['blocked', 'failed', 'dirty-repo', 'harness-failure']);
+const NONFINAL_KANBAN_STATES = new Set(['queued', 'preflight', 'running', 'coded', 'deployed', 'pr-pending', 'deploying']);
 type KanbanHandoffAction = 'complete' | 'block' | 'wait';
+
+function isFinalSuccessfulKanbanStatus(status: JobStatus, result: JobResult | null, blocker: string | null): boolean {
+  const statusState = String(status?.state || '');
+  const resultState = String(result?.state || '');
+  if (!SUCCESSFUL_KANBAN_COMPLETE_STATES.has(statusState)) return false;
+  if (blocker || BLOCKING_KANBAN_STATES.has(resultState)) return false;
+
+  // PR-backed work is only complete after the watcher has observed an actual merge.
+  // Auto-merge-enabled / green / PR-pending states are still wait states because the
+  // branch may not have landed yet. A stale result.state of "coded" is acceptable
+  // only when the canonical status is final AND prReview.merged is true.
+  if (result?.pr_url && status.integrations?.prReview?.merged !== true) return false;
+
+  // Deployment and PR-pending are intermediate CCP states even when a worker exits
+  // successfully; Kanban consumers should keep waiting for done/verified.
+  if (resultState && resultState !== 'coded' && NONFINAL_KANBAN_STATES.has(resultState)) return false;
+  if (resultState === 'coded' && !result?.pr_url) return false;
+
+  return true;
+}
 
 function kanbanHandoffAction(status: JobStatus, result: JobResult | null, blocker: string | null): KanbanHandoffAction {
   const statusState = String(status?.state || '');
   const resultState = String(result?.state || '');
   if (blocker || BLOCKING_KANBAN_STATES.has(statusState) || BLOCKING_KANBAN_STATES.has(resultState)) return 'block';
-  if (SUCCESSFUL_KANBAN_COMPLETE_STATES.has(statusState)) return 'complete';
+  if (isFinalSuccessfulKanbanStatus(status, result, blocker)) return 'complete';
   return 'wait';
 }
 
