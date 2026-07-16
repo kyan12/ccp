@@ -69,7 +69,12 @@ console.log('\nTest: Kanban terminal result serialization is stable for board ha
   const { submitKanbanJob, serializeKanbanJobResult } = require('./hermes-kanban');
   const { saveStatus, resultPath } = require('./jobs');
   const created = submitKanbanJob({ task_id: 't_result001', title: 'Result test', body: 'Do it', repo: '/tmp/repo' });
-  saveStatus(created.job_id, { state: 'verified', exit_code: 0, last_output_excerpt: 'done' });
+  saveStatus(created.job_id, {
+    state: 'verified',
+    exit_code: 0,
+    last_output_excerpt: 'done',
+    integrations: { prReview: { ok: true, skipped: false, merged: true } },
+  });
   fs.writeFileSync(resultPath(created.job_id), JSON.stringify({
     job_id: created.job_id,
     state: 'verified',
@@ -92,6 +97,7 @@ console.log('\nTest: Kanban terminal result serialization is stable for board ha
   assert(out.handoff?.summary.includes('CCP job'), 'human handoff summary is generated');
   assert(out.handoff?.metadata.ccp_job_id === created.job_id, 'machine metadata includes ccp job id');
   assert(out.handoff?.metadata.tests_or_verification === 'npm test', 'verification string mapped for Kanban');
+  assert(out.handoff?.action === 'complete', 'merged verified result has exact complete handoff action');
 }
 
 
@@ -101,7 +107,12 @@ console.log('\nTest: Kanban handoff action completes only for final successful s
   const { submitKanbanJob, serializeKanbanJobResult } = require('./hermes-kanban');
   const { saveStatus, resultPath } = require('./jobs');
   const created = submitKanbanJob({ task_id: 't_action_done', title: 'Done action', body: 'Do it', repo: '/tmp/repo' });
-  saveStatus(created.job_id, { state: 'done', exit_code: 0, last_output_excerpt: 'merged' });
+  saveStatus(created.job_id, {
+    state: 'done',
+    exit_code: 0,
+    last_output_excerpt: 'merged',
+    integrations: { prReview: { ok: true, skipped: false, merged: true } },
+  });
   fs.writeFileSync(resultPath(created.job_id), JSON.stringify({
     job_id: created.job_id,
     state: 'verified',
@@ -125,7 +136,12 @@ console.log('\nTest: Kanban handoff action completes when status is done and sta
   const { submitKanbanJob, serializeKanbanJobResult } = require('./hermes-kanban');
   const { saveStatus, resultPath } = require('./jobs');
   const created = submitKanbanJob({ task_id: 't_action_done_stale_coded', title: 'Merged action', body: 'Do it', repo: '/tmp/repo' });
-  saveStatus(created.job_id, { state: 'done', exit_code: 0, last_output_excerpt: 'PR merged' });
+  saveStatus(created.job_id, {
+    state: 'done',
+    exit_code: 0,
+    last_output_excerpt: 'PR merged',
+    integrations: { prReview: { ok: true, skipped: false, merged: true } },
+  });
   fs.writeFileSync(resultPath(created.job_id), JSON.stringify({
     job_id: created.job_id,
     state: 'coded',
@@ -141,6 +157,47 @@ console.log('\nTest: Kanban handoff action completes when status is done and sta
   }, null, 2) + '\n');
   const out = serializeKanbanJobResult(created.job_id);
   assert((out.handoff as Record<string, unknown>)?.action === 'complete', 'done status is authoritative even when result state is stale coded');
+}
+
+console.log('\nTest: Kanban handoff action waits when final status has an unmerged PR');
+{
+  resetRoot();
+  const { submitKanbanJob, serializeKanbanJobResult } = require('./hermes-kanban');
+  const { saveStatus, resultPath } = require('./jobs');
+  const created = submitKanbanJob({ task_id: 't_action_pr_pending', title: 'Pending PR action', body: 'Do it', repo: '/tmp/repo' });
+  saveStatus(created.job_id, {
+    state: 'done',
+    exit_code: 0,
+    last_output_excerpt: 'PR still pending',
+    integrations: { prReview: { ok: true, skipped: false, merged: false } },
+  });
+  fs.writeFileSync(resultPath(created.job_id), JSON.stringify({
+    job_id: created.job_id,
+    state: 'verified',
+    commit: 'abc1234',
+    branch: 'feat/test',
+    pushed: 'yes',
+    pr_url: 'https://github.com/owner/repo/pull/3',
+    prod: 'no',
+    verified: 'tests passed, PR pending',
+    blocker: null,
+    summary: 'Awaiting merge.',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  }, null, 2) + '\n');
+  const out = serializeKanbanJobResult(created.job_id);
+  assert((out.handoff as Record<string, unknown>)?.action === 'wait', 'unmerged PR handoff action is wait');
+  assert(out.terminal === false, 'unmerged PR is not terminal for Kanban');
+}
+
+console.log('\nTest: Kanban handoff action completes final non-PR work');
+{
+  resetRoot();
+  const { submitKanbanJob, serializeKanbanJobResult } = require('./hermes-kanban');
+  const { saveStatus } = require('./jobs');
+  const created = submitKanbanJob({ task_id: 't_action_no_pr', title: 'No PR action', body: 'Do it', repo: '/tmp/repo' });
+  saveStatus(created.job_id, { state: 'verified', exit_code: 0, last_output_excerpt: 'verified locally' });
+  const out = serializeKanbanJobResult(created.job_id);
+  assert((out.handoff as Record<string, unknown>)?.action === 'complete', 'final non-PR handoff action is complete');
 }
 
 console.log('\nTest: Kanban handoff action completes for successful no-op result');
@@ -219,6 +276,11 @@ console.log('\nTest: Kanban handoff action waits for coded and running states');
   saveStatus(running.job_id, { state: 'running', exit_code: null, last_output_excerpt: 'working' });
   const runningOut = serializeKanbanJobResult(running.job_id);
   assert((runningOut.handoff as Record<string, unknown>)?.action === 'wait', 'running handoff action is wait');
+
+  const deployed = submitKanbanJob({ task_id: 't_action_deployed', title: 'Deployed action', body: 'Do it', repo: '/tmp/repo' });
+  saveStatus(deployed.job_id, { state: 'deployed', exit_code: 0, last_output_excerpt: 'awaiting verification' });
+  const deployedOut = serializeKanbanJobResult(deployed.job_id);
+  assert((deployedOut.handoff as Record<string, unknown>)?.action === 'wait', 'deployed handoff action is wait');
 }
 
 console.log('\nTest: Kanban handoff action blocks for blocked and harness-failure states');

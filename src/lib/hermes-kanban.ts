@@ -47,11 +47,18 @@ function isSuccessfulNoOp(status: JobStatus, result: JobResult | null): boolean 
   return true;
 }
 
+function isFinalSuccessfulState(status: JobStatus, result: JobResult | null): boolean {
+  const statusState = String(status?.state || '');
+  if (!SUCCESSFUL_KANBAN_COMPLETE_STATES.has(statusState)) return false;
+  if (!result?.pr_url) return true;
+  return status.integrations?.prReview?.merged === true;
+}
+
 function kanbanHandoffAction(status: JobStatus, result: JobResult | null, blocker: string | null): KanbanHandoffAction {
   const statusState = String(status?.state || '');
   const resultState = String(result?.state || '');
   if (blocker || BLOCKING_KANBAN_STATES.has(statusState) || BLOCKING_KANBAN_STATES.has(resultState)) return 'block';
-  if (SUCCESSFUL_KANBAN_COMPLETE_STATES.has(statusState) || isSuccessfulNoOp(status, result)) return 'complete';
+  if (isFinalSuccessfulState(status, result) || isSuccessfulNoOp(status, result)) return 'complete';
   return 'wait';
 }
 
