@@ -1,8 +1,8 @@
 import fs = require('fs');
 import path = require('path');
 import type { JobPacket, JobResult, JobStatus } from '../types';
-const { createJob, loadStatus, readJson, packetPath, resultPath, statusPath } = require('./jobs');
-const { enrichPayloadWithRepo } = require('./repos');
+const { createJobIfAbsent, loadStatus, readJson, packetPath, resultPath, statusPath } = require('./jobs');
+const { buildIncidentPacket } = require('./intake-runner');
 
 interface KanbanSubmitInput {
   task_id: string;
@@ -74,18 +74,30 @@ function buildKanbanJobPacket(input: KanbanSubmitInput): JobPacket {
   const taskId = String(input.task_id || '').trim();
   if (!taskId) throw new Error('Kanban task_id is required');
 
-  const enriched = enrichPayloadWithRepo({
-    repo: input.repo || input.repoKey || input.ownerRepo || undefined,
-    repoKey: input.repoKey || undefined,
-    title: input.title || input.goal,
-    description: input.body || input.worker_context,
-    metadata: input.metadata || {},
-  });
-
+  const body = input.body || input.worker_context || '';
   const acceptance = normalizeStringArray(input.acceptance_criteria);
   const verification = normalizeStringArray(input.verification_steps);
   const constraints = normalizeStringArray(input.constraints);
+  const basePacket: JobPacket = buildIncidentPacket('manual', {
+    source: 'hermes-kanban',
+    kind: input.kind || 'task',
+    label: input.label || 'kanban',
+    title: input.title || input.goal || `Hermes Kanban task ${taskId}`,
+    summary: body || input.title || `Hermes Kanban task ${taskId}`,
+    description: body,
+    repo: input.repo || input.repoKey || input.ownerRepo || undefined,
+    repoKey: input.repoKey || undefined,
+    ownerRepo: input.ownerRepo || undefined,
+    gitUrl: input.gitUrl || undefined,
+    goal: input.goal || input.title || `Hermes Kanban task ${taskId}`,
+    acceptance_criteria: acceptance.length ? acceptance : (body ? [body] : [`Complete Hermes Kanban task ${taskId}`]),
+    verification_steps: verification,
+    constraints,
+    metadata: input.metadata || {},
+  });
+
   const metadata: Record<string, unknown> = {
+    ...(basePacket.metadata || {}),
     ...(input.metadata || {}),
     source_transport: 'hermes-kanban',
     hermes_kanban_task_id: taskId,
@@ -95,23 +107,22 @@ function buildKanbanJobPacket(input: KanbanSubmitInput): JobPacket {
     kanban_comments: Array.isArray(input.comments) ? input.comments : [],
   };
 
-  const goal = input.goal || input.title || `Hermes Kanban task ${taskId}`;
-  const body = input.body || input.worker_context || '';
   const packet: JobPacket = {
+    ...basePacket,
     job_id: kanbanJobId(taskId),
     ticket_id: taskId,
-    repo: enriched.repo || input.repo || null,
-    repoKey: enriched.repoKey || input.repoKey || null,
-    ownerRepo: enriched.ownerRepo || input.ownerRepo || null,
-    gitUrl: enriched.gitUrl || input.gitUrl || null,
-    repoResolved: !!enriched.repoResolved,
-    goal,
+    repo: basePacket.repo || input.repo || null,
+    repoKey: basePacket.repoKey || input.repoKey || null,
+    ownerRepo: basePacket.ownerRepo || input.ownerRepo || null,
+    gitUrl: basePacket.gitUrl || input.gitUrl || null,
+    repoResolved: !!basePacket.repoResolved,
+    goal: input.goal || input.title || basePacket.goal || `Hermes Kanban task ${taskId}`,
     source: 'hermes-kanban',
-    kind: input.kind || 'task',
-    label: input.label || 'kanban',
-    acceptance_criteria: acceptance.length ? acceptance : (body ? [body] : []),
-    constraints,
-    verification_steps: verification,
+    kind: input.kind || basePacket.kind || 'task',
+    label: input.label || basePacket.label || 'kanban',
+    acceptance_criteria: acceptance.length ? acceptance : (basePacket.acceptance_criteria || (body ? [body] : [])),
+    constraints: constraints.length ? constraints : (basePacket.constraints || []),
+    verification_steps: verification.length ? verification : (basePacket.verification_steps || []),
     metadata,
     handoff_id: taskId,
     origin: 'hermes-kanban',
@@ -138,13 +149,13 @@ function submitKanbanJob(input: KanbanSubmitInput): KanbanSubmitResult {
       status: loadStatus(packet.job_id),
     };
   }
-  const created = createJob(packet);
+  const created = createJobIfAbsent(packet);
   return {
     ok: true,
     job_id: created.jobId,
     state: created.status.state,
-    created: true,
-    existing: false,
+    created: created.created,
+    existing: !created.created,
     packet: created.packet,
     status: created.status,
   };
@@ -190,6 +201,44 @@ function serializeKanbanJobResult(jobId: string): Record<string, unknown> {
     status,
     packet,
     result,
+    evidence: {
+      repository: {
+        repo: packet.repo || null,
+        repoKey: packet.repoKey || null,
+        ownerRepo: packet.ownerRepo || null,
+        gitUrl: packet.gitUrl || null,
+        workdir: status.workdir || packet.repo || null,
+        branch: result?.branch || null,
+        commit: result?.commit || null,
+        pushed: result?.pushed || null,
+        proof: result?.proof || null,
+      },
+      tests: {
+        verification,
+        validation: result?.validation || null,
+        failed_checks: result?.failed_checks || [],
+        smoke: result?.smoke || status.integrations?.smoke || null,
+      },
+      pr: {
+        url: result?.pr_url || null,
+        preview_url: result?.preview_url || null,
+        review: status.integrations?.prReview || null,
+      },
+      merge: {
+        state: result?.state || status.state,
+        auto_remediation: result?.autoRemediation || status.integrations?.autoRemediation || null,
+      },
+      deploy: {
+        prod: result?.prod || null,
+        preview_url: result?.preview_url || null,
+        smoke: result?.smoke || status.integrations?.smoke || null,
+      },
+      logs: {
+        worker_log_path: path.join(path.dirname(statusPath(jobId)), 'worker.log'),
+        last_output_excerpt: status.last_output_excerpt || '',
+      },
+      human_decision: status.integrations?.decision || null,
+    },
     handoff: {
       action,
       summary: summaryBits.join(' | '),

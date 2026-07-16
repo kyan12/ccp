@@ -947,6 +947,12 @@ export interface IntakePayload {
 // ── Linear ──
 
 export interface LinearConfig {
+  /** Disable all Linear dispatch, polling, and sync paths while preserving local intake/supervisor jobs. */
+  disabled?: boolean;
+  /** Explicit component gates; all false is treated as globally disabled. */
+  dispatchEnabled?: boolean;
+  pollingEnabled?: boolean;
+  syncEnabled?: boolean;
   teamId?: string;
   apiKeyEnv?: string;
   projects?: Record<string, { id: string; name: string }>;

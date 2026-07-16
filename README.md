@@ -195,6 +195,32 @@ CCP's killer feature is the closed remediation loop:
 5. **Deploy fails** → Vercel webhook → incident ticket created
 6. Repeat until green ✅
 
+
+### Hermes Kanban intake (non-Linear)
+
+CCP can accept a structured Hermes Kanban task packet directly without creating or polling a Linear issue. The entry point reuses the normal incident-packet and job lifecycle, persists `source_transport: "hermes-kanban"` plus the exact Kanban task id, and deterministically maps retries for the same task to the same CCP job id.
+
+```bash
+cat kanban-packet.json | ccp-hermes-kanban submit --stdin
+ccp-supervisor --once
+ccp-hermes-kanban result kanban_t_<task_id>
+```
+
+Minimal packet:
+
+```json
+{
+  "task_id": "t_abc123",
+  "title": "Fix checkout totals",
+  "body": "Full Kanban task body or worker_context",
+  "repoKey": "my-repo",
+  "acceptance_criteria": ["Totals update correctly"],
+  "verification_steps": ["Run the repo test suite"]
+}
+```
+
+For Kanban-only operation, set `CCP_LINEAR_DISABLED=true` (or `configs/linear.json` → `{ "disabled": true }`). This disables Linear dispatch, polling, and sync, but leaves intake and supervisor services operational for native jobs.
+
 ## CLI Tools
 
 | Command | Description |
@@ -212,7 +238,8 @@ CCP's killer feature is the closed remediation loop:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LINEAR_API_KEY` | Yes | Linear API key |
+| `LINEAR_API_KEY` | Yes unless Linear is disabled | Linear API key |
+| `CCP_LINEAR_DISABLED` / `CCP_DISABLE_LINEAR` | No | Set `true` to disable all Linear dispatch, polling, and sync while keeping local intake/supervisor jobs active. Equivalent config: `configs/linear.json` with `"disabled": true`. |
 | `CCP_DISCORD_RUNS_CHANNEL` | No | Discord channel for job notifications |
 | `CCP_DISCORD_ERRORS_CHANNEL` | No | Discord channel for errors |
 | `CCP_DISCORD_REVIEW_CHANNEL` | No | Discord channel for PR reviews |

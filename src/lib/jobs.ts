@@ -165,12 +165,8 @@ function saveStatus(jobId: string, patch: Partial<JobStatus>): JobStatus {
   });
 }
 
-function createJob(packet: JobPacket): { jobId: string; packet: JobPacket; status: JobStatus } {
-  ensureDir(JOBS_DIR);
-  const jobId = packet.job_id || makeJobId();
-  const dir = jobDir(jobId);
-  ensureDir(dir);
-  const createdAt = nowIso();
+function initializeJobFiles(packet: JobPacket, dir: string, createdAt: string): { jobId: string; packet: JobPacket; status: JobStatus } {
+  const jobId = packet.job_id;
   const normalized: JobPacket = { ...packet, job_id: jobId, created_at: packet.created_at || createdAt };
   const status: JobStatus = {
     job_id: jobId,
@@ -208,6 +204,42 @@ function createJob(packet: JobPacket): { jobId: string; packet: JobPacket; statu
   });
   appendLog(jobId, `[${createdAt}] job created`);
   return { jobId, packet: normalized, status };
+}
+
+function createJob(packet: JobPacket): { jobId: string; packet: JobPacket; status: JobStatus } {
+  ensureDir(JOBS_DIR);
+  const jobId = packet.job_id || makeJobId();
+  const dir = jobDir(jobId);
+  ensureDir(dir);
+  const createdAt = nowIso();
+  return initializeJobFiles({ ...packet, job_id: jobId }, dir, createdAt);
+}
+
+function createJobIfAbsent(packet: JobPacket): { jobId: string; packet: JobPacket; status: JobStatus; created: boolean } {
+  if (!packet.job_id) {
+    const created = createJob(packet);
+    return { ...created, created: true };
+  }
+  ensureDir(JOBS_DIR);
+  const jobId = packet.job_id;
+  const dir = jobDir(jobId);
+  try {
+    fs.mkdirSync(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    if (!fs.existsSync(statusPath(jobId)) || !fs.existsSync(packetPath(jobId))) {
+      throw new Error(`job ${jobId} already has an incomplete job directory; inspect ${dir}`);
+    }
+    return {
+      jobId,
+      packet: readJson(packetPath(jobId)) as unknown as JobPacket,
+      status: loadStatus(jobId),
+      created: false,
+    };
+  }
+  const createdAt = nowIso();
+  const created = initializeJobFiles(packet, dir, createdAt);
+  return { ...created, created: true };
 }
 
 function listJobs(): JobStatus[] {
@@ -2860,6 +2892,7 @@ module.exports = {
   parseSummary,
   workerExitCodeForFinalize,
   createJob,
+  createJobIfAbsent,
   listJobs,
   jobsByState,
   summarizeJobs,
@@ -2904,6 +2937,7 @@ export {
   parseSummary,
   workerExitCodeForFinalize,
   createJob,
+  createJobIfAbsent,
   listJobs,
   jobsByState,
   summarizeJobs,

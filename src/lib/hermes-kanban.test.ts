@@ -89,6 +89,12 @@ console.log('\nTest: Kanban terminal result serialization is stable for board ha
   assert(out.kanban?.task_id === 't_result001', 'serialized result carries Kanban task id');
   assert(out.ccp?.job_id === created.job_id, 'serialized result carries CCP job id');
   assert(out.result?.pr_url === 'https://github.com/owner/repo/pull/1', 'PR URL preserved');
+  assert(out.evidence?.repository?.repo === '/tmp/repo', 'evidence includes repository path');
+  assert(out.evidence?.repository?.commit === 'abc1234', 'evidence includes commit');
+  assert(out.evidence?.tests?.verification === 'npm test', 'evidence includes tests/verification');
+  assert(out.evidence?.pr?.url === 'https://github.com/owner/repo/pull/1', 'evidence includes PR URL');
+  assert(out.evidence?.deploy?.prod === 'no', 'evidence includes deploy/prod state');
+  assert(String(out.evidence?.logs?.worker_log_path || '').endsWith('/worker.log'), 'evidence includes worker log path');
   assert(out.handoff?.summary.includes('CCP job'), 'human handoff summary is generated');
   assert(out.handoff?.metadata.ccp_job_id === created.job_id, 'machine metadata includes ccp job id');
   assert(out.handoff?.metadata.tests_or_verification === 'npm test', 'verification string mapped for Kanban');

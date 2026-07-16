@@ -1,8 +1,17 @@
-import type { JobPacket } from '../types';
+import type { JobPacket, LinearConfig } from '../types';
+const { loadConfig } = require('./config');
+
+function truthy(value: unknown): boolean {
+  const raw = String(value || '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(raw);
+}
 
 function isLinearGloballyDisabled(): boolean {
-  const raw = String(process.env.CCP_LINEAR_DISABLED || process.env.CCP_DISABLE_LINEAR || '').trim().toLowerCase();
-  return ['1', 'true', 'yes', 'on'].includes(raw);
+  if (truthy(process.env.CCP_LINEAR_DISABLED || process.env.CCP_DISABLE_LINEAR)) return true;
+  const cfg = loadConfig('linear', {}) as LinearConfig & { disabled?: boolean; dispatchEnabled?: boolean; pollingEnabled?: boolean; syncEnabled?: boolean };
+  if (cfg.disabled === true) return true;
+  if (cfg.dispatchEnabled === false && cfg.pollingEnabled === false && cfg.syncEnabled === false) return true;
+  return false;
 }
 
 function isHermesKanbanPacket(packet?: Partial<JobPacket> | null): boolean {
