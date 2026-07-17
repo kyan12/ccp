@@ -4,7 +4,7 @@
       "key": "proteusx-os",
       "ownerRepo": "ProteusX-Consulting/proteusx-os",
       "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-os.git",
-      "localPath": "/Users/crab/repos/proteusx-os",
+      "localPath": "/Users/kyan/code-crab/repos/proteusx-os",
       "aliases": [
         "proteusx os",
         "proteusx-os",
@@ -29,7 +29,7 @@
       "key": "papyrx",
       "ownerRepo": "kyan12/Papyrx",
       "gitUrl": "git@github.com:kyan12/Papyrx.git",
-      "localPath": "/Users/crab/repos/Papyrx",
+      "localPath": "/Users/kyan/code-crab/repos/Papyrx",
       "aliases": [
         "papyrx"
       ],
@@ -45,7 +45,7 @@
       "key": "g8-nyc",
       "ownerRepo": "ProteusX-Consulting/g8-nyc",
       "gitUrl": "git@github.com:ProteusX-Consulting/g8-nyc.git",
-      "localPath": "/Users/crab/repos/g8-nyc",
+      "localPath": "/Users/kyan/code-crab/repos/g8-nyc",
       "aliases": [
         "g8-nyc",
         "g8 nyc",
@@ -63,7 +63,7 @@
       "key": "g8events-ios",
       "ownerRepo": "ProteusX-Consulting/g8events-ios",
       "gitUrl": "git@github.com:ProteusX-Consulting/g8events-ios.git",
-      "localPath": "/Users/crab/repos/g8events-ios",
+      "localPath": "/Users/kyan/code-crab/repos/g8events-ios",
       "aliases": [
         "g8events-ios",
         "g8events ios",
@@ -93,7 +93,7 @@
       "key": "kjevents",
       "ownerRepo": "kyan12/kjevents",
       "gitUrl": "git@github.com:kyan12/kjevents.git",
-      "localPath": "/Users/crab/repos/kjevents",
+      "localPath": "/Users/kyan/code-crab/repos/kjevents",
       "aliases": [
         "kjevents",
         "kira jia events",
@@ -107,7 +107,7 @@
       "key": "redwood",
       "ownerRepo": "ProteusX-Consulting/redwood",
       "gitUrl": "git@github.com:ProteusX-Consulting/redwood.git",
-      "localPath": "/Users/crab/repos/redwood",
+      "localPath": "/Users/kyan/code-crab/repos/redwood",
       "linearOrg": "smartadvocateai",
       "aliases": [
         "redwood",
@@ -127,7 +127,7 @@
       "key": "gslogistics",
       "ownerRepo": "Global-Synergy-Logistics/GSLogistics",
       "gitUrl": "git@github.com:Global-Synergy-Logistics/GSLogistics.git",
-      "localPath": "/Users/crab/repos/GSLogistics",
+      "localPath": "/Users/kyan/code-crab/repos/GSLogistics",
       "aliases": [
         "gslogistics",
         "global synergy logistics",
@@ -145,7 +145,7 @@
       "key": "ccp",
       "ownerRepo": "kyan12/ccp",
       "gitUrl": "git@github.com:kyan12/ccp.git",
-      "localPath": "/Users/crab/coding-control-plane",
+      "localPath": "/Users/kyan/code-crab/coding-control-plane",
       "aliases": [
         "coding-control-plane",
         "codeplane",
@@ -164,7 +164,7 @@
       "key": "didanyc",
       "ownerRepo": "kyan12/didanyc",
       "gitUrl": "git@github.com:kyan12/didanyc.git",
-      "localPath": "/Users/crab/repos/didanyc",
+      "localPath": "/Users/kyan/code-crab/repos/didanyc",
       "aliases": [
         "dida",
         "dida-nyc"
@@ -183,7 +183,7 @@
         "didahairstudio"
       ],
       "ownerRepo": "ProteusX-Consulting/didahairstudio",
-      "localPath": "/Users/crab/repos/didahairstudio",
+      "localPath": "/Users/kyan/code-crab/repos/didahairstudio",
       "gitUrl": "git@github.com:ProteusX-Consulting/didahairstudio.git",
       "autoMerge": true,
       "mergeMethod": "squash"
@@ -192,7 +192,7 @@
       "key": "proteusx-website",
       "ownerRepo": "ProteusX-Consulting/proteusx-website",
       "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-website.git",
-      "localPath": "/Users/crab/repos/proteusx-website",
+      "localPath": "/Users/kyan/code-crab/repos/proteusx-website",
       "aliases": [
         "proteusx website",
         "proteusx ai",
@@ -213,7 +213,7 @@
         "labs.proteusx.ai"
       ],
       "ownerRepo": "ProteusX-Consulting/proteusx-labs",
-      "localPath": "/Users/crab/repos/proteusx-labs",
+      "localPath": "/Users/kyan/code-crab/repos/proteusx-labs",
       "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-labs.git",
       "autoMerge": true,
       "mergeMethod": "squash",
@@ -223,7 +223,7 @@
       "key": "therapeuticcuts",
       "ownerRepo": "ProteusX-Consulting/therapeuticcuts",
       "gitUrl": "git@github.com:ProteusX-Consulting/therapeuticcuts.git",
-      "localPath": "/Users/crab/repos/therapeuticcuts",
+      "localPath": "/Users/kyan/code-crab/repos/therapeuticcuts",
       "aliases": [
         "therapeutic-cuts",
         "tc"
@@ -235,7 +235,7 @@
       "key": "koka-hvac",
       "ownerRepo": "ProteusX-Consulting/koka-hvac",
       "gitUrl": "git@github.com:ProteusX-Consulting/koka-hvac.git",
-      "localPath": "/Users/crab/repos/koka-hvac",
+      "localPath": "/Users/kyan/code-crab/repos/koka-hvac",
       "aliases": [
         "kokah",
         "koka",
@@ -248,7 +248,7 @@
       "key": "proteusx-arbs",
       "ownerRepo": "ProteusX-Consulting/proteusx-arbs",
       "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-arbs.git",
-      "localPath": "/Users/crab/repos/proteusx-arbs",
+      "localPath": "/Users/kyan/code-crab/repos/proteusx-arbs",
       "aliases": [
         "arbs",
         "arbs-ai",
@@ -264,7 +264,7 @@
       "key": "licatesi-law",
       "ownerRepo": "ProteusX-Consulting/licatesi-law",
       "gitUrl": "git@github.com:ProteusX-Consulting/licatesi-law.git",
-      "localPath": "/Users/crab/repos/licatesi-law",
+      "localPath": "/Users/kyan/code-crab/repos/licatesi-law",
       "aliases": [
         "licatesi",
         "licatesi-law"
@@ -276,7 +276,7 @@
       "key": "licatesi-law-ai-workspace",
       "ownerRepo": "ProteusX-Consulting/licatesi-law-ai-workspace",
       "gitUrl": "git@github.com:ProteusX-Consulting/licatesi-law-ai-workspace.git",
-      "localPath": "/Users/crab/repos/licatesi-law-ai-workspace",
+      "localPath": "/Users/kyan/code-crab/repos/licatesi-law-ai-workspace",
       "aliases": [
         "licatesi-law-ai-workspace",
         "licatesi ai workspace",
@@ -296,7 +296,7 @@
       "key": "av-chemist",
       "ownerRepo": "ProteusX-Consulting/av-chemist",
       "gitUrl": "git@github.com:ProteusX-Consulting/av-chemist.git",
-      "localPath": "/Users/crab/repos/av-chemist",
+      "localPath": "/Users/kyan/code-crab/repos/av-chemist",
       "aliases": [
         "av-chemist",
         "avchemist",
@@ -309,7 +309,7 @@
       "key": "deploy-dashboard",
       "ownerRepo": "ProteusX-Consulting/deploy-dashboard",
       "gitUrl": "git@github.com:ProteusX-Consulting/deploy-dashboard.git",
-      "localPath": "/Users/crab/repos/deploy-dashboard",
+      "localPath": "/Users/kyan/code-crab/repos/deploy-dashboard",
       "aliases": [
         "deploy-dashboard",
         "deploy dashboard",
@@ -321,7 +321,7 @@
       "key": "cookiesnails",
       "ownerRepo": "ProteusX-Consulting/cookiesnails",
       "gitUrl": "git@github.com:ProteusX-Consulting/cookiesnails.git",
-      "localPath": "/Users/crab/repos/cookiesnails",
+      "localPath": "/Users/kyan/code-crab/repos/cookiesnails",
       "aliases": [
         "cookiesnails",
         "cookies nails",
@@ -339,7 +339,7 @@
       "key": "auth-gateway",
       "ownerRepo": "ProteusX-Consulting/auth-gateway",
       "gitUrl": "git@github.com:ProteusX-Consulting/auth-gateway.git",
-      "localPath": "/Users/crab/repos/auth-gateway",
+      "localPath": "/Users/kyan/code-crab/repos/auth-gateway",
       "aliases": [
         "auth-gateway",
         "auth gateway",
@@ -353,7 +353,7 @@
       "key": "app-template",
       "ownerRepo": "ProteusX-Consulting/app-template",
       "gitUrl": "git@github.com:ProteusX-Consulting/app-template.git",
-      "localPath": "/Users/crab/repos/app-template",
+      "localPath": "/Users/kyan/code-crab/repos/app-template",
       "aliases": [
         "app-template",
         "app template",
@@ -365,7 +365,7 @@
       "key": "webair-ai-studio-mvp",
       "ownerRepo": "WebAir-AI/Webair-AI-Studio-MVP",
       "gitUrl": "git@github.com:WebAir-AI/Webair-AI-Studio-MVP.git",
-      "localPath": "/Users/crab/repos/Webair-AI-Studio-MVP",
+      "localPath": "/Users/kyan/code-crab/repos/Webair-AI-Studio-MVP",
       "aliases": [
         "webair-ai-studio-mvp",
         "webair ai studio mvp",
@@ -379,7 +379,7 @@
       "key": "webair-ai-chat-mvp",
       "ownerRepo": "WebAir-AI/Webair.ai-CHAT-MVP",
       "gitUrl": "git@github.com:WebAir-AI/Webair.ai-CHAT-MVP.git",
-      "localPath": "/Users/crab/repos/Webair.ai-CHAT-MVP",
+      "localPath": "/Users/kyan/code-crab/repos/Webair.ai-CHAT-MVP",
       "aliases": [
         "webair-ai-chat-mvp",
         "webair.ai-chat-mvp",
@@ -396,7 +396,7 @@
       "key": "moshi-ai",
       "ownerRepo": "ProteusX-Consulting/moshi-ai",
       "gitUrl": "git@github.com:ProteusX-Consulting/moshi-ai.git",
-      "localPath": "/Users/crab/repos/moshi-ai",
+      "localPath": "/Users/kyan/code-crab/repos/moshi-ai",
       "aliases": [
         "moshi-ai",
         "moshi ai",
