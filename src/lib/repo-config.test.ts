@@ -71,11 +71,11 @@ console.log('\nTest: attention-pipeline-ios mapping is present, locked down, and
   }
 
   const enriched = enrichPayloadWithRepo({ repo: 'attention app' });
-  assert.equal(enriched.repoResolved, true, 'attention app resolves to an existing checkout');
   assert.equal(enriched.repoKey, 'attention-pipeline-ios');
   assert.equal(enriched.repo, '/Users/kyan/code-crab/repos/attention-pipeline-ios');
 
   if (VALIDATE_LOCAL_PATHS) {
+    assert.equal(enriched.repoResolved, true, 'attention app resolves to an existing checkout');
     assert.ok(fs.existsSync(path.join(mapping!.localPath, '.git')), 'attention-pipeline-ios localPath is an existing git repo');
   }
 }
