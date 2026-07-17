@@ -416,16 +416,18 @@
       "key": "attention-pipeline-ios",
       "ownerRepo": "ProteusX-Consulting/attention-pipeline-ios",
       "gitUrl": "git@github.com:ProteusX-Consulting/attention-pipeline-ios.git",
-      "localPath": "/Users/crab/repos/attention-pipeline-ios",
+      "localPath": "/Users/kyan/code-crab/repos/attention-pipeline-ios",
       "aliases": [
         "attention pipeline",
         "attention-pipeline-ios",
-        "hermes attention pipeline",
-        "supervisor ios",
+        "ProteusX Cockpit",
+        "proteusx-cockpit",
+        "cockpit",
         "attention app"
       ],
-      "autoMerge": true,
+      "autoMerge": false,
       "baseBranch": "main",
+      "mergeMethod": "squash",
       "nightly": {
         "enabled": false
       }
