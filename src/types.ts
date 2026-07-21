@@ -636,6 +636,14 @@ export interface DecisionRequest {
 export interface JobNotifications {
   start: boolean;
   final: boolean;
+  /** True once the start notification path has been attempted, even if optional transport failed. */
+  start_attempted?: boolean;
+  /** True once the final notification path has been attempted, even if optional transport failed. */
+  final_attempted?: boolean;
+  /** Warning recorded when the optional start notification transport is unavailable. */
+  start_warning?: string | null;
+  /** Warning recorded when the optional final notification transport is unavailable. */
+  final_warning?: string | null;
 }
 
 export interface LinearIntegration {
