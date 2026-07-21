@@ -73,6 +73,16 @@ function writeJsonAtomic(file: string, data: unknown): void {
   fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n', { flag: 'wx' });
 }
 
+function isHermesKanbanPacket(packet: Pick<JobPacket, 'source' | 'metadata'>): boolean {
+  return packet.source === 'hermes-kanban'
+    || packet.metadata?.source_transport === 'hermes-kanban'
+    || !!packet.metadata?.hermes_kanban_task_id;
+}
+
+function optionalDiscordWarning(message: string): string {
+  return `Discord optional notification unavailable: ${message}`;
+}
+
 function appendLog(jobId: string, text: string): void {
   const file = path.join(jobDir(jobId), 'worker.log');
   fs.appendFileSync(file, text.endsWith('\n') ? text : text + '\n');
@@ -458,7 +468,12 @@ function preflight(jobId: string): PreflightResult {
   if (!cmds.node) failures.push('node not found on PATH');
   const discordStatus = (env.discord_status || {}) as { transport?: string; apiOk?: boolean | null; error?: string | null };
   if (discordStatus.transport === 'none' || discordStatus.apiOk !== true) {
-    failures.push(`Discord transport unavailable: ${discordStatus.error || 'DISCORD_BOT_TOKEN missing or invalid'}`);
+    const reason = discordStatus.error || 'DISCORD_BOT_TOKEN missing or invalid';
+    if (isHermesKanbanPacket(packet)) {
+      appendLog(jobId, `[${nowIso()}] WARN: ${optionalDiscordWarning(reason)}`);
+    } else {
+      failures.push(`Discord transport unavailable: ${reason}`);
+    }
   }
 
   return {
@@ -1008,7 +1023,7 @@ async function maybeSyncLinear(jobId: string): Promise<LinearSyncResult> {
 
 function notifyStart(jobId: string): void {
   const status = loadStatus(jobId);
-  if (status.notifications?.start) return;
+  if (status.notifications?.start || status.notifications?.start_attempted) return;
   const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   const repoName = packet.repo ? path.basename(packet.repo) : 'unknown';
   const ticket = packet.ticket_id || jobId;
@@ -1016,7 +1031,17 @@ function notifyStart(jobId: string): void {
   const msg = `🟡 START — ${ticket} | ${repoName} | ${goal}`;
   const sent = sendDiscordMessage(DISCORD_RUNS_CHANNEL, msg);
   appendLog(jobId, `[${nowIso()}] START notify: ${sent.ok ? 'ok' : (sent.stderr || 'failed')}`);
-  saveStatus(jobId, { notifications: { start: sent.ok, final: false } });
+  if (!sent.ok) {
+    appendLog(jobId, `[${nowIso()}] WARN: ${optionalDiscordWarning(sent.stderr || 'failed')}`);
+  }
+  saveStatus(jobId, {
+    notifications: {
+      start: sent.ok,
+      final: status.notifications?.final || false,
+      start_attempted: true,
+      start_warning: sent.ok ? null : optionalDiscordWarning(sent.stderr || 'failed'),
+    },
+  });
 }
 
 function workerLogForCurrentAttempt(logText: string): string {
@@ -1854,7 +1879,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     },
   });
 
-  if (!status.notifications?.final) {
+  if (!status.notifications?.final && !status.notifications?.final_attempted) {
     const ticket = packet.ticket_id || jobId;
     const repoName = packet.repo ? path.basename(packet.repo) : 'unknown';
     const commitShort = result.commit && result.commit !== 'none' ? result.commit.slice(0, 7) : null;
@@ -1906,6 +1931,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     }
 
     appendLog(jobId, `[${nowIso()}] FINAL notify: ${sentMain.ok ? 'ok' : (sentMain.stderr || 'failed')}`);
+    if (!sentMain.ok) {
+      appendLog(jobId, `[${nowIso()}] WARN: ${optionalDiscordWarning(sentMain.stderr || 'failed')}`);
+    }
 
     const isCleanMerge = !finalSignal.isBlocking
       && exitCode === 0
@@ -1932,7 +1960,16 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       }
     }
 
-    saveStatus(jobId, { notifications: { final: sentMain.ok, start: true }, discord_thread_id: threadId });
+    const latestStatus = loadStatus(jobId);
+    saveStatus(jobId, {
+      notifications: {
+        start: latestStatus.notifications?.start || false,
+        final: sentMain.ok,
+        final_attempted: true,
+        final_warning: sentMain.ok ? null : optionalDiscordWarning(sentMain.stderr || 'failed'),
+      },
+      discord_thread_id: threadId,
+    });
 
     // Post completion comment to Linear ticket
     const didWork = result.commit !== 'none' || ['blocked', 'coded', 'done', 'verified', 'dirty-repo', 'harness-failure'].includes(result.state);
