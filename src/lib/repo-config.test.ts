@@ -17,7 +17,7 @@ const mappings = cfg.mappings || [];
 
 console.log('\nTest: production repo mappings use canonical Mac Studio local paths');
 {
-  assert.equal(mappings.length, 26, 'expected 26 production repo mappings');
+  assert.equal(mappings.length, 27, 'expected 27 production repo mappings');
 
   for (const mapping of mappings) {
     assert.ok(mapping.key, 'mapping has a key');
@@ -77,6 +77,46 @@ console.log('\nTest: attention-pipeline-ios mapping is present, locked down, and
   if (VALIDATE_LOCAL_PATHS) {
     assert.equal(enriched.repoResolved, true, 'attention app resolves to an existing checkout');
     assert.ok(fs.existsSync(path.join(mapping!.localPath, '.git')), 'attention-pipeline-ios localPath is an existing git repo');
+  }
+}
+
+console.log('\nTest: partner-service-broker mapping is present, locked down, and resolves by key, owner/name, and aliases');
+{
+  const mapping = mappings.find((entry) => entry.key === 'partner-service-broker') as (RepoMapping & { baseBranch?: string }) | undefined;
+  assert.ok(mapping, 'partner-service-broker mapping exists');
+  assert.equal(mapping?.ownerRepo, 'ProteusX-Consulting/partner-service-broker');
+  assert.equal(mapping?.gitUrl, 'git@github.com:ProteusX-Consulting/partner-service-broker.git');
+  assert.equal(mapping?.localPath, '/Users/kyan/code-crab/repos/partner-service-broker');
+  assert.equal(mapping?.baseBranch, 'main');
+  assert.equal(mapping?.mergeMethod, 'squash');
+  assert.equal(mapping?.autoMerge, false, 'partner-service-broker auto-merge stays disabled');
+  assert.deepEqual(mapping?.aliases, [
+    'partner service broker',
+    'partner-service-broker',
+    'service broker',
+    'moshi service broker',
+  ]);
+
+  for (const repo of [
+    'partner-service-broker',
+    'ProteusX-Consulting/partner-service-broker',
+    'partner service broker',
+    'service broker',
+    'moshi service broker',
+  ]) {
+    const resolved = findRepoMapping({ repo });
+    assert.equal(resolved?.key, 'partner-service-broker', `${repo} resolves to partner-service-broker`);
+    assert.equal(resolved?.localPath, '/Users/kyan/code-crab/repos/partner-service-broker', `${repo} resolves to canonical checkout`);
+  }
+
+  const enriched = enrichPayloadWithRepo({ repo: 'moshi service broker' });
+  assert.equal(enriched.repoKey, 'partner-service-broker');
+  assert.equal(enriched.ownerRepo, 'ProteusX-Consulting/partner-service-broker');
+  assert.equal(enriched.repo, '/Users/kyan/code-crab/repos/partner-service-broker');
+
+  if (VALIDATE_LOCAL_PATHS) {
+    assert.equal(enriched.repoResolved, true, 'moshi service broker resolves to an existing checkout');
+    assert.ok(fs.existsSync(path.join(mapping!.localPath, '.git')), 'partner-service-broker localPath is an existing git repo');
   }
 }
 
