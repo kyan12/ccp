@@ -431,6 +431,21 @@
       "nightly": {
         "enabled": false
       }
+    },
+    {
+      "key": "partner-service-broker",
+      "ownerRepo": "ProteusX-Consulting/partner-service-broker",
+      "gitUrl": "git@github.com:ProteusX-Consulting/partner-service-broker.git",
+      "localPath": "/Users/kyan/code-crab/repos/partner-service-broker",
+      "aliases": [
+        "partner service broker",
+        "partner-service-broker",
+        "service broker",
+        "moshi service broker"
+      ],
+      "autoMerge": false,
+      "baseBranch": "main",
+      "mergeMethod": "squash"
     }
   ]
 }
