@@ -17,9 +17,9 @@ first):
    Discord command, or dashboard)
 2. `RepoMapping.agent` — per-repo default in `configs/repos.json`
 3. `process.env.CCP_AGENT` — global default
-4. `'claude-code'` — built-in default
+4. `'codex'` — built-in default
 
-An unknown agent name falls back to `claude-code` with a warning on stderr,
+An unknown agent name falls back to `codex` with a warning on stderr,
 so a typo in `repos.json` never hard-blocks dispatch.
 
 ## Fallback (PR B)
@@ -76,12 +76,12 @@ tarballs).
 
 - **Binary**: `codex` on `PATH`.
 - **Command**: `cat <prompt> | codex exec --color never --sandbox
-  workspace-write --skip-git-repo-check`
+  danger-full-access --skip-git-repo-check`
   - `exec` runs headless (no TUI).
   - `--color never` keeps `worker.log` free of ANSI escape sequences.
-  - `--sandbox workspace-write` restricts writes to the per-job repo
-    checkout — mirrors how Claude is run with `--permission-mode
-    bypassPermissions` inside its cwd.
+  - `--sandbox danger-full-access` lets Codex write git metadata inside the
+    worker checkout while the supervisor still runs it from the per-job repo
+    path.
   - `--skip-git-repo-check` keeps Codex from bailing because the cwd isn't
     the exact git root it would prefer.
 - **Auth**: the supervisor box must be pre-authenticated via `codex login`
@@ -107,8 +107,7 @@ tarballs).
 
 This is a dormant terminal-bridge scaffold for Cognition Devin's terminal
 feature. Registering it only makes CCP able to select Devin explicitly; the
-built-in default stays `claude-code`, and no repo config is changed by this
-support.
+built-in default stays `codex`, and no repo config is changed by this support.
 
 - **Binary**: prefers `CCP_DEVIN_BIN` when set, otherwise `devin` or
   `devin-ai` on `PATH`.
@@ -155,7 +154,7 @@ export CCP_AGENT=claude-code
 
 This sets the default driver for every job that doesn't have a per-job or
 per-repo override. Unknown values log a warning and fall back to
-`claude-code`.
+`codex`.
 
 ## Linear label mapping (PR B)
 
