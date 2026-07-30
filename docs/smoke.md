@@ -262,15 +262,11 @@ cycle:
    against any existing failing-check names from PR-review).
 2. Writes a human-readable `result.blocker` with the failure kind, URL,
    status, title, and duration.
-3. If `CCP_PR_REMEDIATE_ENABLED` is not `false`, spawns a
-   `__deployfix` remediation job on the **existing PR branch** with the
-   full smoke failure context in `review_feedback`. The remediation's
-   agent is instructed to push fixes to the same branch, not open a new
-   PR.
+3. Does not spawn a remediation child. Native Hermes Kanban owns runtime
+   fixes in the original task/review lane.
 
-The remediation depth-guard (`__deployfix|__reviewfix|__valfix` in the
-job ID) prevents a smoke-failed remediation from re-spawning another
-`__deployfix` — one layer of auto-remediation per original ticket.
+The retained historical PR watcher no longer runs preview smoke gates at all;
+this section describes only the old result schema until final removal.
 
 ### Global override
 
@@ -283,16 +279,10 @@ hard-disable it regardless of per-repo config. Any ambiguous value
 
 1. The dashboard surfaces the blocker message and the `smoke:<kind>`
    failed check, along with the preview URL.
-2. The spawned `__deployfix` job picks up the existing branch and its
-   agent tries to fix the runtime issue — typically a missing env var, a
-   runtime error, or a broken build output.
-3. When `__deployfix` pushes, the next watcher cycle re-runs smoke
-   against the redeployed preview. If it passes, the original job's PR
-   can be merged normally; the `smoke-failed` blocker never auto-clears
-   on its own, so operators explicitly transition the parent job back to
-   `coded`/`done` once the remediation lands and they've re-verified.
-4. If the root cause is external (Vercel outage, third-party API), the
-   remediation agent should leave a precise blocker note rather than
+2. The native Kanban worker diagnoses the runtime issue — typically a missing
+   env var, runtime error, or broken build output — and records its own checks.
+3. If the root cause is external (Vercel outage, third-party API), the
+   native Kanban worker should leave a precise blocker note rather than
    flail indefinitely.
 
 ## How to consume

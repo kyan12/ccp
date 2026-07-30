@@ -28,13 +28,11 @@ shows up in the final Discord message, but the job still finishes as `coded`/
 - set `result.state` to `blocked`
 - set `result.blocker_type` to `'validation-failed'`
 - populate `result.failed_checks` with synthetic `validation:<step>` entries
-- auto-spawn a `__valfix` remediation job (suffix added to the original job id)
-  whose packet targets the existing branch, inherits the original goal, and
-  carries the failing steps' command + trailing stderr as `review_feedback`
+- record the failing validation on the historical CCP result without spawning
+  a child job
 
-The `__valfix` job is gated behind the same `CCP_PR_REMEDIATE_ENABLED` flag
-that the PR-review remediation already uses. Remediation is refused when the
-job id already ends in `__valfix|__reviewfix|__deployfix` to bound recursion.
+`__valfix` creation and `CCP_PR_REMEDIATE_ENABLED` are retired. Native Hermes
+Kanban workers own validation fixes in the original task/review lane.
 
 ## Configuring a repo
 
@@ -63,7 +61,7 @@ Add a `validation` block to any entry in `configs/repos.json`:
 | Field | Required | Default | Purpose |
 |-------|----------|---------|---------|
 | `enabled` | no | true when `steps` present | Per-repo kill switch. |
-| `gate` | no | false | Phase 2b: when true, a failing required step promotes the job to `blocked` and spawns `__valfix`. Leave false while you're still building trust in the signal. |
+| `gate` | no | false | Historical Phase 2b behavior: a failing required step can promote the CCP artifact to `blocked`; it never spawns remediation. |
 | `steps` | yes | — | Ordered list of step definitions. |
 
 ### Step fields

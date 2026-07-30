@@ -12,14 +12,14 @@
  *   --key short-name           Short key for job IDs (default: repo name)
  *   --path /local/path         Local clone path (default: ~/repos/<name>)
  *   --aliases "a,b,c"          Comma-separated aliases
- *   --auto-merge               Enable auto-merge (default: false)
- *   --merge-method squash      Merge method: squash|merge|rebase (default: squash)
+ *   --auto-merge               RETIRED: rejected; native Kanban owns merges
+ *   --merge-method squash      RETIRED with CCP auto-merge
  *   --nightly                  Enable nightly runs
  *   --sentry-project slug      Sentry project slug to map
  *   --vercel-project id        Vercel project ID to map
  *   --linear-team PRO          Linear team key for routing
  *   --skip-clone               Don't clone the repo
- *   --skip-webhook             Don't create GitHub webhook
+ *   --skip-webhook             RETIRED: rejected; CCP never creates the hook
  *   --dry-run                  Show what would be done without doing it
  */
 
@@ -97,6 +97,11 @@ function main(): void {
     process.exit(1);
   }
 
+  if (opts.autoMerge || opts.mergeMethod || opts.skipWebhook) {
+    console.error('Error: CCP GitHub webhook/auto-merge options are retired; native Hermes Kanban owns GitHub lifecycle');
+    process.exit(2);
+  }
+
   const [owner, name] = opts.repo.split('/');
   if (!owner || !name) {
     console.error('Error: --repo must be in owner/name format');
@@ -156,34 +161,13 @@ function main(): void {
     }
   });
 
-  // 3. Create GitHub webhook
-  if (!opts.skipWebhook) {
-    steps.push({
-      name: 'Create GitHub webhook',
-      run: () => {
-        const funnelUrl = process.env.CCP_FUNNEL_URL || '';
-        if (!funnelUrl) return 'Skipped (set CCP_FUNNEL_URL env var)';
-        const webhookUrl = `${funnelUrl}/webhook/github`;
-
-        const existing = run('gh', ['api', `repos/${opts.repo}/hooks`, '--jq',
-          `[.[] | select(.config.url == "${webhookUrl}")] | length`]);
-        if (existing.stdout !== '0') return 'Webhook already exists';
-
-        const payload = JSON.stringify({
-          name: 'web', active: true,
-          events: ['check_run', 'pull_request', 'pull_request_review', 'pull_request_review_comment', 'issue_comment'],
-          config: { url: webhookUrl, content_type: 'json' }
-        });
-
-        const r = run('gh', ['api', `repos/${opts.repo}/hooks`, '--method', 'POST', '--input', '-'], { input: payload });
-        if (r.status !== 0) throw new Error(`Webhook creation failed: ${r.stderr}`);
-        try {
-          const id = JSON.parse(r.stdout).id;
-          return `Created webhook #${id} → ${webhookUrl}`;
-        } catch { return `Created webhook → ${webhookUrl} (could not parse response)`; }
-      }
-    });
-  }
+  // 3. GitHub lifecycle is owned by native Hermes Kanban. Keep the CLI
+  // step explicit so the command cannot imply that it installed lifecycle
+  // automation.
+  steps.push({
+    name: 'GitHub lifecycle',
+    run: () => 'Skipped (owned by native Hermes Kanban; CCP webhook retired)',
+  });
 
   // 4. Auto-discover Sentry project
   steps.push({

@@ -13,7 +13,7 @@ import type { CheckInfo } from '../types';
 // extractPreviewUrl, which isn't re-exported via the TS `export { ... }`
 // footer). This mirrors how the rest of the codebase consumes pr-review.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { extractPreviewUrl, classifyPr } = require('./pr-review');
+const { extractPreviewUrl, classifyPr, reviewPr } = require('./pr-review');
 
 let passed = 0;
 let failed = 0;
@@ -34,6 +34,17 @@ function check(
   url: string | null = null,
 ): CheckInfo {
   return { name, state, url };
+}
+
+console.log('Test: reviewPr explicitly rejects retired auto-merge requests before GitHub I/O');
+{
+  let message = '';
+  try {
+    reviewPr({ prUrl: 'https://github.com/example/repo/pull/1', autoMerge: true });
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  assert(/CCP PR mutation is retired/.test(message), 'autoMerge=true fails explicitly');
 }
 
 console.log('Test: extractPreviewUrl — returns null when nothing matches');

@@ -1,4 +1,9 @@
-# PR Policy
+# Historical PR Policy
+
+> **Retired for new work.** Native Hermes Kanban workers and GitHub required
+> checks own review, remediation, and merge decisions. The CCP watcher is
+> temporarily retained only to reconcile two named historical job artifacts;
+> see [github-kanban-retirement.md](github-kanban-retirement.md).
 
 PR review and auto-merge behavior is controlled by `src/lib/pr-policy.ts`. Both the job finalizer (`jobs.ts`) and the PR watcher (`pr-watcher.ts`) import from this shared module to prevent policy drift.
 
@@ -50,16 +55,17 @@ The `mergeMethod` field maps directly to GitHub's merge strategies:
 | `merge` | Create a merge commit |
 | `rebase` | Rebase and merge — linear history, no merge commit |
 
-## Auto-merge flow
+## Retired auto-merge flow
 
-When `autoMerge` is `true` for a repo, the PR watcher cycle (`pr-watcher.ts`) handles the merge:
+The policy resolver remains readable for historical config compatibility, but
+the drain watcher always calls `reviewPr` with `autoMerge: false`. It may read
+GitHub state and mark an already-merged historical artifact terminal. It does
+not approve, merge, rebase/force-push, run legacy preview smoke gates, enqueue
+remediation, or fire app callbacks.
 
-1. Collects all jobs in `coded`, `done`, or `blocked` state that have PR URLs
-2. Reviews each PR via `pr-review.ts` (checks CI status, mergeable state, conflicts)
-3. If CI passes and the PR is mergeable, merges using the configured `mergeMethod`
-4. If there are merge conflicts, attempts an auto-rebase with `--force-with-lease`
-5. If CI fails, spawns a remediation job with the failure logs
-6. Fires a webhook callback (if configured) with the resulting status
+Do not use `autoMerge`, `CCP_PR_AUTOMERGE`, or `CCP_PR_MERGE_METHOD` to control
+new engineering work. Those settings are inert in the retained watcher and are
+removed by the final retirement task after the historical drain completes.
 
 ## Environment variables
 

@@ -80,44 +80,15 @@ export async function onboardRepo(ownerRepo: string): Promise<OnboardResult> {
     gitUrl: `git@github.com:${ownerRepo}.git`,
     localPath,
     aliases: [key],
-    autoMerge: true,
+    autoMerge: false,
     mergeMethod: 'squash',
   });
   saveConfig('repos', repos);
   steps.push({ name: 'repos.json', result: `Added '${key}'`, ok: true });
 
-  // 4. Enable auto-merge + delete-branch-on-merge
-  const amResult = await run('gh', ['api', `repos/${ownerRepo}`, '-X', 'PATCH',
-    '-F', 'allow_auto_merge=true', '-F', 'delete_branch_on_merge=true']);
-  steps.push({ name: 'GitHub settings', result: amResult.ok ? 'Auto-merge + delete-branch enabled' : `Failed: ${amResult.stderr.slice(0, 100)}`, ok: amResult.ok });
-
-  // 5. Create GitHub webhook
-  const funnelUrl = process.env.CCP_FUNNEL_URL || '';
-  if (funnelUrl) {
-    const webhookUrl = `${funnelUrl}/webhook/github`;
-    const existingHook = await run('gh', ['api', `repos/${ownerRepo}/hooks`, '--jq',
-      `[.[] | select(.config.url == "${webhookUrl}")] | length`]);
-
-    if (existingHook.stdout === '0') {
-      const whResult = await run('gh', ['api', `repos/${ownerRepo}/hooks`, '--method', 'POST',
-        '-f', 'name=web', '-F', 'active=true',
-        '-f', 'events[]=check_run', '-f', 'events[]=pull_request',
-        '-f', 'events[]=pull_request_review', '-f', 'events[]=pull_request_review_comment',
-        '-f', 'events[]=issue_comment',
-        '-f', `config[url]=${webhookUrl}`, '-f', 'config[content_type]=json',
-      ]);
-      if (whResult.ok) {
-        try { const id = JSON.parse(whResult.stdout).id; steps.push({ name: 'Webhook', result: `Created #${id}`, ok: true }); }
-        catch { steps.push({ name: 'Webhook', result: 'Created', ok: true }); }
-      } else {
-        steps.push({ name: 'Webhook', result: `Failed: ${whResult.stderr.slice(0, 100)}`, ok: false });
-      }
-    } else {
-      steps.push({ name: 'Webhook', result: 'Already exists', ok: true });
-    }
-  } else {
-    steps.push({ name: 'Webhook', result: 'Skipped (no CCP_FUNNEL_URL)', ok: false });
-  }
+  // GitHub lifecycle automation is native-Kanban-owned. Never mutate repo
+  // auto-merge settings or install a hook back to the retired CCP endpoint.
+  steps.push({ name: 'GitHub lifecycle', result: 'Skipped (owned by native Hermes Kanban)', ok: true });
 
   console.log(`[onboard] ${ownerRepo}: ${steps.map(s => `${s.name}=${s.ok ? '✓' : '✗'}`).join(', ')}`);
   return { ok: true, key, ownerRepo, localPath, steps };

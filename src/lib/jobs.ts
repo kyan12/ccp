@@ -701,7 +701,7 @@ function maybeReviewPr(jobId: string, result: JobResult): PRReviewResult & { ski
     return { ok: false, skipped: true, reason: !result?.pr_url ? 'no PR URL' : 'PR review disabled' } as PRReviewResult & { skipped?: boolean; reason?: string };
   }
   try {
-    const review: PRReviewResult = reviewPr({ prUrl: result.pr_url, autoMerge: policy.autoMerge, mergeMethod: policy.mergeMethod });
+    const review: PRReviewResult = reviewPr({ prUrl: result.pr_url, autoMerge: false, mergeMethod: policy.mergeMethod });
     appendLog(jobId, `[${nowIso()}] pr review: ${review.disposition}${review.autoMergeEnabled ? ' (auto-merge enabled)' : ''}`);
     return { ...review, ok: true, skipped: false };
   } catch (error) {
@@ -718,7 +718,11 @@ function maybeReviewPr(jobId: string, result: JobResult): PRReviewResult & { ski
  * Gated on CCP_PR_REMEDIATE_ENABLED (shared with PR-review remediation) and
  * the per-repo `validation.gate` flag that already produced the blocker.
  */
-function maybeEnqueueValidationRemediation(
+function remediationRetired(): boolean {
+  return true;
+}
+
+export function maybeEnqueueValidationRemediation(
   jobId: string,
   packet: JobPacket,
   result: JobResult,
@@ -738,6 +742,7 @@ function maybeEnqueueValidationRemediation(
   if (!result.validation || result.validation.skipped) {
     return { ok: false, skipped: true, reason: 'no validation report to remediate' };
   }
+  if (remediationRetired()) return { ok: false, skipped: true, reason: 'retired: native Hermes Kanban owns remediation' };
 
   const remediationJobId = `${jobId}__valfix`;
   if (fs.existsSync(statusPath(remediationJobId))) {
@@ -819,6 +824,7 @@ function maybeEnqueueSmokeRemediation(
   if (!result.smoke || result.smoke.ok || result.smoke.failure?.kind === 'skipped') {
     return { ok: false, skipped: true, reason: 'no failing smoke result to remediate' };
   }
+  if (remediationRetired()) return { ok: false, skipped: true, reason: 'retired: native Hermes Kanban owns remediation' };
 
   const remediationJobId = `${jobId}__deployfix`;
   if (fs.existsSync(statusPath(remediationJobId))) {
@@ -886,6 +892,7 @@ function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result:
   // of auto-remediation per original job id, period.
   if (/__deployfix|__reviewfix|__valfix|__autoretry/.test(jobId)) return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
   if (!prReview?.ok || prReview.disposition !== 'block') return { ok: false, skipped: true, reason: 'no blocking PR review' };
+  if (remediationRetired()) return { ok: false, skipped: true, reason: 'retired: native Hermes Kanban owns remediation' };
   const remediationSuffix = prReview.blockerType === 'deploy' ? '__deployfix' : '__reviewfix';
   const remediationJobId = `${jobId}${remediationSuffix}`;
   if (fs.existsSync(statusPath(remediationJobId))) {
@@ -1765,7 +1772,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     validationRemediation,
     smokeRemediation: null,
     remediationDepthLimited: isRemediationJobId(jobId),
-    remediationDisabled: process.env.CCP_PR_REMEDIATE_ENABLED === 'false',
+    remediationDisabled: true,
   });
   result.autoRemediation = autoRemediation;
   writeJson(resultPath(jobId), result);
@@ -2526,6 +2533,15 @@ function buildAutoUnblockIo(): import('./auto-unblock').JobsIo {
   };
 }
 
+export function retiredAutoUnblockSummary(): NonNullable<SupervisorCycleSummary['autoUnblock']> {
+  return {
+    scanned: 0,
+    retried: [],
+    skipped: [{ job_id: '*', reason: 'retired: native Hermes Kanban owns remediation' }],
+    errors: [],
+  };
+}
+
 /**
  * Phase 6d: adapter that exposes the supervisor's filesystem IO to the
  * telemetry aggregator through its injected `TelemetryIo` interface.
@@ -2637,19 +2653,10 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
     console.error(`[ccp] per-agent outage probe failed: ${(err as Error).message}`);
   }
 
-  // Phase 6a: auto-unblock watchdog. Scan every blocked job and, for
-  // those with a retry-eligible blocker_type whose cool-down has
-  // elapsed, spawn a `__autoretry<N>` child job on the same branch.
-  // Wrapped in try/catch so any bug here never blocks dispatch (the
-  // watchdog is a best-effort assist, not a hard-path operation).
-  try {
-    const { tickAutoUnblock } = require('./auto-unblock') as typeof import('./auto-unblock');
-    summary.autoUnblock = tickAutoUnblock({
-      io: buildAutoUnblockIo(),
-    });
-  } catch (error) {
-    summary.errors.push({ action: 'auto-unblock', error: (error as Error).message });
-  }
+  // Native Hermes Kanban owns retry/remediation. Preserve the summary shape
+  // during the historical drain, but never spawn legacy `__autoretry<N>`
+  // children from a supervisor cycle.
+  summary.autoUnblock = retiredAutoUnblockSummary();
 
   if (!scheduleCheck.allowed && queued.length > 0) {
     queued.forEach((job) => {
@@ -2832,6 +2839,9 @@ module.exports = {
   createDiscordThread,
   sendToThread,
 };
+
+module.exports.maybeEnqueueValidationRemediation = maybeEnqueueValidationRemediation;
+module.exports.retiredAutoUnblockSummary = retiredAutoUnblockSummary;
 
 export {
   ROOT,

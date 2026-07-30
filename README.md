@@ -156,7 +156,7 @@ Set `"autoMerge": true` in your repo config. CCP will:
 |--------|----------|--------|
 | Sentry | `/ingest/sentry` | Internal integration with `issue` events |
 | Vercel | `/ingest/vercel` | `deployment.error`, `deployment.canceled` |
-| GitHub | `/webhook/github` | `check_run`, `pull_request` |
+| GitHub | `/webhook/github` | Retired: authenticated deliveries receive non-retryable `410`; native Kanban/GitHub checks own lifecycle |
 | Linear | `/webhook/linear` | Issue create/update |
 
 Expose your intake server via [Tailscale Funnel](https://tailscale.com/kb/1223/tailscale-funnel/), ngrok, or a public URL.
@@ -193,12 +193,14 @@ CCP's killer feature is the closed remediation loop:
 1. **Runtime error** → Sentry captures → webhook → Linear ticket created
 2. **Ticket dispatched** → coding agent fixes the bug → PR created
 3. **CI passes** → auto-merge → deploy
-4. **CI fails** → GitHub webhook → remediation job spawned with failure logs
+4. **CI fails** → the active native Kanban worker resolves the GitHub check failure in its review lane
 5. **Deploy fails** → Vercel webhook → incident ticket created
 6. Repeat until green ✅
 
 
 Linear and the former Kanban→CCP bridge are retired. Keep `configs/linear.json` disabled for historical compatibility, and do not run the intake/supervisor services for native Kanban work.
+
+The CCP GitHub webhook and remediation-child creation are also retired. See [docs/github-kanban-retirement.md](docs/github-kanban-retirement.md) for the signed `410` contract and the two-job historical PR drain boundary.
 
 ## CLI Tools
 

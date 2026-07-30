@@ -54,13 +54,14 @@ When a fix request references a repo not yet in `configs/repos.json`, the `onboa
 
 1. **Verify** — Checks the repo exists on GitHub via `gh api`
 2. **Clone** — Clones to `$CCP_REPOS_DIR/<name>` (or `~/repos/<name>` by default)
-3. **Register** — Adds the repo to `configs/repos.json` with defaults: `autoMerge: true`, `mergeMethod: "squash"`
-4. **GitHub settings** — Enables `allow_auto_merge` and `delete_branch_on_merge` on the repo
-5. **Webhook** — Creates a GitHub webhook pointing to `$CCP_FUNNEL_URL/webhook/github` for `check_run` and `pull_request` events (requires `CCP_FUNNEL_URL` to be set)
+3. **Register** — Adds the repo to `configs/repos.json` with `autoMerge: false`
+4. **GitHub lifecycle** — Makes no repository-setting or webhook changes; native Hermes Kanban workers and GitHub required checks own review, CI, and merge behavior
 
 If the repo is already onboarded, the module returns immediately with the existing config.
 
 Auto-onboarding is triggered by the `/api/intake` endpoint when it receives a request for an unknown repo. It can also be triggered via `src/bin/add-repo.ts`.
+
+See [github-kanban-retirement.md](github-kanban-retirement.md) for the authenticated `410` retirement contract and historical PR drain conditions.
 
 ## Workflow mapping
 

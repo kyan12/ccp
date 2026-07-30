@@ -10,6 +10,7 @@ const { intakeToLinear } = require('../lib/intake-runner');
 const { loadConfig } = require('../lib/config');
 const { getSecret } = require('../lib/secrets');
 const { constantTimeEquals: safeEquals, verifyHmacSha256, isLoopbackAddress } = require('../lib/webhook-auth');
+const { retiredGitHubWebhookResponse } = require('../lib/github-webhook-retirement');
 const { listJobs, jobsByState, loadStatus, readJson, healthCheck, packetPath, resultPath, jobDir } = require('../lib/jobs');
 
 const port: number = Number(process.env.CCP_INTAKE_PORT || 4318);
@@ -22,7 +23,6 @@ const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(__dirname, '
 const REPOS_PATH: string = path.join(ROOT, 'configs', 'repos.json');
 const DASHBOARD_PATH: string = path.join(__dirname, '..', 'dashboard', 'index.html');
 
-const { dispatchLinearIssues } = require('../lib/linear-dispatch');
 const { runSupervisorCycle } = require('../lib/jobs');
 
 // Debounce Linear webhook processing to avoid duplicate rapid-fire triggers
@@ -72,6 +72,7 @@ async function handleLinearWebhook(payload: Record<string, unknown>, res: http.S
     _linearWebhookTimeout = null;
     try {
       process.stdout.write(`[linear-webhook] dispatching + supervisor cycle\n`);
+      const { dispatchLinearIssues } = require('../lib/linear-dispatch');
       const dispatched = await dispatchLinearIssues({ force: true });
       const started = dispatched.filter((d: { queued?: boolean }) => d.queued);
       if (started.length > 0) {
@@ -94,22 +95,25 @@ interface ParsedBody {
   rawBody: Buffer;
 }
 
-function parseBody(req: http.IncomingMessage): Promise<ParsedBody> {
+function readRawBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer | string) => {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
     req.on('end', () => {
-      try {
-        const rawBody = Buffer.concat(chunks);
-        resolve({ payload: rawBody.length ? JSON.parse(rawBody.toString('utf8')) : {}, rawBody });
-      } catch (error) {
-        reject(error);
-      }
+      resolve(Buffer.concat(chunks));
     });
     req.on('error', reject);
   });
+}
+
+async function parseBody(req: http.IncomingMessage): Promise<ParsedBody> {
+  const rawBody = await readRawBody(req);
+  return {
+    payload: rawBody.length ? JSON.parse(rawBody.toString('utf8')) : {},
+    rawBody,
+  };
 }
 
 function verifyVercel(req: http.IncomingMessage): boolean {
@@ -469,6 +473,21 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       return;
     }
 
+    // Authenticate GitHub's exact raw bytes before attempting JSON parsing.
+    // This retired endpoint does not need a decoded payload: authenticated
+    // deliveries receive the documented non-retryable drain response, even
+    // when their JSON is malformed.
+    if (url.pathname === '/webhook/github') {
+      const rawBody = await readRawBody(req);
+      const retired = retiredGitHubWebhookResponse({
+        secret: getSecret('GITHUB_WEBHOOK_SECRET'),
+        rawBody,
+        signature: String(req.headers['x-hub-signature-256'] || ''),
+      });
+      json(res, retired.status, retired.body);
+      return;
+    }
+
     const { payload, rawBody } = await parseBody(req);
 
     const decisionMatch = url.pathname.match(/^\/api\/jobs\/(.+)\/decision$/);
@@ -633,7 +652,20 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 
     // GitHub webhook
     if (url.pathname === '/webhook/github') {
-      if (!verifyGitHub(req, rawBody)) { json(res, 403, { ok: false, error: 'bad GitHub signature' }); return; }
+      const retired = retiredGitHubWebhookResponse({
+        secret: getSecret('GITHUB_WEBHOOK_SECRET'),
+        rawBody,
+        signature: String(req.headers['x-hub-signature-256'] || ''),
+      });
+      if (retired.status === 403 || retired.body.replacement === 'native-hermes-kanban') {
+        json(res, retired.status, retired.body);
+        return;
+      }
+
+      // The authenticated route intentionally stops here. Native Hermes
+      // Kanban workers and GitHub required checks own new review/CI/merge
+      // lifecycle; the legacy handlers below remain unreachable only until
+      // the two named historical CCP PRs finish draining.
       const ghEvent = (req.headers['x-github-event'] || '') as string;
       const action = (payload.action || '') as string;
 
