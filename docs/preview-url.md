@@ -1,21 +1,20 @@
 # Preview deployment URL detection
 
-**Phase 4 (PR A) — informational only in this PR.** Later Phase 4 PRs feed
-this URL into a browser smoke runner.
+> **Historical behavior.** The current bounded CCP drain may retain the latest
+> detected URL in `status.integrations.prReview.previewUrl` for its two named
+> jobs, but it no longer mirrors that value into `result.preview_url` or invokes
+> a browser smoke runner. Native Hermes Kanban owns new PR verification.
 
 ## What it does
 
-When `pr-watcher` polls a PR-backed job, it now asks `gh pr view` for the
+When the historical `pr-watcher` polls one of its two named drain jobs, it asks `gh pr view` for the
 PR's comment thread in addition to the status-check rollup it was already
-fetching. From those two sources it tries to extract the PR's live
-preview deployment URL and persists it to:
+fetching. From those two sources it may extract the PR's live
+preview deployment URL and persist it to:
 
 - `status.integrations.prReview.previewUrl` (per-watch cycle)
-- `result.preview_url` (stable per-job record, mirrored once on change)
-- `worker.log` — single line `pr-watcher: preview URL detected — <url>`
 
-Nothing in this PR acts on the URL beyond persisting it. Existing
-state-machine behavior is unchanged.
+The drain does not act on the URL beyond that status reconciliation.
 
 ## Where the URL comes from
 
@@ -44,25 +43,15 @@ Intentionally kept narrow for this PR to reduce risk:
 
 ## Consuming the URL
 
-For local inspection:
+For local inspection of a named drain job:
 
 ```bash
-cat "$CCP_ROOT/jobs/<job_id>/result.json" | jq .preview_url
-```
-
-For downstream code:
-
-```ts
-import type { JobResult } from '../types';
-const result: JobResult = readJson(resultPath(jobId));
-if (result.preview_url) {
-  // ... do something with the preview URL
-}
+cat "$CCP_ROOT/jobs/<job_id>/status.json" | jq .integrations.prReview.previewUrl
 ```
 
 ## Testing
 
 `src/lib/pr-review.test.ts` covers the `extractPreviewUrl` pure function
 with synthetic `checks` / `comments` fixtures (no network, no `gh`
-shell-outs). End-to-end the only way to verify is to point the
-supervisor at a PR with a Vercel preview and watch the `pr-watcher` log.
+shell-outs). Do not point the production watcher at unrelated jobs to test it;
+the drain cohort is intentionally fixed.

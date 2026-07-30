@@ -1,5 +1,11 @@
 # Preview-URL Smoke Tests (Phase 4 PRs B–D)
 
+> **Retired production path.** Native Hermes Kanban owns new PR verification.
+> The bounded CCP historical drain does not call the smoke runners, apply
+> `smoke.enabled`/`smoke.gate`, write smoke results, or enqueue `__deployfix`
+> remediation. The modules and tests below remain as historical implementation
+> reference only; operators must not rely on this configuration being active.
+
 After the [preview-URL extractor](./preview-url.md) detects a PR's Vercel
 deployment URL, the supervisor can run a lightweight smoke test against
 it. Three runners are supported:

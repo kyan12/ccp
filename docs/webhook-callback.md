@@ -1,6 +1,9 @@
 # Webhook Callbacks
 
-When an external app dispatches a fix request via `/api/intake`, it can include a `webhookUrl` and `fixId` in the request metadata. CCP will POST status updates back to that URL as the job progresses through its lifecycle.
+> **Retirement status.** `/api/intake` no longer dispatches work and returns an
+> authenticated `410 Gone`. The callback helper remains only for finalizing
+> previously created historical packets that already contain callback metadata.
+> The bounded PR drain does not send merge, verified, or failed callbacks.
 
 Implementation: `src/lib/webhook-callback.ts`
 
@@ -79,16 +82,15 @@ function verifySignature(body, secret, signatureHeader) {
 | Status | When sent | Meaning |
 |--------|-----------|---------|
 | `pr_open` | Job finishes with state `coded` | PR created, awaiting CI/review |
-| `merged` | PR watcher detects merge | PR merged successfully |
-| `verified` | Job reaches `verified` state | Change verified in production |
+| `merged` | Historical job finalization reports state `done` | Legacy status mapping only; the PR watcher does not emit it |
+| `verified` | Historical job finalization reports state `verified` | Legacy status mapping only; the PR watcher does not emit it |
 | `failed` | Job reaches `blocked` or `failed` | Job failed with error |
 
 ## When callbacks fire
 
-Callbacks are triggered at two points in the lifecycle:
-
-1. **Job finalization** (`finalizeJob()` in `jobs.ts`) — After a worker completes, fires with `pr_open` or `failed` based on job outcome.
-2. **PR watcher cycle** (`runPrWatcherCycle()` in `pr-watcher.ts`) — Fires `merged`, `verified`, or `failed` as PRs progress through review and merge.
+Callbacks can only be triggered by historical **job finalization**
+(`finalizeJob()` in `jobs.ts`). The PR watcher no longer invokes the helper.
+No new packets with callback metadata are accepted through CCP intake.
 
 Callbacks are fire-and-forget. Network errors are logged to stderr but do not affect job processing.
 

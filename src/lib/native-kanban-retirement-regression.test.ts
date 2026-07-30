@@ -38,3 +38,12 @@ test('current-main intake routes remain retired and cannot recreate Linear or re
   assert.equal(fs.existsSync(path.join(sourceRoot, 'lib', 'linear.ts')), false);
   assert.equal(fs.existsSync(path.join(sourceRoot, 'lib', 'linear-dispatch.ts')), false);
 });
+
+test('retired GitHub webhook has one terminal route and no legacy mutation machinery', () => {
+  const routeMarkers = intakeServer.match(/url\.pathname === '\/webhook\/github'/g) || [];
+  assert.equal(routeMarkers.length, 1);
+  assert.doesNotMatch(
+    intakeServer,
+    /verifyGitHub|collectPrReviewFeedback|maybeEnqueueReviewRemediation|saveStatus: ss|sendDiscordMessage/,
+  );
+});
