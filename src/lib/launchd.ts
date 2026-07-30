@@ -15,6 +15,15 @@ interface LaunchdOptions {
   port?: number | string;
 }
 
+function validatedInteger(value: number | string | undefined, fallback: number, label: string, min: number, max: number): number {
+  const raw = value === undefined || value === '' ? fallback : value;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${label} must be an integer between ${min} and ${max}`);
+  }
+  return parsed;
+}
+
 function baseEnv(options: LaunchdOptions = {}): { pathEnv: string; homeEnv: string; shellEnv: string; opServiceAccountToken: string } {
   return {
     pathEnv: options.pathEnv || process.env.CCP_PATH_ENV || '/Users/kyan/.local/bin:/Users/kyan/.hermes/node/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
@@ -49,8 +58,8 @@ function buildEnvBlock(options: LaunchdOptions = {}, publicEnv: Record<string, s
 
 function buildSupervisorPlist(options: LaunchdOptions = {}): string {
   const label = options.label || 'ai.ccp.supervisor';
-  const intervalMs = Number(options.intervalMs || process.env.CCP_SUPERVISOR_INTERVAL_MS || 15000);
-  const maxConcurrent = Number(options.maxConcurrent || process.env.CCP_MAX_CONCURRENT || 1);
+  const intervalMs = validatedInteger(options.intervalMs ?? process.env.CCP_SUPERVISOR_INTERVAL_MS, 15000, 'CCP_SUPERVISOR_INTERVAL_MS', 1, Number.MAX_SAFE_INTEGER);
+  const maxConcurrent = validatedInteger(options.maxConcurrent ?? process.env.CCP_MAX_CONCURRENT, 1, 'CCP_MAX_CONCURRENT', 1, Number.MAX_SAFE_INTEGER);
   const nodePath = options.nodePath || process.execPath;
   const program = path.join(ROOT, 'dist', 'bin', 'launchd-runner.js');
   const stdoutPath = path.join(ROOT, 'supervisor', 'daemon', 'launchd.stdout.log');
@@ -89,7 +98,7 @@ ${buildEnvBlock(options)}
 
 function buildIntakePlist(options: LaunchdOptions = {}): string {
   const label = options.label || 'ai.ccp.intake';
-  const port = Number(options.port || process.env.CCP_INTAKE_PORT || 4318);
+  const port = validatedInteger(options.port ?? process.env.CCP_INTAKE_PORT, 4318, 'CCP_INTAKE_PORT', 1, 65535);
   const nodePath = options.nodePath || process.execPath;
   const program = path.join(ROOT, 'dist', 'bin', 'launchd-runner.js');
   const stdoutPath = path.join(ROOT, 'supervisor', 'daemon', 'intake.stdout.log');

@@ -4,6 +4,7 @@ import path = require('path');
 import { spawnSync } from 'child_process';
 const { ROOT } = require('../lib/jobs');
 const { buildSupervisorPlist, buildIntakePlist } = require('../lib/launchd');
+const { parseEnvFile } = require('./launchd-runner');
 const { loadConfig } = require('../lib/config');
 
 const home: string = process.env.CCP_HOST_HOME || '/Users/kyan';
@@ -11,6 +12,7 @@ const launchAgentsDir: string = path.join(home, 'Library', 'LaunchAgents');
 const supervisorPlistPath: string = path.join(launchAgentsDir, 'ai.ccp.supervisor.plist');
 const intakePlistPath: string = path.join(launchAgentsDir, 'ai.ccp.intake.plist');
 const RETIRED_LINEAR_ENV_KEYS = new Set(['LINEAR_API_KEY', 'LINEAR_SMA_API_KEY', 'LINEAR_WEBHOOK_SECRET']);
+const MANAGED_ENV_KEYS = new Set([...RETIRED_LINEAR_ENV_KEYS, 'CCP_LINEAR_DISABLED', 'CCP_DISABLE_LINEAR']);
 
 function readOpSecret(ref: string): string {
   const out = spawnSync('op', ['read', ref], { encoding: 'utf8', env: process.env as Record<string, string> });
@@ -30,12 +32,8 @@ function resolveLaunchdSecrets(): Record<string, string> {
   const extraEnv: Record<string, string> = {};
   const localEnvPath = path.join(ROOT, 'supervisor', 'daemon', 'intake.env.local');
   if (fs.existsSync(localEnvPath)) {
-    for (const line of fs.readFileSync(localEnvPath, 'utf8').split(/\r?\n/)) {
-      if (!line || line.trim().startsWith('#') || !line.includes('=')) continue;
-      const idx = line.indexOf('=');
-      const key = line.slice(0, idx).trim();
-      const value = line.slice(idx + 1).trim();
-      if (key && value && !RETIRED_LINEAR_ENV_KEYS.has(key)) extraEnv[key] = value;
+    for (const [key, value] of Object.entries(parseEnvFile(localEnvPath)) as Array<[string, string]>) {
+      if (value && !MANAGED_ENV_KEYS.has(key)) extraEnv[key] = value;
     }
   }
   for (const envName of ['OP_SERVICE_ACCOUNT_TOKEN', 'VERCEL_TOKEN', 'SENTRY_AUTH_TOKEN', 'VERCEL_WEBHOOK_SECRET', 'DISCORD_BOT_TOKEN']) {
@@ -64,11 +62,7 @@ fs.mkdirSync(launchAgentsDir, { recursive: true });
 fs.mkdirSync(path.join(ROOT, 'supervisor', 'daemon'), { recursive: true });
 const extraEnv = resolveLaunchdSecrets();
 const localEnvPath = path.join(ROOT, 'supervisor', 'daemon', 'intake.env.local');
-const retiredEnvKeys = new Set([
-  ...RETIRED_LINEAR_ENV_KEYS,
-  'CCP_LINEAR_DISABLED',
-  'CCP_DISABLE_LINEAR',
-]);
+const retiredEnvKeys = MANAGED_ENV_KEYS;
 const existingEnvLines = fs.existsSync(localEnvPath)
   ? fs.readFileSync(localEnvPath, 'utf8').split(/\r?\n/).filter((line) => !retiredEnvKeys.has(line.split('=', 1)[0].trim()))
   : [];
@@ -85,12 +79,9 @@ for (const [key, value] of Object.entries(requiredEnv)) {
   if (!existingKeys.has(key)) additions.push(`${key}=${value}`);
 }
 const nextEnv = [existingEnv, ...additions].filter(Boolean).join('\n') + '\n';
-const protectedEnv = Object.fromEntries(nextEnv.split(/\r?\n/).filter((line) => line && !line.trim().startsWith('#') && line.includes('=')).map((line) => {
-  const idx = line.indexOf('=');
-  return [line.slice(0, idx).trim(), line.slice(idx + 1).trim()];
-}));
 fs.writeFileSync(localEnvPath, nextEnv, { encoding: 'utf8', mode: 0o600 });
 fs.chmodSync(localEnvPath, 0o600);
+const protectedEnv = parseEnvFile(localEnvPath);
 fs.writeFileSync(supervisorPlistPath, buildSupervisorPlist({
   envFilePath: localEnvPath,
   maxConcurrent: protectedEnv.CCP_MAX_CONCURRENT,
