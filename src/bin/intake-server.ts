@@ -5,8 +5,6 @@ import path = require('path');
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
-import type { IntakeToLinearResult } from '../types';
-const { intakeToLinear } = require('../lib/intake-runner');
 const { loadConfig } = require('../lib/config');
 const { getSecret } = require('../lib/secrets');
 const { constantTimeEquals: safeEquals, verifyHmacSha256, isLoopbackAddress } = require('../lib/webhook-auth');
@@ -14,79 +12,24 @@ const { listJobs, jobsByState, loadStatus, readJson, healthCheck, packetPath, re
 
 const port: number = Number(process.env.CCP_INTAKE_PORT || 4318);
 const vercelCfg = loadConfig('vercel', {});
-const autoDispatch: boolean = String(process.env.CCP_INTAKE_AUTO_DISPATCH || 'true').toLowerCase() !== 'false';
-const autoStart: boolean = String(process.env.CCP_INTAKE_AUTO_START || 'true').toLowerCase() !== 'false';
-const maxConcurrent: number = Number(process.env.CCP_MAX_CONCURRENT || 1);
-
 const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(__dirname, '..', '..'));
 const REPOS_PATH: string = path.join(ROOT, 'configs', 'repos.json');
 const DASHBOARD_PATH: string = path.join(__dirname, '..', 'dashboard', 'index.html');
 
-const { dispatchLinearIssues } = require('../lib/linear-dispatch');
-const { runSupervisorCycle } = require('../lib/jobs');
-
-// Debounce Linear webhook processing to avoid duplicate rapid-fire triggers
-let _linearWebhookTimeout: ReturnType<typeof setTimeout> | null = null;
-const LINEAR_WEBHOOK_DEBOUNCE_MS = 3000;
-
-async function handleLinearWebhook(payload: Record<string, unknown>, res: http.ServerResponse): Promise<void> {
-  const action = payload.action as string;
-  const type = payload.type as string;
-  const data = payload.data as Record<string, unknown> | undefined;
-  const identifier = data?.identifier || data?.id || 'unknown';
-
-  process.stdout.write(`[linear-webhook] ${action} ${type} ${identifier}\n`);
-
-  if (type !== 'Issue' || (action !== 'create' && action !== 'update')) {
-    json(res, 200, { ok: true, ignored: true, reason: `${action} ${type} not actionable` });
-    return;
-  }
-
-  // Ignore updates triggered by our own API key to prevent feedback loops.
-  // Linear includes updatedFrom with changed fields — if the only changes are
-  // state or comment-related, it's likely our own sync. Also check actor.
-  if (action === 'update') {
-    const updatedFrom = payload.updatedFrom as Record<string, unknown> | undefined;
-    const changedFields = updatedFrom ? Object.keys(updatedFrom) : [];
-    // If the only changes are state, stateId, or updatedAt — skip (our own sync)
-    const ownUpdateFields = new Set(['stateId', 'state', 'updatedAt', 'sortOrder', 'startedAt', 'completedAt', 'canceledAt', 'triagedAt']);
-    const isOwnUpdate = changedFields.length > 0 && changedFields.every((f) => ownUpdateFields.has(f));
-    if (isOwnUpdate) {
-      process.stdout.write(`[linear-webhook] skipping own state update for ${identifier} (fields: ${changedFields.join(', ')})\n`);
-      json(res, 200, { ok: true, ignored: true, reason: 'own state update' });
-      return;
-    }
-    // Also skip if no meaningful fields changed at all
-    if (changedFields.length === 0) {
-      process.stdout.write(`[linear-webhook] skipping update with no changed fields for ${identifier}\n`);
-      json(res, 200, { ok: true, ignored: true, reason: 'no changed fields' });
-      return;
-    }
-    process.stdout.write(`[linear-webhook] processing update for ${identifier} (changed: ${changedFields.join(', ')})\n`);
-  }
-
-  json(res, 200, { ok: true, queued: true, action, type, identifier });
-
-  if (_linearWebhookTimeout) clearTimeout(_linearWebhookTimeout);
-  _linearWebhookTimeout = setTimeout(async () => {
-    _linearWebhookTimeout = null;
-    try {
-      process.stdout.write(`[linear-webhook] dispatching + supervisor cycle\n`);
-      const dispatched = await dispatchLinearIssues({ force: true });
-      const started = dispatched.filter((d: { queued?: boolean }) => d.queued);
-      if (started.length > 0) {
-        process.stdout.write(`[linear-webhook] dispatched ${started.length} new jobs, running supervisor\n`);
-        await runSupervisorCycle({ maxConcurrent });
-      }
-    } catch (error) {
-      process.stderr.write(`[linear-webhook] error: ${(error as Error).message}\n`);
-    }
-  }, LINEAR_WEBHOOK_DEBOUNCE_MS);
-}
-
 function json(res: http.ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
   res.end(JSON.stringify(payload, null, 2) + '\n');
+}
+
+function retiredIntake(res: http.ServerResponse, source: string, retryable = false): void {
+  if (retryable) res.setHeader('retry-after', '3600');
+  json(res, retryable ? 503 : 410, {
+    ok: false,
+    retired: true,
+    retryable,
+    source,
+    error: 'CCP intake is retired; submit this work through native Hermes Kanban (proteusx-engineering)',
+  });
 }
 
 interface ParsedBody {
@@ -488,7 +431,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 
     if (url.pathname === '/ingest/vercel') {
       if (!verifyVercel(req)) { json(res, 403, { ok: false, error: 'bad webhook secret' }); return; }
-      json(res, 200, await intakeToLinear('vercel', payload, { autoDispatch, autoStart, maxConcurrent }));
+      retiredIntake(res, 'vercel', true);
       return;
     }
 
@@ -510,13 +453,13 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         const issue = (payload.data as Record<string, unknown>).issue as Record<string, unknown>;
         process.stdout.write(`[sentry-webhook] processing ${sentryAction} issue: ${issue.shortId || issue.title}\n`);
       }
-      json(res, 200, await intakeToLinear('sentry', payload, { autoDispatch, autoStart, maxConcurrent }));
+      retiredIntake(res, 'sentry', true);
       return;
     }
 
     if (url.pathname === '/ingest/manual') {
       if (!verifyAdminApi(req)) { json(res, 403, { ok: false, error: 'admin API auth failed' }); return; }
-      json(res, 200, await intakeToLinear('manual', payload, { autoDispatch, autoStart, maxConcurrent }));
+      retiredIntake(res, 'manual');
       return;
     }
 
@@ -533,85 +476,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         return;
       }
 
-      // Map app fix request to Linear ticket
-      const fixId = (payload.fixId || '') as string;
-      const title = (payload.title || 'App-dispatched fix request') as string;
-      const description = (payload.description || '') as string;
-      const issueType = (payload.issueType || 'fix') as string;
-      const pageUrl = (payload.pageUrl || null) as string | null;
-      const severity = (payload.severity || 'medium') as string;
-      const cmsType = (payload.cmsType || null) as string | null;
-      const fixInstructions = payload.fixInstructions as Record<string, unknown> | null;
-      const context = payload.context as Record<string, unknown> || {};
-      const webhookUrl = (payload.webhookUrl || null) as string | null;
-
-      // Resolve repo from context — auto-onboard if unknown
-      const repoTag = (context.repo || context.ownerRepo) as string | undefined;
-      if (!repoTag) {
-        return json(res, 400, { error: 'Missing context.repo — cannot determine target repository' });
-      }
-      const { findRepoMapping } = require('../lib/repos');
-      let repoMapping = findRepoMapping({ repo: repoTag, repoKey: repoTag });
-      if (!repoMapping) {
-        // Auto-onboard: clone, add to repos.json, set up webhook
-        console.log(`[intake] Auto-onboarding unknown repo: ${repoTag}`);
-        try {
-          const { onboardRepo } = require('../lib/onboard-repo');
-          const onboardResult = await onboardRepo(repoTag);
-          if (!onboardResult.ok) {
-            return json(res, 400, { error: `Failed to onboard repo ${repoTag}: ${onboardResult.error}` });
-          }
-          console.log(`[intake] Onboarded ${repoTag}: ${onboardResult.steps.map((s: { name: string; result: string }) => `${s.name}=${s.result}`).join(', ')}`);
-          // Re-resolve after onboarding
-          repoMapping = findRepoMapping({ repo: repoTag, repoKey: repoTag });
-          if (!repoMapping) {
-            return json(res, 500, { error: `Onboarded ${repoTag} but still cannot resolve mapping` });
-          }
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          return json(res, 400, { error: `Failed to onboard repo ${repoTag}: ${msg}` });
-        }
-      }
-
-      // Build structured description for CCP worker
-      const descParts: string[] = [
-        `**Repo:** ${repoMapping?.ownerRepo || repoTag}`,
-        '',
-        description,
-      ];
-      if (pageUrl) descParts.push('', `**Affected URL:** ${pageUrl}`);
-      if (severity !== 'medium') descParts.push(`**Severity:** ${severity}`);
-      if (cmsType) descParts.push(`**CMS:** ${cmsType}`);
-      if (fixInstructions) descParts.push('', '**Fix Instructions:**', '```json', JSON.stringify(fixInstructions, null, 2), '```');
-
-      const intakePayload = {
-        title,
-        summary: description,
-        description: descParts.join('\n'),
-        repo: repoMapping?.localPath || null,
-        repoKey: repoMapping?.key || null,
-        ownerRepo: repoMapping?.ownerRepo || repoTag,
-        kind: issueType,
-        label: severity === 'critical' ? 'bug' : 'feature',
-        source: 'app',
-        metadata: {
-          fixId,
-          pageUrl,
-          severity,
-          cmsType,
-          webhookUrl,
-          ...(context || {}),
-        },
-      };
-
-      const result = await intakeToLinear('manual', intakePayload, { autoDispatch, autoStart, maxConcurrent });
-
-      json(res, 200, {
-        requestId: fixId || result.identifier || 'unknown',
-        linearTicketId: result.identifier || null,
-        linearTicketUrl: result.url || null,
-        status: 'queued',
-      });
+      retiredIntake(res, 'app');
       return;
     }
 
@@ -773,17 +638,8 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 
             const repoMapping = findRepoMapping({ repo });
             if (repoMapping) {
-              process.stdout.write(`[github-webhook] untracked CI failure on ${repo}#${prNum}, creating incident\n`);
-              const incidentResult = await intakeToLinear('manual', {
-                title: `CI failure: ${checkName} on PR #${prNum} (${branch})`,
-                summary: `Check "${checkName}" failed on ${repo}@${sha}. PR: ${prUrl}. Details: ${detailsUrl}`,
-                repo: repoMapping.localPath,
-                repoKey: repoMapping.key,
-                kind: 'ci-failure',
-                label: 'deploy',
-                metadata: { checkName, branch, sha, prUrl, detailsUrl, prNum },
-              }, { autoDispatch, autoStart, maxConcurrent });
-              json(res, 200, { ok: true, action: 'incident-created', ...incidentResult });
+              process.stderr.write(`[github-webhook] untracked CI failure on ${repo}#${prNum}; CCP incident creation is retired\n`);
+              retiredIntake(res, 'github-check-run', true);
               return;
             }
           } catch (error) {
@@ -848,10 +704,10 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       return;
     }
 
-    // Linear webhook
+    // Linear webhook is retired; authenticate before returning the explicit terminal response.
     if (url.pathname === '/webhook/linear') {
       if (!verifyLinear(req, rawBody)) { json(res, 403, { ok: false, error: 'bad Linear signature' }); return; }
-      await handleLinearWebhook(payload, res);
+      retiredIntake(res, 'linear');
       return;
     }
 

@@ -1,251 +1,83 @@
-# ☭ CCP — Coding Control Plane
+# CCP — Coding Control Plane
 
-> **Runtime status:** retirement in progress on Kevin's Mac Studio. Native Hermes Kanban (`proteusx-engineering`) owns all new engineering intake, isolated worktrees, execution, review, callbacks, and completion. CCP accepts no new Kanban/Linear work; its supervisor/intake services remain temporarily active only to drain historical PR-backed jobs and migrate current GitHub/Sentry routes. Do not submit new CCP jobs or add new CCP producers.
+> **Runtime status:** retirement in progress on Kevin's Mac Studio. Native Hermes Kanban (`proteusx-engineering`) owns all new engineering intake, isolated worktrees, execution, review, callbacks, and completion.
 
-**Seize the means of code production.**
+CCP is no longer an intake or dispatch system for new work. This repository is retained temporarily to:
 
-CCP is an open-source control plane that turns coding agents (Claude Code, Codex, etc.) into a continuous delivery pipeline. It handles the orchestration that nobody else does: ticket intake → job dispatch → coding → PR creation → review → auto-merge → error detection → remediation.
+- preserve historical job evidence;
+- reconcile the remaining PR-backed jobs;
+- keep the dashboard and authenticated GitHub merge/review handling available during migration;
+- provide a controlled path for removing the final LaunchAgents.
 
-```
-Linear Ticket → CCP → Coding Agent → PR → CI → Auto-Merge → Deploy
-       ↑                                                        |
-       └──── Sentry Error / Vercel Failure / CI Failure ────────┘
-```
+Do not submit new CCP jobs, create Linear tickets through CCP, or add new CCP producers.
 
-![CCP Hero](demo/screenshots/hero.png)
+## Canonical workflow
 
-## What It Does
-
-- **Job Pipeline** — Queue, dispatch, and monitor coding jobs with full lifecycle tracking
-- **Linear Integration** — Auto-dispatch from Linear tickets, sync state back, create tickets from errors
-- **PR Review & Auto-Merge** — Per-repo auto-merge config, CI check monitoring, disposition analysis
-- **Remediation Loop** — CI failures auto-spawn fix jobs; errors → tickets → fixes → deploy
-- **Webhook Intake** — Sentry errors, Vercel deploy failures, GitHub CI failures all create tickets
-- **Discord Notifications** — Compact one-liners for runs, threads for non-clean outcomes
-- **Dashboard** — Dark-themed web UI to monitor jobs, configure repos, track PR reviews
-- **Nightly Runs** — Scheduled coding runs for maintenance, tech debt, compound tasks
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                     Intake Layer                          │
-│  Sentry webhook ──┐                                      │
-│  Vercel webhook ──┼── intake-server.ts ── normalize ──┐  │
-│  GitHub webhook ──┘                                   │  │
-│  Linear webhook ──── linear-dispatch.ts ──────────────┤  │
-│  Discord message ── intake-text.ts ───────────────────┤  │
-│                                                       ▼  │
-│                     Job System (jobs.ts)                  │
-│                     ┌────────────────┐                    │
-│                     │ queued         │                    │
-│                     │ → preflight    │                    │
-│                     │ → running      │ ◄── tmux + claude  │
-│                     │ → coded        │                    │
-│                     │ → verified     │                    │
-│                     └────────────────┘                    │
-│                           │                              │
-│              ┌────────────┼────────────┐                 │
-│              ▼            ▼            ▼                 │
-│         PR Review    Linear Sync   Notifications         │
-│         (pr-review)  (linear.ts)   (Discord)             │
-│              │                                           │
-│              ▼                                           │
-│         PR Watcher ── auto-merge / remediation           │
-│         (every 15s)                                      │
-└──────────────────────────────────────────────────────────┘
-```
-
-## Quick Start
-
-### Prerequisites
-
-- **Node.js** 20+
-- **Claude Code** (`npm i -g @anthropic-ai/claude-code`) or another coding agent
-- **GitHub CLI** (`gh`) authenticated
-- **Linear** account with API key
-
-### Install
+New engineering work must be created directly on native Hermes Kanban:
 
 ```bash
-git clone https://github.com/kyan12/ccp.git
-cd ccp
+hermes kanban --board proteusx-engineering create "Task title" \
+  --body "Acceptance criteria and verification" \
+  --assignee code-crab \
+  --workspace worktree:/absolute/path/to/repo
+```
+
+The former Business Crab handoff contract, Kanban→CCP adapter, Linear polling/dispatch, and Linear result synchronization have been removed.
+
+## Temporary drain runtime
+
+The following components remain only while historical PRs and webhook consumers are migrated:
+
+- `src/bin/supervisor.ts` — reconciles existing jobs and PR-backed work;
+- `src/bin/intake-server.ts` — serves the dashboard and authenticated legacy webhook endpoints;
+- `src/lib/pr-watcher.ts` — watches already-tracked PR-backed jobs;
+- `src/bin/jobs.ts` — inspects historical job state.
+
+The intake server does not create new CCP or Linear work:
+
+- `/webhook/linear` returns an authenticated `410 Gone` retirement response;
+- manual and app intake return `410 Gone`;
+- Sentry, Vercel, and untracked GitHub CI intake return explicit `503 Service Unavailable` responses with `Retry-After` while their native-Kanban replacements are completed;
+- already-tracked GitHub PR review/merge events continue to reconcile historical jobs.
+
+## Build and verification
+
+```bash
 npm install
-
-# Configure
-cp .env.example .env
-cp configs/repos.json.example configs/repos.json
-cp configs/linear.json.example configs/linear.json
-
-# Edit .env with your API keys
-# Edit configs/repos.json with your repositories
-# Edit configs/linear.json with your Linear team/project IDs
+npm run build
+npm test
 ```
 
-### Run
+Both build and test clean `dist/` before TypeScript compilation so deleted executable modules cannot survive as stale generated JavaScript.
+
+## Historical job inspection
 
 ```bash
-# Start the supervisor (monitors and runs jobs)
-node src/bin/supervisor.ts --interval=15000 --max-concurrent=1
-
-# Start the intake server (receives webhooks, serves dashboard)
-node src/bin/intake-server.ts
-
-# Dashboard at http://localhost:4318/dashboard
+node dist/bin/jobs.js status
+node dist/bin/jobs.js show <job-id>
+node dist/bin/pr-watcher.js --once
 ```
 
-### Create a Job Manually
+Do not use job creation or dispatch commands for new work.
 
-```bash
-node src/bin/intake-text.ts \
-  --title "Fix login page timeout" \
-  --repo my-app \
-  --dispatch
-```
+## Runtime retirement checklist
 
-### Run on macOS with launchd
+Before unloading `ai.ccp.supervisor` and `ai.ccp.intake`:
 
-```bash
-# Generate and install launchd plists
-node src/bin/install-launchd.ts
-```
+1. Resolve or migrate every remaining `coded`, `running`, `preflight`, and `queued` CCP job.
+2. Verify GitHub PR merge/review handling has a native Hermes replacement or is no longer needed.
+3. Verify Sentry and other external webhook destinations point at their native-Kanban replacement.
+4. Preserve the historical `jobs/` evidence.
+5. Run a clean build and the full test suite.
+6. Unload and remove the two LaunchAgents.
+7. Confirm native Hermes Kanban can create, dispatch, review, and complete an isolated-worktree task.
 
 ## Configuration
 
-### `configs/repos.json` — Repository mappings
-
-```json
-{
-  "mappings": [
-    {
-      "key": "my-app",
-      "ownerRepo": "myorg/my-app",
-      "localPath": "/home/user/repos/my-app",
-      "aliases": ["app", "frontend"],
-      "autoMerge": true,
-      "mergeMethod": "squash"
-    }
-  ]
-}
-```
-
-### `configs/linear.json` — Linear integration
-
-```json
-{
-  "apiKeyEnv": "LINEAR_API_KEY",
-  "teamId": "your-team-uuid",
-  "teamKey": "ENG",
-  "projectIds": {
-    "product": "uuid-for-product-project",
-    "reliability": "uuid-for-reliability-project"
-  }
-}
-```
-
-### Per-Repo Auto-Merge
-
-Set `"autoMerge": true` in your repo config. CCP will:
-1. Wait for all CI checks to pass
-2. Attempt GitHub approval (skips if self-authored)
-3. Squash merge (or rebase/merge per `mergeMethod`)
-
-### Webhook Setup
-
-| Source | Endpoint | Events |
-|--------|----------|--------|
-| Sentry | `/ingest/sentry` | Internal integration with `issue` events |
-| Vercel | `/ingest/vercel` | `deployment.error`, `deployment.canceled` |
-| GitHub | `/webhook/github` | `check_run`, `pull_request` |
-| Linear | `/webhook/linear` | Issue create/update |
-
-Expose your intake server via [Tailscale Funnel](https://tailscale.com/kb/1223/tailscale-funnel/), ngrok, or a public URL.
-
-## Dashboard
-
-Access at `http://localhost:4318/dashboard` when the intake server is running.
-
-![Jobs](demo/screenshots/jobs.png)
-
-| | |
-|---|---|
-| ![Repos](demo/screenshots/repos.png) | ![PR Review](demo/screenshots/pr-review.png) |
-| ![Health](demo/screenshots/health.png) | |
-
-## Job Lifecycle
-
-```
-queued → preflight → running → coded → verified → done
-                        │
-                        ├── blocked (missing deps, can't resolve repo)
-                        ├── failed (agent error, timeout)
-                        └── coded → PR created
-                                      │
-                                      ├── checks pass + autoMerge → merged ✅
-                                      ├── checks fail → remediation job spawned 🔄
-                                      └── needs review → thread created 💬
-```
-
-## The Error→Fix Loop
-
-CCP's killer feature is the closed remediation loop:
-
-1. **Runtime error** → Sentry captures → webhook → Linear ticket created
-2. **Ticket dispatched** → coding agent fixes the bug → PR created
-3. **CI passes** → auto-merge → deploy
-4. **CI fails** → GitHub webhook → remediation job spawned with failure logs
-5. **Deploy fails** → Vercel webhook → incident ticket created
-6. Repeat until green ✅
-
-
-Linear and the former Kanban→CCP bridge are retired. Keep `configs/linear.json` disabled for historical compatibility, and do not run the intake/supervisor services for native Kanban work.
-
-## CLI Tools
-
-| Command | Description |
-|---------|-------------|
-| `node src/bin/supervisor.ts` | Main supervisor loop |
-| `node src/bin/intake-server.ts` | HTTP server for webhooks + dashboard |
-| `node src/bin/intake-text.ts` | Create jobs from text descriptions |
-| `node src/bin/jobs.ts list` | List all jobs and their states |
-| `node src/bin/jobs.ts inspect <id>` | Inspect a specific job |
-| `node src/bin/pr-watcher.ts --once` | Run one PR review cycle |
-| `node src/bin/linear-dispatch.ts` | Dispatch pending Linear tickets |
-| `node src/bin/linear-sync.ts <id>` | Sync a job's state to Linear |
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `LINEAR_API_KEY` | Yes unless Linear is disabled | Linear API key |
-| `CCP_LINEAR_DISABLED` / `CCP_DISABLE_LINEAR` | No | Set `true` to disable all Linear dispatch, polling, and sync while keeping local intake/supervisor jobs active. Equivalent config: `configs/linear.json` with `"disabled": true`. |
-| `CCP_DISCORD_RUNS_CHANNEL` | No | Discord channel for job notifications |
-| `CCP_DISCORD_ERRORS_CHANNEL` | No | Discord channel for errors |
-| `CCP_DISCORD_REVIEW_CHANNEL` | No | Discord channel for PR reviews |
-| `CCP_PR_AUTOMERGE` | No | Global auto-merge default (`false`) |
-| `CCP_PR_MERGE_METHOD` | No | Default merge method (`squash`) |
-| `CCP_INTAKE_PORT` | No | Intake server port (`4318`) |
-| `CCP_MAX_CONCURRENT` | No | Max concurrent jobs (`1`) |
-| `VERCEL_TOKEN` | No | Vercel API token |
-| `SENTRY_AUTH_TOKEN` | No | Sentry auth token |
-
-## How It Compares
-
-| | CCP | Devin | Raw Claude Code | GitHub Actions |
-|---|---|---|---|---|
-| Ticket → Code → PR | ✅ | ✅ | Manual | ❌ |
-| Auto-merge on green | ✅ | ❌ | ❌ | ✅ (limited) |
-| Error → Fix loop | ✅ | ❌ | ❌ | ❌ |
-| CI failure remediation | ✅ | ❌ | ❌ | ❌ |
-| Per-repo config | ✅ | ❌ | ❌ | ✅ |
-| Dashboard | ✅ | ✅ | ❌ | ✅ |
-| Self-hosted | ✅ | ❌ | ✅ | ❌ |
-| Cost | Your API keys | $500/mo | Your API keys | Free tier |
+- `configs/repos.json` remains authoritative only for historical job and PR reconciliation.
+- `configs/linear.json` remains disabled for historical compatibility and must not be re-enabled.
+- Secrets remain in the active profile environment or 1Password; never commit them.
 
 ## License
 
-MIT — Seize it. Fork it. Ship it.
-
-## Credits
-
-Built by [Kevin Yan](https://github.com/kyan12) and [Crab 🦀](https://openclaw.ai) — an AI coding orchestrator running on [OpenClaw](https://openclaw.ai).
+MIT.

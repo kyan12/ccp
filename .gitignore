@@ -23,3 +23,4 @@ configs/scheduling.json
 artifacts/handoffs/
 supervisor/codex-home/
 tmp/
+.worktrees/

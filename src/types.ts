@@ -1125,20 +1125,6 @@ export interface OnePasswordConfig {
   items: Record<string, { itemId: string; field?: string }>;
 }
 
-// ── Intake runner ──
-
-export interface IntakeToLinearResult {
-  ok: boolean;
-  issueId: string;
-  identifier: string;
-  url: string;
-  project: string | null;
-  state: string;
-  packet: JobPacket;
-  dispatch: unknown;
-  supervisor: unknown;
-}
-
 // ── PR watcher ──
 
 export interface PrWatcherCycleResult {
@@ -1147,21 +1133,4 @@ export interface PrWatcherCycleResult {
   reason?: string;
   watchedCount?: number;
   actions?: unknown[];
-}
-
-// ── Linear dispatch ──
-
-export interface DispatchState {
-  dispatchedIssueIds: Record<string, { identifier: string; job_id: string; at: string }>;
-  updatedAt: string | null;
-  rateLimitedOrgs?: Record<string, { until: string; at: string; reason: string }>;
-  lastPolledOrgs?: Record<string, string>;
-}
-
-export interface DispatchResult {
-  identifier: string;
-  skipped?: boolean;
-  reason?: string;
-  job_id?: string;
-  queued?: boolean;
 }
