@@ -26,6 +26,8 @@ assert.ok(buildSupervisorPlist({ envFilePath: envFile, maxConcurrent: 2 }).inclu
 const customPortPlist = buildIntakePlist({ envFilePath: envFile, port: 54321 });
 assert.ok(customPortPlist.includes('<key>CCP_INTAKE_PORT</key>'));
 assert.ok(customPortPlist.includes('<string>54321</string>'));
+assert.throws(() => buildIntakePlist({ port: '"54321"' }), /CCP_INTAKE_PORT must be an integer/);
+assert.throws(() => buildSupervisorPlist({ maxConcurrent: 'not-a-number' }), /CCP_MAX_CONCURRENT must be an integer/);
 
 console.log('Test: protected env parsing and file hardening');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccp-launchd-env-'));
