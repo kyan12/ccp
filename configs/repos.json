@@ -5,6 +5,8 @@
       "ownerRepo": "ProteusX-Consulting/proteusx-os",
       "gitUrl": "git@github.com:ProteusX-Consulting/proteusx-os.git",
       "localPath": "/Users/kyan/code-crab/repos/proteusx-os",
+      "worktree": true,
+      "parallelJobs": 2,
       "aliases": [
         "proteusx os",
         "proteusx-os",
@@ -30,6 +32,8 @@
       "ownerRepo": "kyan12/Papyrx",
       "gitUrl": "git@github.com:kyan12/Papyrx.git",
       "localPath": "/Users/kyan/code-crab/repos/Papyrx",
+      "worktree": true,
+      "parallelJobs": 2,
       "aliases": [
         "papyrx"
       ],
@@ -128,6 +132,8 @@
       "ownerRepo": "Global-Synergy-Logistics/GSLogistics",
       "gitUrl": "git@github.com:Global-Synergy-Logistics/GSLogistics.git",
       "localPath": "/Users/kyan/code-crab/repos/GSLogistics",
+      "worktree": true,
+      "parallelJobs": 2,
       "aliases": [
         "gslogistics",
         "global synergy logistics",
@@ -265,6 +271,8 @@
       "ownerRepo": "ProteusX-Consulting/licatesi-law",
       "gitUrl": "git@github.com:ProteusX-Consulting/licatesi-law.git",
       "localPath": "/Users/kyan/code-crab/repos/licatesi-law",
+      "worktree": true,
+      "parallelJobs": 2,
       "aliases": [
         "licatesi",
         "licatesi-law"
@@ -277,6 +285,8 @@
       "ownerRepo": "ProteusX-Consulting/licatesi-law-ai-workspace",
       "gitUrl": "git@github.com:ProteusX-Consulting/licatesi-law-ai-workspace.git",
       "localPath": "/Users/kyan/code-crab/repos/licatesi-law-ai-workspace",
+      "worktree": true,
+      "parallelJobs": 2,
       "aliases": [
         "licatesi-law-ai-workspace",
         "licatesi ai workspace",
