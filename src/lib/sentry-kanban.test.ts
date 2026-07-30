@@ -131,22 +131,26 @@ test('routes only exact trusted Sentry project identities, never telemetry text'
   assert.equal(task.repo, null);
   assert.match(task.body, /Canonical checkout: unresolved/);
   assert.doesNotMatch(task.body, /\/Users\/kyan\/code-crab\/repos\/proteusx-os/);
+
+  issue.project = { slug: 'proteusx/os' };
+  const malformedIdentityTask = buildSentryKanbanTask(payload, { resolveRepo: () => repo });
+  assert.equal(malformedIdentityTask.repo, null);
 });
 
 test('keeps sanitized evidence bounded and inert in task placement', () => {
   const payload = sentryPayload();
   const data = payload.data as Record<string, unknown>;
   const issue = data.issue as Record<string, unknown>;
-  issue.title = `\n# override\u0000 token=secret-value ${'x'.repeat(2_000)}`;
-  issue.culprit = `authorization: Bearer private-token ${'y'.repeat(2_000)}`;
+  issue.title = `\n# override\u0000 token=secret-value cookie=session-secret ${'x'.repeat(2_000)}`;
+  issue.culprit = `authorization: Bearer *** dsn=private-dsn session=private-session ${'y'.repeat(2_000)}`;
 
   const task = buildSentryKanbanTask(payload, { resolveRepo: () => repo });
   const evidence = extractSentryEvidence(payload);
   assert.equal(task.title, '[Sentry PROTEUSX-OS-29] production issue');
   assert.ok(evidence.title.length <= 500);
   assert.ok(evidence.culprit.length <= 500);
-  assert.doesNotMatch(task.body, /secret-value|private-token/);
-  assert.match(task.body, /token=\[REDACTED\]|authorization=\[REDACTED\]/);
+  assert.doesNotMatch(task.body, /secret-value|session-secret|private-dsn|private-session/);
+  assert.match(task.body, /token=\[REDACTED\]|cookie=\[REDACTED\]|dsn=\[REDACTED\]|session=\[REDACTED\]/);
 });
 
 test('submits to explicit board with worktree isolation and deterministic dedupe', async () => {
@@ -192,6 +196,12 @@ test('keeps unresolved repo incidents visible in a scratch task instead of dropp
 test('rejects malformed issue payloads and invalid CLI responses', async () => {
   assert.throws(
     () => extractSentryEvidence({ action: 'created', data: {} }),
+    (error: unknown) => error instanceof SentryKanbanIntakeError && error.statusCode === 422,
+  );
+  const malformedIdentity = sentryPayload();
+  ((malformedIdentity.data as Record<string, unknown>).issue as Record<string, unknown>).id = '764/1350456';
+  assert.throws(
+    () => extractSentryEvidence(malformedIdentity),
     (error: unknown) => error instanceof SentryKanbanIntakeError && error.statusCode === 422,
   );
   await assert.rejects(

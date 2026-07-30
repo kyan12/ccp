@@ -72,7 +72,8 @@ function safeText(value: unknown, maxLength = 500): string {
 }
 
 function safeIdentifier(value: unknown, fallback = ''): string {
-  return safeText(value, 150).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || fallback;
+  const text = safeText(value, 150);
+  return text && /^[A-Za-z0-9._-]+$/.test(text) ? text : fallback;
 }
 
 function safeTelemetryText(value: unknown, maxLength = 500): string {
@@ -98,7 +99,7 @@ function safeTelemetryText(value: unknown, maxLength = 500): string {
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, '[REDACTED_ID]')
     .replace(/\b\d{12,}\b/g, '[REDACTED_ID]')
     .replace(/\b(?:eyJ[A-Za-z0-9_-]{16,}(?:\.[A-Za-z0-9_-]+){1,2}|(?:gh[opsu]|sk|pk|xox[baprs])-[_A-Za-z0-9-]{12,}|AKIA[A-Z0-9]{16})\b/g, '[REDACTED_TOKEN]')
-    .replace(/\b(authorization|api[_-]?key|token|secret|password)\b\s*[:=]\s*(?:bearer\s+)?[^\s,;]+/gi, '$1=[REDACTED]')
+    .replace(/\b(authorization|api[_-]?key|token|secret|password|cookie|session|dsn)\b\s*[:=]\s*(?:bearer\s+)?[^\s,;]+/gi, '$1=[REDACTED]')
     .slice(0, maxLength);
 }
 
