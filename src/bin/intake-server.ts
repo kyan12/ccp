@@ -5,6 +5,7 @@ import path = require('path');
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
+const { submitSentryToKanban } = require('../lib/sentry-kanban');
 const { loadConfig } = require('../lib/config');
 const { getSecret } = require('../lib/secrets');
 const { constantTimeEquals: safeEquals, verifyHmacSha256, isLoopbackAddress } = require('../lib/webhook-auth');
@@ -37,21 +38,56 @@ interface ParsedBody {
   rawBody: Buffer;
 }
 
+class RequestBodyError extends Error {
+  constructor(message: string, readonly statusCode: number) {
+    super(message);
+    this.name = 'RequestBodyError';
+  }
+}
+
 function parseBody(req: http.IncomingMessage): Promise<ParsedBody> {
   return new Promise((resolve, reject) => {
+    const configuredLimit = Number(process.env.CCP_INTAKE_MAX_BODY_BYTES || 1024 * 1024);
+    const maxBodyBytes = Number.isFinite(configuredLimit) && configuredLimit > 0
+      ? Math.floor(configuredLimit)
+      : 1024 * 1024;
     const chunks: Buffer[] = [];
+    let bodyBytes = 0;
+    let settled = false;
+    const contentLength = Number(req.headers['content-length'] || 0);
+    if (Number.isFinite(contentLength) && contentLength > maxBodyBytes) {
+      settled = true;
+      req.resume();
+      reject(new RequestBodyError(`request body exceeds ${maxBodyBytes} bytes`, 413));
+      return;
+    }
     req.on('data', (chunk: Buffer | string) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bodyBytes += buffer.length;
+      if (bodyBytes > maxBodyBytes) {
+        settled = true;
+        chunks.length = 0;
+        reject(new RequestBodyError(`request body exceeds ${maxBodyBytes} bytes`, 413));
+        return;
+      }
+      chunks.push(buffer);
     });
     req.on('end', () => {
+      if (settled) return;
+      settled = true;
       try {
         const rawBody = Buffer.concat(chunks);
         resolve({ payload: rawBody.length ? JSON.parse(rawBody.toString('utf8')) : {}, rawBody });
       } catch (error) {
-        reject(error);
+        reject(error instanceof RequestBodyError ? error : new RequestBodyError('request body is not valid JSON', 400));
       }
     });
-    req.on('error', reject);
+    req.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
   });
 }
 
@@ -66,12 +102,6 @@ function verifyGitHub(req: http.IncomingMessage, rawBody: Buffer): boolean {
   const expected = getSecret('GITHUB_WEBHOOK_SECRET');
   const provided = String(req.headers['x-hub-signature-256'] || '');
   return verifyHmacSha256(expected, rawBody, provided, 'sha256=');
-}
-
-function verifyLinear(req: http.IncomingMessage, rawBody: Buffer): boolean {
-  const expected = getSecret('LINEAR_WEBHOOK_SECRET');
-  const provided = String(req.headers['linear-signature'] || '');
-  return verifyHmacSha256(expected, rawBody, provided);
 }
 
 function verifySentry(req: http.IncomingMessage, rawBody: Buffer): boolean {
@@ -373,6 +403,11 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
   try {
     const url = new URL(req.url!, `http://${req.headers.host}`);
 
+    if (req.method === 'POST' && url.pathname === '/webhook/linear') {
+      json(res, 410, { ok: false, retired: true, error: 'Linear intake is retired; use native Hermes Kanban' });
+      return;
+    }
+
     // ── Dashboard ──
     if (req.method === 'GET' && url.pathname === '/') {
       res.writeHead(302, { Location: '/dashboard' });
@@ -440,7 +475,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       const sentryAction = (payload.action || '') as string;
       const sentryResource = (payload.resource || '') as string;
       if (sentryResource === 'installation' || sentryAction === 'installation') {
-        process.stdout.write(`[sentry-webhook] lifecycle event: ${sentryAction} ${sentryResource}\n`);
+        process.stdout.write('[sentry-webhook] acknowledged lifecycle event\n');
         json(res, 200, { ok: true, action: 'ack-lifecycle' });
         return;
       }
@@ -450,10 +485,21 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
           json(res, 200, { ok: true, action: 'skipped', reason: sentryAction });
           return;
         }
-        const issue = (payload.data as Record<string, unknown>).issue as Record<string, unknown>;
-        process.stdout.write(`[sentry-webhook] processing ${sentryAction} issue: ${issue.shortId || issue.title}\n`);
+        process.stdout.write('[sentry-webhook] processing issue webhook\n');
+      } else {
+        process.stderr.write('[sentry-webhook] rejected malformed issue payload\n');
+        json(res, 422, { ok: false, action: 'validation-failed', retryable: false, error: 'Sentry issue payload is missing data.issue' });
+        return;
       }
-      retiredIntake(res, 'sentry', true);
+      try {
+        json(res, 200, await submitSentryToKanban(payload));
+      } catch (error) {
+        const intakeError = error as Error & { statusCode?: number };
+        const status = typeof intakeError.statusCode === 'number' ? intakeError.statusCode : 503;
+        const publicError = status >= 500 ? 'native Kanban task creation failed' : intakeError.message;
+        process.stderr.write(`[sentry-webhook] native Kanban intake failed (HTTP ${status})\n`);
+        json(res, status, { ok: false, action: 'kanban-create-failed', retryable: status >= 500, error: publicError });
+      }
       return;
     }
 
@@ -710,10 +756,12 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       retiredIntake(res, 'linear');
       return;
     }
-
     json(res, 404, { ok: false, error: 'not found' });
   } catch (error) {
-    json(res, 500, { ok: false, error: (error as Error).message });
+    const requestError = error as Error & { statusCode?: number };
+    const status = typeof requestError.statusCode === 'number' ? requestError.statusCode : 500;
+    const message = status >= 500 ? 'internal intake error' : requestError.message;
+    json(res, status, { ok: false, error: message });
   }
 });
 
