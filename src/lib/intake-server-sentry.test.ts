@@ -37,12 +37,18 @@ function post(port: number, rawBody: Buffer, signature = '', includeContentLengt
   });
 }
 
-async function withIntakeServer(run: (port: number, marker: string) => Promise<void>): Promise<void> {
+async function withIntakeServer(
+  run: (port: number, marker: string, readStderr: () => string) => Promise<void>,
+): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccp-sentry-http-'));
   const marker = path.join(root, 'hermes-called');
   const fakeHermes = path.join(root, 'hermes');
   fs.mkdirSync(path.join(root, 'configs'), { recursive: true });
-  fs.writeFileSync(fakeHermes, `#!/bin/sh\nprintf called > ${JSON.stringify(marker)}\nexit 99\n`, { mode: 0o755 });
+  fs.writeFileSync(
+    fakeHermes,
+    `#!/bin/sh\nprintf called > ${JSON.stringify(marker)}\nprintf 'synthetic hermes failure\\n' >&2\nexit 99\n`,
+    { mode: 0o755 },
+  );
   const port = 20_000 + Math.floor(Math.random() * 20_000);
   const secret = 'test-sentry-secret';
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'intake-server.js')], {
@@ -72,7 +78,7 @@ async function withIntakeServer(run: (port: number, marker: string) => Promise<v
         reject(new Error(`intake server exited ${code}: ${stderr}`));
       });
     });
-    await run(port, marker);
+    await run(port, marker, () => stderr);
   } finally {
     child.kill('SIGTERM');
     if (child.exitCode === null) {
@@ -100,5 +106,29 @@ test('rejects oversized unauthenticated request bodies before signature verifica
     assert.equal(result.status, 413);
     assert.equal(result.body.ok, false);
     assert.equal(fs.existsSync(marker), false);
+  });
+});
+
+test('logs internal Sentry task-creation failures while keeping the HTTP response generic', async () => {
+  await withIntakeServer(async (port, marker, readStderr) => {
+    const rawBody = Buffer.from(JSON.stringify({
+      action: 'created',
+      data: {
+        issue: {
+          id: '1350456',
+          shortId: 'CCP-42',
+          title: 'Synthetic production failure',
+          project: { slug: 'ccp' },
+        },
+      },
+    }));
+    const signature = crypto.createHmac('sha256', 'test-sentry-secret').update(rawBody).digest('hex');
+    const result = await post(port, rawBody, signature);
+
+    assert.equal(result.status, 503);
+    assert.equal(result.body.error, 'native Kanban task creation failed');
+    assert.equal(fs.existsSync(marker), true);
+    assert.doesNotMatch(JSON.stringify(result.body), /synthetic hermes failure/);
+    assert.match(readStderr(), /native Kanban task creation failed: synthetic hermes failure/);
   });
 });

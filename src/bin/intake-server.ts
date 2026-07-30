@@ -497,7 +497,9 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
         const intakeError = error as Error & { statusCode?: number };
         const status = typeof intakeError.statusCode === 'number' ? intakeError.statusCode : 503;
         const publicError = status >= 500 ? 'native Kanban task creation failed' : intakeError.message;
-        process.stderr.write(`[sentry-webhook] native Kanban intake failed (HTTP ${status})\n`);
+        process.stderr.write(
+          `[sentry-webhook] native Kanban intake failed (HTTP ${status}): ${intakeError.stack || intakeError.message}\n`,
+        );
         json(res, status, { ok: false, action: 'kanban-create-failed', retryable: status >= 500, error: publicError });
       }
       return;
@@ -750,17 +752,14 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       return;
     }
 
-    // Linear webhook is retired; authenticate before returning the explicit terminal response.
-    if (url.pathname === '/webhook/linear') {
-      if (!verifyLinear(req, rawBody)) { json(res, 403, { ok: false, error: 'bad Linear signature' }); return; }
-      retiredIntake(res, 'linear');
-      return;
-    }
     json(res, 404, { ok: false, error: 'not found' });
   } catch (error) {
     const requestError = error as Error & { statusCode?: number };
     const status = typeof requestError.statusCode === 'number' ? requestError.statusCode : 500;
     const message = status >= 500 ? 'internal intake error' : requestError.message;
+    if (status >= 500) {
+      process.stderr.write(`[intake] unhandled request error (HTTP ${status}): ${requestError.stack || requestError.message}\n`);
+    }
     json(res, status, { ok: false, error: message });
   }
 });

@@ -4,9 +4,10 @@ A lightweight local HTTP server receives the remaining authenticated CCP webhook
 
 ## Endpoints
 
-- `POST /ingest/vercel`
+- `POST /ingest/vercel` returns retryable `503`; its former CCP/Linear producer is retired and no work is reported as queued
 - `POST /ingest/sentry`
-- `POST /ingest/manual`
+- `POST /ingest/manual` returns `410 Gone`; its former CCP/Linear producer is retired
+- `POST /api/intake` returns `410 Gone` after successful authentication; its former CCP/Linear producer is retired
 - `POST /webhook/linear` returns `410 Gone`; Linear intake is retired
 
 ## Run locally
@@ -50,9 +51,9 @@ As audited on 2026-07-30, the `proteusx-consulting` internal Sentry app `opencla
 
 Keep `ai.ccp.intake` loaded until the native Kanban path has been deployed, a signed synthetic issue fixture has returned a real task id without creating a duplicate on retry, and the Sentry app webhook destination has either moved to a non-CCP Hermes-owned receiver or been intentionally removed after confirming no issue intake is required. The final retirement lane must also prove all other retained intake routes have migrated or been retired before unloading the shared process.
 
-## App-dispatched fix requests
+## Retired app-dispatched fix requests
 
-External applications can submit fix requests via `POST /api/intake`. This endpoint supports HMAC signature verification and webhook callbacks.
+`POST /api/intake` retains HMAC verification so unauthenticated callers still fail closed, but authenticated requests receive an explicit terminal `410 Gone`. It does not create a Linear ticket, enqueue a CCP job, or report work as queued. Submit replacement work through native Hermes Kanban on `proteusx-engineering`.
 
 ### Endpoint
 
@@ -78,11 +79,9 @@ If `CONTROL_PLANE_SECRET` is set, the server verifies the `X-Signature-256` head
 
 ### Behavior
 
-1. Verifies HMAC signature (if `CONTROL_PLANE_SECRET` is set)
-2. Auto-onboards unknown repos via the `onboard-repo` module (see [routing.md](routing.md#auto-onboarding))
-3. Legacy app intake still creates a Linear ticket until its separate migration/removal lane completes
-4. Optionally auto-dispatches to the job queue
-5. Fires webhook callbacks as the job progresses (see [webhook-callback.md](webhook-callback.md))
+1. Requires and verifies the configured `CONTROL_PLANE_SECRET` HMAC signature.
+2. Returns `410 Gone` with `retired: true` and `retryable: false`.
+3. Does not auto-onboard repositories, create tickets, enqueue jobs, or fire lifecycle callbacks.
 
 ### Dashboard and API endpoints
 
