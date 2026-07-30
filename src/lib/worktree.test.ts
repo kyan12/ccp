@@ -235,6 +235,22 @@ function runTests(): void {
     });
   }
 
+  console.log('\nTest: acquireRequiredWorktree fails closed instead of sharing canonical checkout');
+  {
+    const ccpRoot = mkTmpRoot('required');
+    runWithFakeRoot(ccpRoot, () => {
+      const { acquireRequiredWorktree } = require('./worktree');
+      assert(acquireRequiredWorktree(mkMapping('/canonical', { worktree: false }), 'job1') === null, 'disabled worktrees return null');
+      let threw = false;
+      try {
+        acquireRequiredWorktree(mkMapping('/nonexistent/path/xyzzy', { key: 'required', worktree: true, parallelJobs: 2 }), 'job1');
+      } catch (e) {
+        threw = /source repo missing/.test((e as Error).message);
+      }
+      assert(threw, 'enabled worktree allocation failure throws instead of returning canonical path');
+    });
+  }
+
   console.log('\nTest: releaseWorktree removes the worktree and prunes admin state');
   {
     const ccpRoot = mkTmpRoot('rel1');

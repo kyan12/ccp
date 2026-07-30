@@ -78,9 +78,8 @@ export interface AcquireResult {
  * target simply swings from `mapping.localPath` to this path.
  *
  * Errors are thrown rather than swallowed — a worktree that fails to
- * allocate is a hard failure; jobs.ts catches this and falls back to
- * `localPath` so the job can still run (with the usual per-repo
- * serialization). Callers that need silent-skip semantics can wrap.
+ * allocate is a hard failure. jobs.ts must refuse to start the worker;
+ * falling back to localPath is unsafe whenever parallelJobs > 1.
  */
 export function acquireWorktree(mapping: RepoMapping, jobId: string): AcquireResult {
   const git = commandExists('git');
@@ -125,6 +124,11 @@ export function acquireWorktree(mapping: RepoMapping, jobId: string): AcquireRes
     throw new Error(`git worktree add failed: ${(add.stderr || add.stdout || '').trim()}`);
   }
   return { path: wtPath, sourceRepo: mapping.localPath, reused: false };
+}
+
+export function acquireRequiredWorktree(mapping: RepoMapping | null | undefined, jobId: string): AcquireResult | null {
+  if (!isWorktreeEnabled(mapping)) return null;
+  return acquireWorktree(mapping!, jobId);
 }
 
 export interface ReleaseResult {

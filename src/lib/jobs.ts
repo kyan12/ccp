@@ -15,7 +15,7 @@ import { runValidation, summarizeReport, shouldGateOnValidation, buildValidation
 import { buildSmokeBlocker } from './smoke';
 const { findRepoByPath } = require('./repos');
 const { loadRepoMemory } = require('./memory');
-const { isWorktreeEnabled, getParallelJobLimit, acquireWorktree, releaseWorktree } = require('./worktree');
+const { getParallelJobLimit, acquireRequiredWorktree, releaseWorktree } = require('./worktree');
 const { runPlanner } = require('./planner');
 const { inspectDiscordTransport, hasDiscordTransport, sendDiscordMessage, createDiscordThread } = require('./discord');
 const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./linear');
@@ -2106,29 +2106,27 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
   const logFile = path.join(jobDir(jobId), 'worker.log');
   const promptFile = path.join(jobDir(jobId), 'prompt.txt');
 
-  // Phase 3: if this repo opts into worktrees, allocate one now and
-  // use its path as the cd target. Falls back to packet.repo on
-  // allocation failure so a transient git issue doesn't brick the
-  // job — downstream per-repo serial gate still prevents concurrent
-  // workers from colliding on localPath. Stash the resolved workdir
-  // on JobStatus so finalizeJob / reconcileJob survive supervisor
-  // restarts mid-job.
+  // Phase 3: repos that opt into worktrees must run in an isolated
+  // checkout. Allocation failure is a hard start failure: falling back
+  // to packet.repo would let parallelJobs > 1 workers share the
+  // canonical checkout and corrupt each other's branches. Stash the
+  // resolved workdir on JobStatus so finalizeJob / reconcileJob survive
+  // supervisor restarts mid-job.
   const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
   let workdir: string | null = null;
-  if (mapping && isWorktreeEnabled(mapping)) {
-    try {
-      const acquired = acquireWorktree(mapping, jobId);
+  try {
+    const acquired = acquireRequiredWorktree(mapping, jobId);
+    if (acquired) {
       workdir = acquired.path;
       appendLog(
         jobId,
         `[${nowIso()}] worktree ${acquired.reused ? 'reused' : 'acquired'}: ${acquired.path}`,
       );
-    } catch (err) {
-      appendLog(
-        jobId,
-        `[${nowIso()}] worktree acquire failed — falling back to localPath: ${(err as Error).message}`,
-      );
     }
+  } catch (err) {
+    const reason = `worktree acquire failed; refusing unsafe localPath fallback: ${(err as Error).message}`;
+    appendLog(jobId, `[${nowIso()}] ${reason}`);
+    throw new Error(reason);
   }
   if (workdir) {
     saveStatus(jobId, { workdir });

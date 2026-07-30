@@ -38,6 +38,16 @@ console.log('\nTest: production repo mappings use canonical Mac Studio local pat
   }
 }
 
+console.log('\nTest: high-volume repos use isolated two-job worktrees');
+{
+  for (const key of ['proteusx-os', 'papyrx', 'gslogistics', 'licatesi-law', 'licatesi-law-ai-workspace']) {
+    const mapping = mappings.find((entry) => entry.key === key);
+    assert.ok(mapping, `${key} mapping exists`);
+    assert.equal(mapping?.worktree, true, `${key} enables per-job worktrees`);
+    assert.equal(mapping?.parallelJobs, 2, `${key} allows two concurrent CCP jobs`);
+  }
+}
+
 console.log('\nTest: attention-pipeline-ios mapping is present, locked down, and resolves to an existing git repo');
 {
   const mapping = mappings.find((entry) => entry.key === 'attention-pipeline-ios') as (RepoMapping & { baseBranch?: string }) | undefined;
