@@ -2,8 +2,7 @@
  * auto-remediation.test.ts — Tests for structured auto-remediation status helpers.
  *
  * Covers summarizeAutoRemediation disposition logic, formatAutoRemediationLine
- * rendering, downgradeWebhookStatus / downgradeHandoffStatus callbacks, and
- * isRemediationJobId pattern matching.
+ * rendering, downgradeWebhookStatus callbacks, and isRemediationJobId pattern matching.
  */
 
 import type { AutoRemediationStatus } from '../types';
@@ -14,7 +13,6 @@ const {
   summarizeAutoRemediation,
   formatAutoRemediationLine,
   downgradeWebhookStatus,
-  downgradeHandoffStatus,
 } = require('./auto-remediation');
 
 let passed = 0;
@@ -322,32 +320,6 @@ console.log('\nTest: downgradeWebhookStatus');
   );
   assert(
     downgradeWebhookStatus('failed', undefined) === 'failed',
-    'failed stays failed when auto is undefined',
-  );
-}
-
-// ── downgradeHandoffStatus ─────────────────────────────────────
-
-console.log('\nTest: downgradeHandoffStatus');
-{
-  assert(
-    downgradeHandoffStatus('failed', { disposition: 'superseded', superseding: true }) === 'blocked',
-    'failed → blocked when superseding',
-  );
-  assert(
-    downgradeHandoffStatus('failed', { disposition: 'queued', superseding: false }) === 'blocked',
-    'failed → blocked when auto-remediation is queued',
-  );
-  assert(
-    downgradeHandoffStatus('done', { disposition: 'superseded', superseding: true }) === 'done',
-    'done stays done even when superseding',
-  );
-  assert(
-    downgradeHandoffStatus('blocked', { disposition: 'superseded', superseding: true }) === 'blocked',
-    'blocked stays blocked when superseding',
-  );
-  assert(
-    downgradeHandoffStatus('failed', undefined) === 'failed',
     'failed stays failed when auto is undefined',
   );
 }

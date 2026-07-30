@@ -557,29 +557,7 @@ export interface JobPacket {
   decisionMode?: DecisionMode;
   /** Full per-job decision policy override. */
   decisionPolicy?: DecisionPolicyConfig;
-
-  // ── Structured handoff fields (Hermes ↔ Code Crab) ──
-  handoff_id?: string | null;
-  origin?: string;
-  requestor?: string;
-  why_it_matters?: string;
-  context_refs?: string[];
-  callback_required?: boolean;
-  callback_url?: string;
-  writeback_required?: string[];
-  /** Explicit deliverable expected from Code Crab. */
-  exact_deliverable?: string;
-  /**
-   * How the completion result should be routed back:
-   *  - 'direct': CCP fires callback straight to the requestor/origin.
-   *  - 'relay':  CCP returns to Code Crab, who relays a human-readable
-   *              message to the requestor via the origin channel.
-   */
-  completion_routing?: CompletionRouting;
 }
-
-/** Explicit routing enum — never inferred from other fields. */
-export type CompletionRouting = 'direct' | 'relay';
 
 export type DecisionMode = 'ask' | 'auto' | 'hybrid' | 'never-block';
 
@@ -676,27 +654,12 @@ export interface PrReviewIntegration {
   previewUrl?: string | null;
 }
 
-/**
- * PRO-583: stamped once when pr-watcher (or another reconciliation path)
- * has fired a structured Hermes handoff callback. Guarantees we don't
- * double-fire on subsequent watcher cycles. Absent on jobs that never
- * had a handoff_id or that were finalized through the regular finalizeJob
- * path (which fires the callback inline and never enters this branch).
- */
-export interface HandoffCallbackIntegration {
-  fired: boolean;
-  at: string;
-  via: 'pr-watcher' | 'finalize' | 'reconcile';
-}
-
 export interface JobIntegrations {
   linear?: LinearIntegration;
   prReview?: PrReviewIntegration;
   remediation?: RemediationResult;
   /** Phase 2b: record of the __valfix remediation spawn attempt (if any). */
   validationRemediation?: RemediationResult;
-  /** PRO-583: idempotency record for handoff callbacks fired outside finalizeJob. */
-  handoffCallback?: HandoffCallbackIntegration;
   /**
    * Phase 4 (PR B): most recent smoke-test result for this job's preview
    * URL. Updated each pr-watcher cycle once the preview URL is known.
@@ -976,24 +939,6 @@ export interface LinearIssue {
   team?: { id: string; key: string; name: string } | null;
 }
 
-export interface LinearJobLink {
-  issueId: string;
-  identifier: string;
-  url: string;
-  projectName: string | null;
-}
-
-export interface LinearSyncResult {
-  ok: boolean;
-  skipped?: boolean;
-  reason?: string;
-  issueId?: string;
-  identifier?: string;
-  url?: string;
-  state?: string;
-  projectName?: string | null;
-}
-
 // ── Discord ──
 
 export interface DiscordMessageResult {
@@ -1125,7 +1070,6 @@ export interface SupervisorCycleSummary {
   started_at: string;
   finished_at?: string;
   max_concurrent: number;
-  linearDispatched: unknown[];
   reconciled: unknown[];
   started: unknown[];
   skipped: unknown[];
@@ -1181,20 +1125,6 @@ export interface OnePasswordConfig {
   items: Record<string, { itemId: string; field?: string }>;
 }
 
-// ── Intake runner ──
-
-export interface IntakeToLinearResult {
-  ok: boolean;
-  issueId: string;
-  identifier: string;
-  url: string;
-  project: string | null;
-  state: string;
-  packet: JobPacket;
-  dispatch: unknown;
-  supervisor: unknown;
-}
-
 // ── PR watcher ──
 
 export interface PrWatcherCycleResult {
@@ -1203,21 +1133,4 @@ export interface PrWatcherCycleResult {
   reason?: string;
   watchedCount?: number;
   actions?: unknown[];
-}
-
-// ── Linear dispatch ──
-
-export interface DispatchState {
-  dispatchedIssueIds: Record<string, { identifier: string; job_id: string; at: string }>;
-  updatedAt: string | null;
-  rateLimitedOrgs?: Record<string, { until: string; at: string; reason: string }>;
-  lastPolledOrgs?: Record<string, string>;
-}
-
-export interface DispatchResult {
-  identifier: string;
-  skipped?: boolean;
-  reason?: string;
-  job_id?: string;
-  queued?: boolean;
 }

@@ -4,7 +4,7 @@ import { spawnSync } from 'child_process';
 import type {
   JobPacket, JobStatus, JobResult, RepoProof,
   PRReviewResult, PrReviewIntegration, RemediationResult, DiscordMessageResult, DiscordThreadResult,
-  SupervisorCycleSummary, PreflightResult, LinearSyncResult, PrWatcherCycleResult,
+  SupervisorCycleSummary, PreflightResult, PrWatcherCycleResult,
   ReviewComment, AddressedComment, ValidationReport,
   AutoRemediationStatus, HarnessFailureInfo,
 } from '../types';
@@ -18,19 +18,15 @@ const { loadRepoMemory } = require('./memory');
 const { getParallelJobLimit, acquireRequiredWorktree, releaseWorktree } = require('./worktree');
 const { runPlanner } = require('./planner');
 const { inspectDiscordTransport, hasDiscordTransport, sendDiscordMessage, createDiscordThread } = require('./discord');
-const { syncJobToLinear, postCompletionComment, getJobLinearLink } = require('./linear');
-const { dispatchLinearIssues } = require('./linear-dispatch');
 const { reviewPr } = require('./pr-review');
 const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = require('./outage');
 const { prReviewPolicy, isNightlyPacket } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
-const { fireHandoffCallback } = require('./handoff-callback');
 const {
   summarizeAutoRemediation,
   formatAutoRemediationLine,
   isRemediationJobId,
   downgradeWebhookStatus,
-  downgradeHandoffStatus,
 } = require('./auto-remediation');
 const { fetchPrReviewComments, postRemediationComments } = require('./pr-comments');
 const {
@@ -543,34 +539,6 @@ function buildPrompt(packet: JobPacket, memory?: string | null, plan?: string | 
       ].join('\n'),
     );
   }
-  // Structured handoff context — lets the worker understand who asked,
-  // why, and what completion deliverables are expected.
-  if (packet.handoff_id) {
-    const hLines = [
-      `Handoff ID: ${packet.handoff_id}`,
-      packet.origin ? `Origin: ${packet.origin}` : null,
-      packet.requestor ? `Requestor: ${packet.requestor}` : null,
-      packet.why_it_matters ? `Why it matters: ${packet.why_it_matters}` : null,
-      packet.exact_deliverable ? `Exact deliverable: ${packet.exact_deliverable}` : null,
-      packet.completion_routing ? `Completion routing: ${packet.completion_routing}` : null,
-      packet.callback_required ? 'Callback required: yes — your final summary will be sent back to the requestor.' : null,
-    ].filter(Boolean);
-    if (packet.context_refs?.length) {
-      hLines.push(`Context references:\n  - ${packet.context_refs.join('\n  - ')}`);
-    }
-    if (packet.writeback_required?.length) {
-      hLines.push(`Writeback required:\n  - ${packet.writeback_required.join('\n  - ')}`);
-    }
-    bits.push(
-      [
-        'Handoff context (this task was filed through a structured Business Crab → Code Crab handoff):',
-        '--- BEGIN HANDOFF ---',
-        ...hLines,
-        '--- END HANDOFF ---',
-      ].join('\n'),
-    );
-  }
-
   bits.push(`Ticket: ${packet.ticket_id || 'UNTRACKED'}`);
   bits.push(`Goal: ${packet.goal || 'No goal provided'}`);
   if (packet.constraints?.length) bits.push(`Constraints:\n- ${packet.constraints.join('\n- ')}`);
@@ -977,48 +945,6 @@ function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result:
   const created = createJob(remediationPacket);
   appendLog(jobId, `[${nowIso()}] remediation job queued: ${created.jobId}`);
   return { ok: true, skipped: false, job_id: created.jobId, branch: remediationPacket.working_branch, blockerType: prReview.blockerType || 'unknown' };
-}
-
-async function maybeSyncLinear(jobId: string): Promise<LinearSyncResult> {
-  const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
-  const status = loadStatus(jobId);
-  const result = readJson(resultPath(jobId)) as unknown as JobResult;
-  try {
-    const sync: LinearSyncResult = await syncJobToLinear({ packet, status, result });
-    const current = loadStatus(jobId);
-    saveStatus(jobId, {
-      integrations: {
-        ...(current.integrations || {}),
-        linear: {
-          attempted_at: nowIso(),
-          ok: !!sync.ok,
-          skipped: !!sync.skipped,
-          reason: sync.reason || null,
-          issueId: sync.issueId || null,
-          identifier: sync.identifier || null,
-          url: sync.url || null,
-          state: sync.state || null,
-        },
-      },
-    });
-    appendLog(jobId, `[${nowIso()}] linear sync: ${sync.ok ? 'ok' : (sync.skipped ? `skipped (${sync.reason})` : 'failed')}`);
-    return sync;
-  } catch (error) {
-    const current = loadStatus(jobId);
-    saveStatus(jobId, {
-      integrations: {
-        ...(current.integrations || {}),
-        linear: {
-          attempted_at: nowIso(),
-          ok: false,
-          skipped: false,
-          reason: (error as Error).message,
-        },
-      },
-    });
-    appendLog(jobId, `[${nowIso()}] linear sync error: ${(error as Error).message}`);
-    return { ok: false, skipped: false, reason: (error as Error).message };
-  }
 }
 
 function notifyStart(jobId: string): void {
@@ -1530,7 +1456,7 @@ function runPostWorkerValidation(
   }
 }
 
-async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string; exitCode: number; result: JobResult; linear: LinearSyncResult }> {
+async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string; exitCode: number; result: JobResult }> {
   const status = loadStatus(jobId);
   const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
   const logText = fs.readFileSync(path.join(jobDir(jobId), 'worker.log'), 'utf8');
@@ -1861,8 +1787,6 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     }
   }
 
-  const linear = await maybeSyncLinear(jobId);
-
   const currentAfterIntegrations = loadStatus(jobId);
   saveStatus(jobId, {
     integrations: {
@@ -1970,15 +1894,6 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       },
       discord_thread_id: threadId,
     });
-
-    // Post completion comment to Linear ticket
-    const didWork = result.commit !== 'none' || ['blocked', 'coded', 'done', 'verified', 'dirty-repo', 'harness-failure'].includes(result.state);
-    if (didWork && packet.ticket_id) {
-      const link = getJobLinearLink(jobId);
-      if (link?.issueId) {
-        postCompletionComment(link.issueId, result, { discordThreadId: threadId }).catch(() => null);
-      }
-    }
   }
 
   // Fire webhook callback if the job has a webhookUrl in metadata (app-dispatched fixes)
@@ -1994,38 +1909,6 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     prUrl: result.pr_url || null, error: result.blocker || null,
   });
   if (whLog) appendLog(jobId, `[${nowIso()}] ${whLog}`);
-
-  // Fire structured handoff callback when this job is part of a Hermes handoff
-  const handoffStatusMap: Record<string, 'done' | 'blocked' | 'failed'> = {
-    coded: 'done', done: 'done', verified: 'done',
-    blocked: 'blocked', failed: 'failed',
-    'no-op': 'done', 'dirty-repo': 'failed', 'harness-failure': 'failed',
-  };
-  const baseHandoffStatus = handoffStatusMap[finalState] || 'failed';
-  const handoffStatus = downgradeHandoffStatus(baseHandoffStatus, result.autoRemediation);
-  const hcLog = fireHandoffCallback({
-    packet,
-    status: handoffStatus,
-    summary: result.summary || `Job ${jobId} finished with state: ${finalState}`,
-    artifacts: {
-      pr: result.pr_url || '',
-      commit: result.commit || '',
-      branch: result.branch || '',
-    },
-    blockers: result.blocker ? [result.blocker] : [],
-  });
-  if (hcLog) {
-    appendLog(jobId, `[${nowIso()}] ${hcLog}`);
-    // PRO-583: stamp the same idempotency record pr-watcher uses so the
-    // watcher cycle doesn't double-fire on a subsequent merge detection.
-    const cur = loadStatus(jobId);
-    saveStatus(jobId, {
-      integrations: {
-        ...(cur.integrations || {}),
-        handoffCallback: { fired: true, at: nowIso(), via: 'finalize' },
-      },
-    });
-  }
 
   // Outage circuit breaker: detect API failures and trigger outage mode.
   // Per-agent (PR B): log + state file are keyed by whichever driver actually
@@ -2076,10 +1959,10 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     );
   }
 
-  return { ok: true, state: finalState, exitCode, result, linear };
+  return { ok: true, state: finalState, exitCode, result };
 }
 
-async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string; live?: boolean; exitCode?: number; result?: JobResult; linear?: LinearSyncResult }> {
+async function reconcileJob(jobId: string): Promise<{ ok: boolean; state: string; live?: boolean; exitCode?: number; result?: JobResult }> {
   const status = loadStatus(jobId);
   if (status.state === 'running' && !tmuxSessionAlive(status.tmux_session)) {
     return await finalizeJob(jobId);
@@ -2670,18 +2553,11 @@ async function runSupervisorCycle(options: { maxConcurrent?: number } = {}): Pro
   const summary: SupervisorCycleSummary = {
     started_at: nowIso(),
     max_concurrent: maxConcurrent,
-    linearDispatched: [],
     reconciled: [],
     started: [],
     skipped: [],
     errors: [],
   };
-
-  try {
-    summary.linearDispatched = await dispatchLinearIssues();
-  } catch (error) {
-    summary.errors.push({ action: 'linear-dispatch', error: (error as Error).message });
-  }
 
   const jobs = listJobs();
   const running = jobs.filter((job) => job.state === 'running');
