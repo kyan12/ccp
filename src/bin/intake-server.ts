@@ -8,6 +8,7 @@ const execFileAsync = promisify(execFile);
 const { loadConfig } = require('../lib/config');
 const { getSecret } = require('../lib/secrets');
 const { constantTimeEquals: safeEquals, verifyHmacSha256, isLoopbackAddress } = require('../lib/webhook-auth');
+const { retiredGitHubWebhookResponse } = require('../lib/github-webhook-retirement');
 const { listJobs, jobsByState, loadStatus, readJson, healthCheck, packetPath, resultPath, jobDir } = require('../lib/jobs');
 
 const port: number = Number(process.env.CCP_INTAKE_PORT || 4318);
@@ -37,22 +38,25 @@ interface ParsedBody {
   rawBody: Buffer;
 }
 
-function parseBody(req: http.IncomingMessage): Promise<ParsedBody> {
+function readRawBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer | string) => {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
     req.on('end', () => {
-      try {
-        const rawBody = Buffer.concat(chunks);
-        resolve({ payload: rawBody.length ? JSON.parse(rawBody.toString('utf8')) : {}, rawBody });
-      } catch (error) {
-        reject(error);
-      }
+      resolve(Buffer.concat(chunks));
     });
     req.on('error', reject);
   });
+}
+
+async function parseBody(req: http.IncomingMessage): Promise<ParsedBody> {
+  const rawBody = await readRawBody(req);
+  return {
+    payload: rawBody.length ? JSON.parse(rawBody.toString('utf8')) : {},
+    rawBody,
+  };
 }
 
 function verifyVercel(req: http.IncomingMessage): boolean {
@@ -409,6 +413,20 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
     // ── Ingest routes (existing) ──
     if (req.method !== 'POST') {
       json(res, 405, { ok: false, error: 'method not allowed' });
+      return;
+    }
+
+    // Authenticate GitHub's exact raw bytes before attempting JSON parsing.
+    // The retired endpoint does not need a decoded payload: authenticated
+    // deliveries receive the terminal drain response even when JSON is malformed.
+    if (url.pathname === '/webhook/github') {
+      const rawBody = await readRawBody(req);
+      const retired = retiredGitHubWebhookResponse({
+        secret: getSecret('GITHUB_WEBHOOK_SECRET'),
+        rawBody,
+        signature: String(req.headers['x-hub-signature-256'] || ''),
+      });
+      json(res, retired.status, retired.body);
       return;
     }
 

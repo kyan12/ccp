@@ -159,7 +159,10 @@ function classifyPr(pr: Record<string, unknown>): PRClassification {
   };
 }
 
-function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }: { prUrl: string; autoMerge?: boolean; mergeMethod?: string }): PRReviewResult {
+function reviewPr({ prUrl, autoMerge = false }: { prUrl: string; autoMerge?: boolean; mergeMethod?: string }): PRReviewResult {
+  if (autoMerge) {
+    throw new Error('CCP PR mutation is retired; native Hermes Kanban owns merge decisions');
+  }
   const ref = parsePrUrl(prUrl);
   if (!ref) throw new Error('invalid PR URL');
   const pr = ghJson([
@@ -200,44 +203,6 @@ function reviewPr({ prUrl, autoMerge = false, mergeMethod = 'squash' }: { prUrl:
 
   // If already merged, skip review/merge logic
   if (alreadyMerged) return result;
-
-  if (analysis.disposition === 'approve' && autoMerge) {
-    const gh = commandExists('gh') || 'gh';
-
-    const reviewOut = run(gh, ['pr', 'review', String(ref.number), '--repo', ref.ownerRepo, '--approve', '--body', 'Auto-merge: checks green, mergeable.']);
-    const selfApproval = /Can.?not approve your own pull request/i.test((reviewOut.stderr || '') + (reviewOut.stdout || ''));
-    const alreadyReviewed = /already reviewed/i.test((reviewOut.stderr || '') + (reviewOut.stdout || ''));
-    if (reviewOut.status !== 0 && !selfApproval && !alreadyReviewed) {
-      result.ok = false;
-      result.disposition = 'hold';
-      result.blockers.push(`approve failed: ${(reviewOut.stderr || reviewOut.stdout || '').trim()}`);
-      return result;
-    }
-
-    const mergeArgs = ['pr', 'merge', String(ref.number), '--repo', ref.ownerRepo, '--auto', '--delete-branch'];
-    if (mergeMethod === 'rebase') mergeArgs.push('--rebase');
-    else if (mergeMethod === 'merge') mergeArgs.push('--merge');
-    else mergeArgs.push('--squash');
-    const mergeOut = run(gh, mergeArgs);
-
-    if (mergeOut.status === 0) {
-      result.autoMergeEnabled = true;
-      result.merged = /merged pull request/i.test((mergeOut.stdout || '') + (mergeOut.stderr || ''));
-    } else {
-      const directArgs = ['pr', 'merge', String(ref.number), '--repo', ref.ownerRepo, '--delete-branch'];
-      if (mergeMethod === 'rebase') directArgs.push('--rebase');
-      else if (mergeMethod === 'merge') directArgs.push('--merge');
-      else directArgs.push('--squash');
-      const directOut = run(gh, directArgs);
-      if (directOut.status === 0) {
-        result.autoMergeEnabled = true;
-        result.merged = true;
-      } else {
-        result.disposition = 'hold';
-        result.blockers.push(`merge failed: ${(directOut.stderr || directOut.stdout || '').trim()}`);
-      }
-    }
-  }
 
   return result;
 }

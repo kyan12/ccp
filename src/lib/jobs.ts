@@ -701,7 +701,7 @@ function maybeReviewPr(jobId: string, result: JobResult): PRReviewResult & { ski
     return { ok: false, skipped: true, reason: !result?.pr_url ? 'no PR URL' : 'PR review disabled' } as PRReviewResult & { skipped?: boolean; reason?: string };
   }
   try {
-    const review: PRReviewResult = reviewPr({ prUrl: result.pr_url, autoMerge: policy.autoMerge, mergeMethod: policy.mergeMethod });
+    const review: PRReviewResult = reviewPr({ prUrl: result.pr_url, autoMerge: false, mergeMethod: policy.mergeMethod });
     appendLog(jobId, `[${nowIso()}] pr review: ${review.disposition}${review.autoMergeEnabled ? ' (auto-merge enabled)' : ''}`);
     return { ...review, ok: true, skipped: false };
   } catch (error) {

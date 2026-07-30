@@ -64,7 +64,7 @@ console.log('\nTest: pr-watcher ignores PR-backed jobs pending operator decision
   assert.equal(watchable.some((item) => item.status.job_id === 'job_pr_decision_pending'), false);
 }
 
-console.log('Test: pr-watcher resumes watching after operator decision is answered even while result keeps stale operator blocker');
+console.log('Test: pr-watcher never expands beyond the two historical drain jobs after a decision is answered');
 {
   createJob(packet({ job_id: 'job_pr_decision_answered' }));
   const status = readJson(statusPath('job_pr_decision_answered')) as unknown as JobStatus;
@@ -84,7 +84,7 @@ console.log('Test: pr-watcher resumes watching after operator decision is answer
   writeJson(resultPath('job_pr_decision_answered'), result);
 
   const watchable = collectWatchableJobs();
-  assert.equal(watchable.some((item) => item.status.job_id === 'job_pr_decision_answered'), true);
+  assert.equal(watchable.some((item) => item.status.job_id === 'job_pr_decision_answered'), false);
 }
 
 console.log('pr-watcher decision tests passed');
