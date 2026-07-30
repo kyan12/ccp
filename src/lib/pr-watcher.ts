@@ -21,7 +21,6 @@ const DISCORD_STATUS_CHANNEL: string = process.env.CCP_DISCORD_STATUS_CHANNEL ||
 const DISCORD_ERRORS_CHANNEL: string = process.env.CCP_DISCORD_ERRORS_CHANNEL || '';
 const { prReviewPolicy, isNightlyPacket } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
-const { maybeFireMergeHandoffCallback } = require('./handoff-callback');
 
 /**
  * PR-lifecycle watcher: scans finalized PR-backed jobs and re-evaluates
@@ -231,7 +230,7 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
     entry.merged = review.merged || false;
     entry.autoMergeEnabled = review.autoMergeEnabled || false;
 
-    // PR is closed/merged — mark done and sync Linear
+    // PR is closed/merged — mark done
     if (review.merged || (review.ok && review.disposition === 'approve' && review.autoMergeEnabled)) {
       appendLog(jobId, `[${nowIso()}] pr-watcher: PR merged or auto-merge enabled`);
       entry.action = 'merge-tracked';
@@ -243,69 +242,12 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
         appendLog(jobId, `[${nowIso()}] pr-watcher: job state → done (PR merged)`);
       }
 
-      // Sync Linear ticket to Done
-      if (packet.ticket_id) {
-        try {
-          const { syncJobToLinear } = require('./linear');
-          const updatedStatus = { ...status, state: 'done' };
-          const updatedResult = { ...result, state: 'done' };
-          syncJobToLinear({ packet, status: updatedStatus, result: updatedResult }).then((r: { ok: boolean }) => {
-            if (r.ok) appendLog(jobId, `[${nowIso()}] pr-watcher: Linear ${packet.ticket_id} → Done`);
-            else appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync returned ok=false`);
-          }).catch((err: Error) => {
-            appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync error: ${err.message}`);
-          });
-        } catch (err) {
-          appendLog(jobId, `[${nowIso()}] pr-watcher: Linear sync require error: ${(err as Error).message}`);
-        }
-      }
-
       // Fire webhook callback on merge (app-dispatched fixes)
       if (review.merged) {
         const whLog = fireWebhookCallback({
           packet, jobId, status: 'merged', prUrl: result.pr_url || null,
         });
         if (whLog) appendLog(jobId, `[${nowIso()}] pr-watcher: ${whLog}`);
-
-        // PRO-583: fire the structured Hermes handoff callback for jobs
-        // whose worker never reached finalizeJob (e.g. operator interrupt
-        // → state=blocked, then PR merged anyway). Idempotent — the
-        // integrations.handoffCallback.fired flag prevents re-fires on
-        // subsequent watcher cycles, and finalizeJob's own callback path
-        // already stamps the same flag once it lands inline.
-        const currentForHandoff: JobStatus = loadStatus(jobId);
-        const prevHandoff = (currentForHandoff.integrations as Record<string, unknown> | undefined)
-          ?.handoffCallback as { fired?: boolean } | undefined;
-        const handoffOutcome = maybeFireMergeHandoffCallback({
-          packet,
-          jobId,
-          prUrl: result.pr_url || null,
-          commit: result.commit && result.commit !== 'none' ? result.commit : null,
-          branch: result.branch || null,
-          alreadyFired: prevHandoff?.fired === true,
-        });
-        if (handoffOutcome.fired) {
-          if (handoffOutcome.log) {
-            appendLog(jobId, `[${nowIso()}] pr-watcher: ${handoffOutcome.log}`);
-          }
-          // Stamp the idempotency record AND mark notifications.final so
-          // the dashboard / supervisor stop treating this job as "still
-          // pending its terminal callback."
-          const stampStatus: JobStatus = loadStatus(jobId);
-          saveStatus(jobId, {
-            notifications: {
-              start: stampStatus.notifications?.start ?? true,
-              final: true,
-            },
-            integrations: {
-              ...(stampStatus.integrations || {}),
-              handoffCallback: { fired: true, at: nowIso(), via: 'pr-watcher' },
-            },
-          });
-          entry.handoffCallback = { fired: true, via: 'pr-watcher' };
-        } else if (handoffOutcome.reason === 'already-fired') {
-          entry.handoffCallback = { fired: false, reason: 'already-fired' };
-        }
 
         // Post merge notification to status channel
         if (DISCORD_STATUS_CHANNEL) {
@@ -634,22 +576,6 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
           }
         }
       } catch (e) { process.stderr.write(`[pr-watcher] discord lifecycle status msg failed: ${(e as Error).message}\n`); }
-    }
-
-    // Only sync Linear when the PR disposition actually changed
-    if (packet.ticket_id && dispositionChanged) {
-      try {
-        const { syncJobToLinear } = require('./linear');
-        const freshResult: JobResult = readJson(resultPath(jobId));
-        const freshStatus: JobStatus = loadStatus(jobId);
-        await syncJobToLinear({ packet, status: freshStatus, result: freshResult });
-        entry.linearSynced = true;
-      } catch (error) {
-        entry.linearSyncError = (error as Error).message;
-      }
-    } else if (packet.ticket_id) {
-      entry.linearSynced = false;
-      entry.linearSkipReason = 'disposition unchanged';
     }
 
     actions.push(entry);

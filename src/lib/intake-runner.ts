@@ -3,7 +3,6 @@ import { spawnSync } from 'child_process';
 const { normalizeVercelFailure, normalizeSentryIssue, normalizeManualIssue } = require('./intake');
 const { createIssueFromJob, updateIssueState, resolveStateName, resolveLinearOrg } = require('./linear');
 const { enrichPayloadWithRepo } = require('./repos');
-const { dispatchLinearIssues } = require('./linear-dispatch');
 
 /**
  * Use Claude Haiku to generate structured ticket fields from a rough description.
@@ -135,38 +134,6 @@ function buildIncidentPacket(kind: string, payload: IntakePayload): JobPacket {
     metadata: { ...normalized.metadata, enriched_description: description },
   };
 
-  // Propagate structured handoff fields when present
-  if (enriched.handoff_id) packet.handoff_id = enriched.handoff_id as string;
-  if (enriched.origin) packet.origin = enriched.origin as string;
-  if (enriched.requestor) packet.requestor = enriched.requestor as string;
-  if (enriched.why_it_matters) packet.why_it_matters = enriched.why_it_matters as string;
-  if (Array.isArray(enriched.context_refs)) packet.context_refs = enriched.context_refs as string[];
-  if (enriched.callback_required != null) packet.callback_required = !!enriched.callback_required;
-  if (enriched.callback_url) packet.callback_url = enriched.callback_url as string;
-  if (Array.isArray(enriched.writeback_required)) packet.writeback_required = enriched.writeback_required as string[];
-  if (enriched.exact_deliverable) packet.exact_deliverable = enriched.exact_deliverable as string;
-  if (enriched.completion_routing && (enriched.completion_routing === 'direct' || enriched.completion_routing === 'relay')) {
-    packet.completion_routing = enriched.completion_routing as 'direct' | 'relay';
-  }
-
-  // Validate: when handoff_id is present, flag missing routing/deliverable/verification fields.
-  // We don't block intake outright (the job can still run), but attach warnings so
-  // operators can see the gap in the Linear ticket or logs.
-  if (packet.handoff_id) {
-    const missing: string[] = [];
-    if (!packet.completion_routing) missing.push('completion_routing');
-    if (!packet.exact_deliverable && !enriched.exact_deliverable) missing.push('exact_deliverable');
-    if (!packet.verification_steps?.length) missing.push('verification_steps');
-    if (!packet.callback_required && !packet.callback_url) missing.push('callback_required or callback_url');
-    if (missing.length) {
-      const warn = `[handoff] handoff_id=${packet.handoff_id} missing recommended fields: ${missing.join(', ')}`;
-      console.warn(`[ccp] ${warn}`);
-      const meta = (packet.metadata || {}) as Record<string, unknown>;
-      meta.handoff_warnings = missing;
-      packet.metadata = meta;
-    }
-  }
-
   return packet;
 }
 
@@ -177,15 +144,8 @@ async function intakeToLinear(kind: string, payload: IntakePayload, options: { a
   const desired = resolveStateName('inbox', orgKey);
   await updateIssueState(issue.id, desired, orgKey);
 
-  let dispatch: unknown = null;
-  let supervisor: unknown = null;
-  if (options.autoDispatch) {
-    dispatch = await dispatchLinearIssues({ force: true }).catch((error: Error) => ({ ok: false, error: error.message }));
-    if (options.autoStart) {
-      const { runSupervisorCycle } = require('./jobs');
-      supervisor = await runSupervisorCycle({ maxConcurrent: options.maxConcurrent || 1 }).catch((error: Error) => ({ ok: false, error: error.message }));
-    }
-  }
+  const dispatch: unknown = null;
+  const supervisor: unknown = null;
 
   return {
     ok: true,

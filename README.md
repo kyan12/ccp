@@ -1,5 +1,7 @@
 # ☭ CCP — Coding Control Plane
 
+> **Runtime status:** retirement in progress on Kevin's Mac Studio. Native Hermes Kanban (`proteusx-engineering`) owns all new engineering intake, isolated worktrees, execution, review, callbacks, and completion. CCP accepts no new Kanban/Linear work; its supervisor/intake services remain temporarily active only to drain historical PR-backed jobs and migrate current GitHub/Sentry routes. Do not submit new CCP jobs or add new CCP producers.
+
 **Seize the means of code production.**
 
 CCP is an open-source control plane that turns coding agents (Claude Code, Codex, etc.) into a continuous delivery pipeline. It handles the orchestration that nobody else does: ticket intake → job dispatch → coding → PR creation → review → auto-merge → error detection → remediation.
@@ -196,30 +198,7 @@ CCP's killer feature is the closed remediation loop:
 6. Repeat until green ✅
 
 
-### Hermes Kanban intake (non-Linear)
-
-CCP can accept a structured Hermes Kanban task packet directly without creating or polling a Linear issue. The entry point reuses the normal incident-packet and job lifecycle, persists `source_transport: "hermes-kanban"` plus the exact Kanban task id, and deterministically maps retries for the same task to the same CCP job id.
-
-```bash
-cat kanban-packet.json | ccp-hermes-kanban submit --stdin
-ccp-supervisor --once
-ccp-hermes-kanban result kanban_t_<task_id>
-```
-
-Minimal packet:
-
-```json
-{
-  "task_id": "t_abc123",
-  "title": "Fix checkout totals",
-  "body": "Full Kanban task body or worker_context",
-  "repoKey": "my-repo",
-  "acceptance_criteria": ["Totals update correctly"],
-  "verification_steps": ["Run the repo test suite"]
-}
-```
-
-For Kanban-only operation, keep `configs/linear.json` at `disabled=true`, `dispatchEnabled=false`, `pollingEnabled=false`, and `syncEnabled=false` (optionally also set `CCP_LINEAR_DISABLED=true`). This disables Linear dispatch, polling, and sync, but leaves intake and supervisor services operational for native jobs. Linear history/comments are not task context; no importer may create Kanban cards from Linear issues, and old migrated cards must be archived/recreated natively.
+Linear and the former Kanban→CCP bridge are retired. Keep `configs/linear.json` disabled for historical compatibility, and do not run the intake/supervisor services for native Kanban work.
 
 ## CLI Tools
 

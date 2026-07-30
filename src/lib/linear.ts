@@ -1,21 +1,11 @@
 import https = require('https');
-import fs = require('fs');
-import path = require('path');
-import type { LinearConfig, LinearIssue, LinearJobLink, LinearSyncResult, JobPacket, JobStatus, JobResult } from '../types';
+import type { LinearConfig, LinearIssue, JobPacket } from '../types';
 const { loadConfig } = require('./config');
 const { getSecret } = require('./secrets');
 const { chooseLinearProjectKey, buildLinearLabels } = require('./intake');
-const { ROOT } = require('./paths');
-const { isLinearGloballyDisabled, linearDisabledReasonForPacket } = require('./linear-disabled');
+const { isLinearGloballyDisabled } = require('./linear-disabled');
 
 const LINEAR_URL = 'https://api.linear.app/graphql';
-const LINEAR_CACHE_DIR: string = path.join(ROOT, 'supervisor', 'linear');
-const LINEAR_LINKS_FILE: string = path.join(LINEAR_CACHE_DIR, 'job-links.json');
-
-function ensureLinearCacheDir(): void {
-  fs.mkdirSync(LINEAR_CACHE_DIR, { recursive: true });
-}
-
 function linearConfig(orgKey?: string | null): LinearConfig {
   if (orgKey && orgKey !== 'default') {
     return loadConfig(`linear-${orgKey}`, {}) as LinearConfig;
@@ -44,34 +34,6 @@ function resolveLinearOrg(packet: JobPacket): string | null {
     }
   }
   return null;
-}
-
-function readLinks(): Record<string, LinearJobLink> {
-  ensureLinearCacheDir();
-  if (!fs.existsSync(LINEAR_LINKS_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(LINEAR_LINKS_FILE, 'utf8'));
-  } catch (err) {
-    console.error(`[ccp] failed to parse ${LINEAR_LINKS_FILE}: ${(err as Error).message}`);
-    return {};
-  }
-}
-
-function writeLinks(data: Record<string, LinearJobLink>): void {
-  ensureLinearCacheDir();
-  fs.writeFileSync(LINEAR_LINKS_FILE, JSON.stringify(data, null, 2) + '\n');
-}
-
-function saveJobLinearLink(jobId: string, data: Partial<LinearJobLink>): LinearJobLink {
-  const links = readLinks();
-  links[jobId] = { ...(links[jobId] || {} as LinearJobLink), ...data } as LinearJobLink;
-  writeLinks(links);
-  return links[jobId];
-}
-
-function getJobLinearLink(jobId: string): LinearJobLink | null {
-  const links = readLinks();
-  return links[jobId] || null;
 }
 
 function parseRateLimitReset(headers: Record<string, string | string[] | number | undefined>): number | null {
@@ -181,26 +143,6 @@ function normalizeJobToLinearIssue(packet: JobPacket, orgKey?: string | null): R
     packet.review_feedback?.length ? `Review feedback:\n- ${packet.review_feedback.join('\n- ')}` : null,
   ].filter(Boolean).join('\n\n');
 
-  // Append structured handoff sections so they survive the Linear round-trip
-  if (packet.handoff_id) {
-    const handoffLines = [
-      `- Handoff ID: ${packet.handoff_id}`,
-      packet.origin ? `- Origin: ${packet.origin}` : null,
-      packet.requestor ? `- Requestor: ${packet.requestor}` : null,
-      packet.why_it_matters ? `- Why it matters: ${packet.why_it_matters}` : null,
-      packet.exact_deliverable ? `- Exact deliverable: ${packet.exact_deliverable}` : null,
-      packet.callback_required != null ? `- Callback required: ${packet.callback_required ? 'yes' : 'no'}` : null,
-      packet.completion_routing ? `- Completion routing: ${packet.completion_routing}` : null,
-    ].filter(Boolean);
-    description += `\n\n## Handoff\n${handoffLines.join('\n')}`;
-  }
-  if (packet.context_refs?.length) {
-    description += `\n\n## Context References\n${packet.context_refs.map(r => `- ${r}`).join('\n')}`;
-  }
-  if (packet.writeback_required?.length) {
-    description += `\n\n## Writeback Required\n${packet.writeback_required.map(w => `- ${w}`).join('\n')}`;
-  }
-
   return {
     identifier: packet.ticket_id || null,
     title: packet.goal || `Coding job ${packet.job_id}`,
@@ -219,41 +161,10 @@ const LINEAR_STATE_DEFAULTS: Record<string, string> = {
   blocked: 'Blocked',
 };
 
-/**
- * Maps CCP job lifecycle states to Linear workflow state categories.
- * Used by both syncJobToLinear and syncLinearIssueState.
- */
-const JOB_TO_LINEAR_STATE: Record<string, string> = {
-  queued: 'in_progress',
-  preflight: 'in_progress',
-  running: 'in_progress',
-  blocked: 'blocked',
-  failed: 'blocked',
-  coded: 'in_review',
-  done: 'done',
-  verified: 'done',
-};
-
 function resolveStateName(kind: string, orgKey?: string | null): string {
   const cfg = linearConfig(orgKey);
   const overrides = cfg.defaultStates || {};
   return overrides[kind] || LINEAR_STATE_DEFAULTS[kind] || kind;
-}
-
-function buildCommentBody(job: Partial<JobStatus>, result: Partial<JobResult>): string {
-  return [
-    `Job: ${job.job_id}`,
-    `State: ${result?.state || job.state || 'unknown'}`,
-    `Commit: ${result?.commit || 'none'}`,
-    `Prod: ${result?.prod || 'no'}`,
-    `Verified: ${result?.verified || 'not yet'}`,
-    `Blocker: ${result?.blocker || 'none'}`,
-    result?.pr_url ? `PR: ${result.pr_url}` : null,
-    result?.blocker_type ? `Blocker type: ${result.blocker_type}` : null,
-    result?.failed_checks?.length ? `Failed checks:\n- ${result.failed_checks.map((c) => `${c.name}: ${c.state}${c.url ? ` (${c.url})` : ''}`).join('\n- ')}` : null,
-    job.repo ? `Repo: ${job.repo}` : null,
-    job.tmux_session ? `tmux: ${job.tmux_session}` : null,
-  ].filter(Boolean).join('\n');
 }
 
 // Cache workflow states for 10 minutes to reduce API calls
@@ -434,154 +345,12 @@ async function updateIssueState(issueId: string, stateName: string, orgKey?: str
   return ((data?.issueUpdate as Record<string, unknown>)?.issue as LinearIssue) || null;
 }
 
-async function createIssueComment(issueId: string, body: string, orgKey?: string | null): Promise<{ id: string; body: string } | null> {
-  const data = await linearRequest(
-    `mutation CommentCreate($input: CommentCreateInput!) {
-      commentCreate(input: $input) {
-        success
-        comment {
-          id
-          body
-        }
-      }
-    }`,
-    {
-      input: {
-        issueId,
-        body,
-      },
-    },
-    orgKey,
-  ) as Record<string, unknown>;
-  return ((data?.commentCreate as Record<string, unknown>)?.comment as { id: string; body: string }) || null;
-}
-
-async function postCompletionComment(
-  issueId: string,
-  result: JobResult,
-  options?: { discordThreadId?: string | null },
-): Promise<boolean> {
-  const parts: string[] = [`**Job completed: ${result.state}**`];
-  if (result.commit && result.commit !== 'none') parts.push(`Commit: \`${result.commit.slice(0, 10)}\``);
-  if (result.pr_url) parts.push(`PR: ${result.pr_url}`);
-  if (result.summary) parts.push(`**Summary:** ${result.summary}`);
-  if (result.risk) parts.push(`**Risk:** ${result.risk}`);
-  if (result.verified && result.verified !== 'not yet') parts.push(`**Verified:** ${result.verified}`);
-  if (result.blocker) parts.push(`**Blocker:** ${result.blocker}`);
-  if (options?.discordThreadId) parts.push(`[Discord thread](https://discord.com/channels/${options.discordThreadId})`);
-  try {
-    await createIssueComment(issueId, parts.join('\n'));
-    return true;
-  } catch (e) {
-    process.stderr.write(`[linear] failed to post result comment on ${issueId}: ${(e as Error).message}\n`);
-    return false;
-  }
-}
-
-async function syncJobToLinear({ packet, status, result }: { packet: JobPacket; status: JobStatus; result: JobResult }): Promise<LinearSyncResult> {
-  const disabledReason = linearDisabledReasonForPacket(packet);
-  if (disabledReason) {
-    return { ok: false, skipped: true, reason: disabledReason };
-  }
-
-  // Resolve which Linear org this job belongs to (e.g. 'smartadvocateai' for redwood)
-  const orgKey = resolveLinearOrg(packet);
-  if (!hasLinearCredentials(orgKey)) {
-    return { ok: false, skipped: true, reason: `LINEAR API key missing for org=${orgKey || 'default'}` };
-  }
-
-  // Prefer persisted job lifecycle status over worker result state.
-  // After PR merge, status becomes `done` while result.json often remains `coded`.
-  // Using result first reverts Linear tickets from Done back to In Review on later syncs.
-  const desiredStateName = resolveStateName(JOB_TO_LINEAR_STATE[status?.state || result?.state || 'ready'] || 'ready');
-  const canonicalIssue = packet.ticket_id ? await findIssueByIdentifier(packet.ticket_id, orgKey).catch(() => null) : null;
-  let link = getJobLinearLink(packet.job_id);
-  let issue: LinearIssue | null = null;
-
-  if (canonicalIssue?.id) {
-    link = saveJobLinearLink(packet.job_id, {
-      issueId: canonicalIssue.id,
-      identifier: canonicalIssue.identifier,
-      url: canonicalIssue.url,
-      projectName: canonicalIssue.project?.name || null,
-    });
-  } else if (link?.identifier && packet.ticket_id && link.identifier !== packet.ticket_id) {
-    link = null;
-  }
-
-  if (!link?.issueId) {
-    if (packet.ticket_id) {
-      return { ok: false, skipped: true, reason: `canonical Linear issue not found for ${packet.ticket_id}` };
-    }
-    issue = await createIssueFromJob(packet);
-    if (!issue?.id) throw new Error('linear issue creation returned no issue');
-    link = saveJobLinearLink(packet.job_id, {
-      issueId: issue.id,
-      identifier: issue.identifier,
-      url: issue.url,
-      projectName: issue.project?.name || null,
-    });
-  }
-
-  try {
-    await updateIssueState(link!.issueId, desiredStateName, orgKey);
-    await createIssueComment(link!.issueId, buildCommentBody(status || {}, result || {}), orgKey);
-  } catch (error) {
-    if (!/Entity not found: Issue/i.test((error as Error).message || '')) throw error;
-    issue = packet.ticket_id ? await findIssueByIdentifier(packet.ticket_id, orgKey).catch(() => null) : null;
-    if (!issue?.id) {
-      if (packet.ticket_id) {
-        return { ok: false, skipped: true, reason: `canonical Linear issue not found for ${packet.ticket_id}` };
-      }
-      issue = await createIssueFromJob(packet);
-    }
-    if (!issue?.id) throw error;
-    link = saveJobLinearLink(packet.job_id, {
-      issueId: issue.id,
-      identifier: issue.identifier,
-      url: issue.url,
-      projectName: issue.project?.name || null,
-    });
-    await updateIssueState(link.issueId, desiredStateName, orgKey);
-    await createIssueComment(link.issueId, buildCommentBody(status || {}, result || {}), orgKey);
-  }
-
-  return {
-    ok: true,
-    issueId: link!.issueId,
-    identifier: link!.identifier,
-    url: link!.url,
-    state: desiredStateName,
-    projectName: link!.projectName || null,
-  };
-}
-
-async function syncLinearIssueState(jobState: string, issueId: string, orgKey?: string | null): Promise<{ ok: boolean; state?: string; error?: string }> {
-  const mappedKey = JOB_TO_LINEAR_STATE[jobState];
-  if (!mappedKey) {
-    return { ok: false, error: `unknown job state: ${jobState}` };
-  }
-
-  const stateName = resolveStateName(mappedKey, orgKey);
-
-  try {
-    await updateIssueState(issueId, stateName, orgKey);
-    return { ok: true, state: stateName };
-  } catch (error) {
-    return { ok: false, state: stateName, error: (error as Error).message };
-  }
-}
-
 module.exports = {
   linearConfig,
   linearApiKey,
   hasLinearCredentials,
   linearRequest,
   normalizeJobToLinearIssue,
-  saveJobLinearLink,
-  getJobLinearLink,
-  syncJobToLinear,
-  syncLinearIssueState,
   chooseProject,
   ensureLabels,
   createIssueFromJob,
@@ -589,7 +358,6 @@ module.exports = {
   resolveStateName,
   resolveLinearOrg,
   findIssueByIdentifier,
-  postCompletionComment,
   parseRateLimitReset,
 };
 
@@ -599,10 +367,6 @@ export {
   hasLinearCredentials,
   linearRequest,
   normalizeJobToLinearIssue,
-  saveJobLinearLink,
-  getJobLinearLink,
-  syncJobToLinear,
-  syncLinearIssueState,
   chooseProject,
   ensureLabels,
   createIssueFromJob,
@@ -610,6 +374,5 @@ export {
   resolveStateName,
   resolveLinearOrg,
   findIssueByIdentifier,
-  postCompletionComment,
   parseRateLimitReset,
 };

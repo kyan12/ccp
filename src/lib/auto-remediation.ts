@@ -230,24 +230,9 @@ export function downgradeWebhookStatus(
   return baseStatus;
 }
 
-/**
- * Map an auto-remediation status onto a downgraded handoff callback status.
- * `failed` becomes `blocked` so Hermes treats this as "still in flight,
- * waiting on an automatic next step" rather than terminal.
- */
-export function downgradeHandoffStatus(
-  baseStatus: 'done' | 'blocked' | 'failed',
-  auto: AutoRemediationStatus | undefined,
-): 'done' | 'blocked' | 'failed' {
-  if (!isNonTerminalDisposition(auto)) return baseStatus;
-  if (baseStatus === 'failed') return 'blocked';
-  return baseStatus;
-}
-
 module.exports = {
   isRemediationJobId,
   summarizeAutoRemediation,
   formatAutoRemediationLine,
   downgradeWebhookStatus,
-  downgradeHandoffStatus,
 };
