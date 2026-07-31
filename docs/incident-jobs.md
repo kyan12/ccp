@@ -1,35 +1,17 @@
-# Incident to job flow
+# Incident-to-job flow (retired)
 
-The control plane can now do two different things with normalized incident intake:
+The former CCP commands that filed Linear issues or enqueued CCP jobs are
+historical compatibility material. Do not use `intake-linear.ts`,
+`intake-dispatch.ts`, or `intake-job.ts` for new incidents.
 
-## 1. File only
-Create a routed Linear issue without queueing code work:
+## Current flow
 
-```bash
-node src/bin/intake-linear.ts sentry sample-sentry.json
-```
+- Sentry intake submits native Hermes Kanban work through the bounded native
+  integration.
+- Manual incidents become native cards on `proteusx-engineering`.
+- Dependencies, review, remediation, and completion remain in native Kanban.
+- No current path creates or updates Linear issues or new CCP jobs.
 
-## 2. File + enqueue job
-Create the Linear issue and immediately enqueue a coding job linked to the new ticket:
-
-```bash
-node src/bin/intake-dispatch.ts sentry sample-sentry.json --enqueue-job
-```
-
-## 3. Job only
-Queue a coding job from a normalized incident payload without creating Linear first:
-
-```bash
-node src/bin/intake-job.ts sentry sample-sentry.json
-```
-
-## Recommended policy
-
-Default to **file only** for external incident intake until confidence is high.
-
-Then selectively enable **file + enqueue job** for:
-- well-understood repos
-- low-risk incident classes
-- deploy/runtime failures with predictable remediation
-
-That keeps the system safe while still supporting full automation later.
+Historical job and ticket artifacts remain available for read-only
+reconciliation during the drain; their presence is not authorization to restart
+retired producers.

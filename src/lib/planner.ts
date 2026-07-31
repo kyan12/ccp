@@ -23,9 +23,9 @@
  *
  * Skip conditions (planner is NOT run):
  *   1. Per-repo config `planner.enabled !== true` (default).
- *   2. Remediation jobs — `__valfix`, `__reviewfix`, `__deployfix` already
- *      have explicit failing-step or review-comment feedback; a plan
- *      would dilute that context.
+ *   2. Historical remediation job ids — retained compatibility records may
+ *      already carry explicit feedback, so planning stays skipped. Current
+ *      general finalization does not produce these children.
  *   3. Continuation jobs — `packet.working_branch` set (the agent is
  *      picking up mid-stream on a branch; re-planning is confusing).
  *   4. The AgentDriver reports preflight failure — we wouldn't be able
@@ -158,9 +158,9 @@ export interface RunPlannerOptions {
   /** Resolved per-repo memory contents (from loadRepoMemory). */
   memory?: string | null;
   /**
-   * If the job id matches `__valfix`, `__reviewfix`, or `__deployfix`
-   * we skip the planner. Injected rather than hardcoded so tests can
-   * exercise the skip logic without touching real filesystem state.
+   * Historical remediation ids (`__valfix`, `__reviewfix`, `__deployfix`) skip
+   * planning during compatibility replay. CCP no longer creates them for
+   * current PR work. Injected so tests avoid real filesystem state.
    */
   remediationPattern?: RegExp;
 }

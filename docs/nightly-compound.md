@@ -1,104 +1,28 @@
-# Nightly Compound Automation
+# Nightly Compound Automation (retired CCP producer)
 
-## Overview
+The CCP nightly compound producer, cron dispatch, per-repository enablement, tmux
+worker launch, Discord lifecycle messages, and automatic PR shipping described
+by earlier versions of this document are retired. Do not run
+`nightly-compound.ts` to create new CCP jobs and do not configure a
+`ccp-nightly-compound-dispatch` cron.
 
-Nightly compound runs review recent work across repos, extract learnings, and implement the highest-priority item overnight. Results are available for morning review.
+## Current ownership
 
-## Architecture
+Scheduled engineering work is created directly as native Hermes Kanban cards
+with explicit repository/worktree, assignee, dependencies, acceptance criteria,
+and review requirements. Native Kanban owns execution and completion.
 
-```
-Hermes cron (10:30 PM ET daily)
-  → nightly-compound.ts reads repos.json (nightly.enabled=true)
-    → creates a CCP job per repo
-      → supervisor queues and runs them subject to its max-concurrent setting
-        → tmux worker runs Claude Code
-          → Discord notifications on start/done/fail
-```
+## Historical drain exception
 
-## Configuration
+The bounded CCP PR watcher may read GitHub state for exactly these archived jobs:
 
-### repos.json
+- `nightly_proteusx-os_2026-07-11`
+- `nightly_papyrx_2026-05-19`
 
-Add `nightly` config to any repo:
+For those records it writes only `status.integrations.prReview`. It never creates
+nightly work, starts workers, changes top-level job state/result, merges or
+rebases PRs, creates remediation children, runs smoke tests, fires callbacks, or
+sends Discord lifecycle messages.
 
-```json
-{
-  "key": "my-repo",
-  "localPath": "/Users/crab/repos/my-repo",
-  "nightly": {
-    "enabled": true,
-    "autoMerge": false,
-    "branch": "main",
-    "timeoutSec": 1200
-  }
-}
-```
-
-Fields:
-- `enabled` — whether to include in nightly dispatch
-- `autoMerge` — optional override for PRs created by nightly compound jobs; when omitted, nightly jobs inherit the repo/global auto-merge policy
-- `branch` — branch to pull and work from
-- `timeoutSec` — max runtime for the worker (default 900)
-
-### Enable/Disable a repo
-
-Use the CCP dashboard repo card toggles for `Nightly compound` and `Nightly auto-merge`, or edit `configs/repos.json` and toggle `nightly.enabled` / `nightly.autoMerge`.
-
-## Commands
-
-```bash
-# List nightly-eligible repos
-node src/bin/nightly-compound.ts --list
-
-# Dry run (show what would be dispatched)
-node src/bin/nightly-compound.ts --dry-run
-
-# Dispatch all enabled repos now
-node src/bin/nightly-compound.ts
-
-# Dispatch a single repo
-node src/bin/nightly-compound.ts --repo papyrx
-```
-
-## Cron Schedule
-
-The dispatch runs at **10:30 PM ET daily** via Hermes cron.
-
-Cron job name: `ccp-nightly-compound-dispatch`
-
-The supervisor handles execution order. Jobs are queued and run within the configured concurrency limit.
-
-## Job Lifecycle
-
-1. **Dispatch** — `nightly-compound.ts` creates jobs with IDs like `nightly_papyrx_2026-03-14`
-2. **Queue** — supervisor picks them up in order
-3. **Run** — tmux worker runs Claude Code with the compound prompt
-4. **Notify** — Discord notifications on start and completion
-5. **Result** — `result.json` contains state, commit hash, learning summary
-
-## Compound Prompt Phases
-
-Each nightly run follows 4 phases:
-
-1. **Sync & Orientation** — git pull, read project docs, review recent commits
-2. **Learning Extraction** — identify patterns, mistakes, incomplete work → write to LEARNINGS.md
-3. **Implementation** — pick single highest-impact item, implement on feature branch
-4. **Ship** — push branch, create draft PR
-
-## Duplicate Prevention
-
-Jobs are named with the date (`nightly_<repo>_<YYYY-MM-DD>`). If a job for today already exists, it's skipped.
-
-## Morning Review
-
-Check results:
-```bash
-# List nightly results
-node src/bin/jobs.ts list --source nightly
-
-# Check a specific run
-node src/bin/jobs.ts show nightly_papyrx_2026-03-14
-node src/bin/jobs.ts result nightly_papyrx_2026-03-14
-```
-
-Or check the `#coding-runs` Discord channel for notifications.
+Historical `nightly` fields and result files may be inspected for provenance but
+must not be treated as active operator configuration.

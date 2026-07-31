@@ -8,7 +8,9 @@ A lightweight local HTTP server receives the remaining authenticated CCP webhook
 - `POST /ingest/sentry`
 - `POST /ingest/manual` returns `410 Gone`; its former CCP/Linear producer is retired
 - `POST /api/intake` returns `410 Gone` after successful authentication; its former CCP/Linear producer is retired
+- `POST /api/onboard` returns `410 Gone` after admin authentication; repository/GitHub auto-onboarding is retired
 - `POST /webhook/linear` returns `410 Gone`; Linear intake is retired
+- `POST /webhook/github` verifies the exact raw-body signature, then returns non-retryable `410 Gone`; GitHub webhook mutation/remediation is retired
 
 ## Run locally
 
@@ -33,6 +35,7 @@ Vercel webhook verification uses:
 
 Current behavior:
 - Vercel fails closed when no webhook secret is configured.
+- GitHub verifies `x-hub-signature-256` over the exact raw bytes before any JSON parsing. Missing or invalid signatures return `403`; authenticated deliveries return terminal `410` even when the body is malformed JSON.
 - Sentry verifies `sentry-hook-signature` as HMAC-SHA256 over the exact raw request body using `SENTRY_CLIENT_SECRET`.
 - Request bodies are capped before authentication at 1 MiB by default (`CCP_INTAKE_MAX_BODY_BYTES` overrides the limit); oversized bodies return `413` and are never buffered in full.
 - Authenticated Sentry issue events create a native task on the explicit `proteusx-engineering` board, assigned to `code-crab`. The deterministic key `sentry:<org>:<issue-id>` uses Sentry's stable organization-scoped issue identity and returns the existing non-archived task on webhook retry even if project metadata is absent or renamed.

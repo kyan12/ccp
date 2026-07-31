@@ -35,14 +35,14 @@ export interface SummarizeAutoRemediationInput {
   prUrl?: string | null;
   /** Recovered commit hash, if any (only relevant for harness-failure). */
   commitRecovered?: boolean;
-  /** Result of `maybeEnqueueReviewRemediation` if it ran. */
+  /** Historical review-remediation slot; general finalization supplies a retired/skipped result. */
   reviewRemediation?: RemediationResult | null;
-  /** Result of `maybeEnqueueValidationRemediation` if it ran. */
+  /** Historical validation-remediation slot; general finalization supplies a retired/skipped result. */
   validationRemediation?: RemediationResult | null;
-  /** Result of `maybeEnqueueSmokeRemediation` if it ran. */
+  /** Historical smoke-remediation slot; current finalization supplies no producer. */
   smokeRemediation?: RemediationResult | null;
   /**
-   * True when this job is itself a remediation/auto-retry child
+   * True when replaying a historical remediation/auto-retry child
    * (`__reviewfix|__valfix|__deployfix|__autoretry` job-id suffix). Forces
    * `disposition: 'depth-limit'` regardless of the per-path results.
    */
@@ -156,14 +156,15 @@ export function summarizeAutoRemediation(input: SummarizeAutoRemediationInput): 
     };
   }
 
-  // 6. The job is blocked but has a PR — pr-watcher will decide once a
-  //    review fires. Common at finalize time before pr-watcher's first cycle.
+  // 6. Native Kanban owns general PR lifecycle. The only remaining CCP
+  //    watcher is hard-coded to two historical jobs and does not consume this
+  //    generic finalization status, so never hide a blocker as pending work.
   if (input.prUrl && (input.state === 'blocked' || input.state === 'coded')) {
     return {
-      disposition: 'pending-watcher',
+      disposition: 'not-applicable',
       superseding: false,
-      source: 'review',
-      reason: 'PR present; awaiting pr-watcher review/check signal',
+      source: 'none',
+      reason: 'native Kanban owns PR lifecycle; no general CCP watcher applies',
     };
   }
 
@@ -189,7 +190,6 @@ export function summarizeAutoRemediation(input: SummarizeAutoRemediationInput): 
 const DISPOSITION_LABELS: Record<AutoRemediationDisposition, string> = {
   queued: 'queued',
   existing: 'existing fix in progress',
-  'pending-watcher': 'pending PR-watcher cycle',
   'depth-limit': 'not applicable (depth limit reached)',
   disabled: 'disabled',
   'not-applicable': 'not applicable',
@@ -218,7 +218,7 @@ export function formatAutoRemediationLine(status: AutoRemediationStatus): string
  * mislead the requestor — return `in_progress` instead.
  */
 function isNonTerminalDisposition(auto: AutoRemediationStatus | undefined): boolean {
-  return !!auto && ['queued', 'existing', 'pending-watcher', 'superseded'].includes(auto.disposition);
+  return !!auto && ['queued', 'existing', 'superseded'].includes(auto.disposition);
 }
 
 export function downgradeWebhookStatus(

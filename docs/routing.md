@@ -1,77 +1,28 @@
-# Routing model
+# Routing model (retired CCP intake)
 
-## Team
+Native Hermes Kanban on the `proteusx-engineering` board is the sole source of
+truth for new engineering work. Linear teams, projects, labels, workflow states,
+and source labels described by earlier versions of this document are historical
+provenance only. Do not create, route, poll, or synchronize new work through
+Linear or CCP.
 
-All coding work lands in the single Linear team:
-- `YourOrg` (`PRO`)
+## Current routing
 
-## Projects
+- Create native Hermes Kanban cards assigned to the appropriate profile.
+- Record repository, source, tenant, dependency, and acceptance information on
+  the card or linked Hermes project.
+- Use isolated Git worktrees for independent code-changing cards.
+- Keep dependent cards serialized through native Kanban parent links.
 
-### Control Plane
-Use for:
-- supervisor / queue / tmux runtime work
-- Discord / Linear / automation integrations
-- coding-machine infrastructure
-- control-plane bugs and enhancements
+## Historical labels
 
-### Reliability / Incidents
-Use for:
-- Sentry runtime issues
-- Vercel build/deploy failures
-- regressions
-- incident-driven bugfixes
-- auto-created error intake
+Old CCP artifacts may contain values such as `repo:*`, `source:*`, and former
+Linear workflow names. They may be read when reconciling archived evidence, but
+no active dispatcher consumes them.
 
-### Product / Delivery
-Use for:
-- planned features
-- product improvements
-- scoped manual engineering tasks
-- normal backlog work across repos
+## Repository onboarding
 
-## Repo tracking
-
-Do not use one project per repo.
-
-Track repo at the issue level via labels or issue body, for example:
-- `repo:control-plane`
-- `repo:yourorg-web`
-- `repo:api`
-- `repo:redwood`
-
-## Source tracking
-
-Use source labels for how work entered the system:
-- `source:sentry`
-- `source:vercel`
-- `source:manual`
-- `source:discord`
-- `source:cron`
-
-## Auto-onboarding
-
-When a fix request references a repo not yet in `configs/repos.json`, the `onboard-repo` module (`src/lib/onboard-repo.ts`) automatically onboards it:
-
-1. **Verify** — Checks the repo exists on GitHub via `gh api`
-2. **Clone** — Clones to `$CCP_REPOS_DIR/<name>` (or `~/repos/<name>` by default)
-3. **Register** — Adds the repo to `configs/repos.json` with defaults: `autoMerge: true`, `mergeMethod: "squash"`
-4. **GitHub settings** — Enables `allow_auto_merge` and `delete_branch_on_merge` on the repo
-5. **Webhook** — Creates a GitHub webhook pointing to `$CCP_FUNNEL_URL/webhook/github` for `check_run` and `pull_request` events (requires `CCP_FUNNEL_URL` to be set)
-
-If the repo is already onboarded, the module returns immediately with the existing config.
-
-Auto-onboarding is triggered by the `/api/intake` endpoint when it receives a request for an unknown repo. It can also be triggered via `src/bin/add-repo.ts`.
-
-## Workflow mapping
-
-The YourOrg team currently uses:
-- `Backlog`
-- `Todo`
-- `In Progress`
-- `Done`
-
-Control-plane mapping:
-- new incident / inbox item -> `Backlog`
-- ready-to-run work -> `Todo`
-- active coding job -> `In Progress`
-- coded / verified -> `Done`
+Automatic CCP repository onboarding is retired. The authenticated
+`/api/onboard` compatibility endpoint returns terminal `410 Gone` and performs
+no GitHub, filesystem, webhook, or repository-config mutation. Register
+repositories through the native Hermes project/operator workflow.

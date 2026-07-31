@@ -2,13 +2,11 @@
 import http = require('http');
 import fs = require('fs');
 import path = require('path');
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-const execFileAsync = promisify(execFile);
-const { submitSentryToKanban } = require('../lib/sentry-kanban');
 const { loadConfig } = require('../lib/config');
 const { getSecret } = require('../lib/secrets');
 const { constantTimeEquals: safeEquals, verifyHmacSha256, isLoopbackAddress } = require('../lib/webhook-auth');
+const { retiredGitHubWebhookResponse } = require('../lib/github-webhook-retirement');
+const { submitSentryToKanban } = require('../lib/sentry-kanban');
 const { listJobs, jobsByState, loadStatus, readJson, healthCheck, packetPath, resultPath, jobDir } = require('../lib/jobs');
 
 const port: number = Number(process.env.CCP_INTAKE_PORT || 4318);
@@ -16,6 +14,12 @@ const vercelCfg = loadConfig('vercel', {});
 const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(__dirname, '..', '..'));
 const REPOS_PATH: string = path.join(ROOT, 'configs', 'repos.json');
 const DASHBOARD_PATH: string = path.join(__dirname, '..', 'dashboard', 'index.html');
+class RequestBodyError extends Error {
+  constructor(message: string, readonly statusCode: number) {
+    super(message);
+    this.name = 'RequestBodyError';
+  }
+}
 
 function json(res: http.ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
@@ -38,57 +42,56 @@ interface ParsedBody {
   rawBody: Buffer;
 }
 
-class RequestBodyError extends Error {
-  constructor(message: string, readonly statusCode: number) {
-    super(message);
-    this.name = 'RequestBodyError';
-  }
-}
-
-function parseBody(req: http.IncomingMessage): Promise<ParsedBody> {
+function readRawBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const configuredLimit = Number(process.env.CCP_INTAKE_MAX_BODY_BYTES || 1024 * 1024);
     const maxBodyBytes = Number.isFinite(configuredLimit) && configuredLimit > 0
       ? Math.floor(configuredLimit)
       : 1024 * 1024;
     const chunks: Buffer[] = [];
-    let bodyBytes = 0;
-    let settled = false;
+    let totalBytes = 0;
+    let rejected = false;
+
     const contentLength = Number(req.headers['content-length'] || 0);
     if (Number.isFinite(contentLength) && contentLength > maxBodyBytes) {
-      settled = true;
+      rejected = true;
       req.resume();
-      reject(new RequestBodyError(`request body exceeds ${maxBodyBytes} bytes`, 413));
+      reject(new RequestBodyError('request body too large', 413));
       return;
     }
+
     req.on('data', (chunk: Buffer | string) => {
-      if (settled) return;
+      if (rejected) return;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      bodyBytes += buffer.length;
-      if (bodyBytes > maxBodyBytes) {
-        settled = true;
+      totalBytes += buffer.length;
+      if (totalBytes > maxBodyBytes) {
+        rejected = true;
         chunks.length = 0;
-        reject(new RequestBodyError(`request body exceeds ${maxBodyBytes} bytes`, 413));
+        req.resume();
+        reject(new RequestBodyError('request body too large', 413));
         return;
       }
       chunks.push(buffer);
     });
     req.on('end', () => {
-      if (settled) return;
-      settled = true;
-      try {
-        const rawBody = Buffer.concat(chunks);
-        resolve({ payload: rawBody.length ? JSON.parse(rawBody.toString('utf8')) : {}, rawBody });
-      } catch (error) {
-        reject(error instanceof RequestBodyError ? error : new RequestBodyError('request body is not valid JSON', 400));
-      }
+      if (!rejected) resolve(Buffer.concat(chunks));
     });
     req.on('error', (error) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
+      if (!rejected) reject(error);
     });
   });
+}
+
+async function parseBody(req: http.IncomingMessage): Promise<ParsedBody> {
+  const rawBody = await readRawBody(req);
+  try {
+    return {
+      payload: rawBody.length ? JSON.parse(rawBody.toString('utf8')) : {},
+      rawBody,
+    };
+  } catch {
+    throw new RequestBodyError('request body is not valid JSON', 400);
+  }
 }
 
 function verifyVercel(req: http.IncomingMessage): boolean {
@@ -96,12 +99,6 @@ function verifyVercel(req: http.IncomingMessage): boolean {
   if (!expected) return false;
   const provided = (req.headers['x-vercel-signature'] || req.headers['x-webhook-secret'] || '') as string;
   return !!provided && safeEquals(provided, expected);
-}
-
-function verifyGitHub(req: http.IncomingMessage, rawBody: Buffer): boolean {
-  const expected = getSecret('GITHUB_WEBHOOK_SECRET');
-  const provided = String(req.headers['x-hub-signature-256'] || '');
-  return verifyHmacSha256(expected, rawBody, provided, 'sha256=');
 }
 
 function verifySentry(req: http.IncomingMessage, rawBody: Buffer): boolean {
@@ -129,61 +126,6 @@ function verifyAdminApi(req: http.IncomingMessage): boolean {
 
 function isSafeJobId(jobId: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(jobId);
-}
-
-async function ghApiJson(pathOrArgs: string | string[]): Promise<unknown> {
-  const args = ['api', ...(Array.isArray(pathOrArgs) ? pathOrArgs : [pathOrArgs])];
-  try {
-    const { stdout } = await execFileAsync('gh', args, { encoding: 'utf8' });
-    return JSON.parse(stdout || 'null');
-  } catch (err: unknown) {
-    const e = err as { stderr?: string; stdout?: string; message?: string };
-    throw new Error((e.stderr || e.stdout || e.message || `gh ${args.join(' ')} failed`).trim());
-  }
-}
-
-async function collectPrReviewFeedback(repo: string, prNum: number): Promise<string[]> {
-  const out: string[] = [];
-  const seen = new Set<string>();
-
-  const push = (text: string | null | undefined): void => {
-    const normalized = String(text || '').trim();
-    if (!normalized || seen.has(normalized)) return;
-    seen.add(normalized);
-    out.push(normalized);
-  };
-
-  const [reviewComments, reviews, issueComments] = await Promise.all([
-    ghApiJson(`repos/${repo}/pulls/${prNum}/comments`).catch((err: Error) => { console.error(`[intake] failed to fetch review comments for ${repo}#${prNum}: ${err.message}`); return []; }) as Promise<Array<Record<string, unknown>>>,
-    ghApiJson(`repos/${repo}/pulls/${prNum}/reviews`).catch((err: Error) => { console.error(`[intake] failed to fetch reviews for ${repo}#${prNum}: ${err.message}`); return []; }) as Promise<Array<Record<string, unknown>>>,
-    ghApiJson(`repos/${repo}/issues/${prNum}/comments`).catch((err: Error) => { console.error(`[intake] failed to fetch issue comments for ${repo}#${prNum}: ${err.message}`); return []; }) as Promise<Array<Record<string, unknown>>>,
-  ]);
-
-  for (const comment of reviewComments || []) {
-    const body = String(comment?.body || '').trim();
-    if (!body) continue;
-    const author = String((comment?.user as Record<string, unknown> | undefined)?.login || 'unknown');
-    const filePath = String(comment?.path || '').trim();
-    const line = Number(comment?.line || comment?.original_line || 0) || null;
-    push(`review-comment ${filePath}${line ? `:${line}` : ''} by ${author}: ${body}`);
-  }
-
-  for (const review of reviews || []) {
-    const body = String(review?.body || '').trim();
-    if (!body) continue;
-    const author = String((review?.user as Record<string, unknown> | undefined)?.login || 'unknown');
-    const state = String(review?.state || '').toUpperCase();
-    push(`review ${state || 'COMMENTED'} by ${author}: ${body}`);
-  }
-
-  for (const comment of issueComments || []) {
-    const body = String(comment?.body || '').trim();
-    if (!body) continue;
-    const author = String((comment?.user as Record<string, unknown> | undefined)?.login || 'unknown');
-    push(`issue-comment by ${author}: ${body}`);
-  }
-
-  return out;
 }
 
 // ── Dashboard & API routes ──
@@ -447,6 +389,20 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       return;
     }
 
+    // Authenticate GitHub's exact raw bytes before attempting JSON parsing.
+    // The retired endpoint does not need a decoded payload: authenticated
+    // deliveries receive the terminal drain response even when JSON is malformed.
+    if (url.pathname === '/webhook/github') {
+      const rawBody = await readRawBody(req);
+      const retired = retiredGitHubWebhookResponse({
+        secret: getSecret('GITHUB_WEBHOOK_SECRET'),
+        rawBody,
+        signature: String(req.headers['x-hub-signature-256'] || ''),
+      });
+      json(res, retired.status, retired.body);
+      return;
+    }
+
     const { payload, rawBody } = await parseBody(req);
 
     const decisionMatch = url.pathname.match(/^\/api\/jobs\/(.+)\/decision$/);
@@ -528,227 +484,12 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       return;
     }
 
-    // Onboard a new repo
+    // Repository auto-onboarding retired with general CCP intake. Keep the
+    // authenticated endpoint explicit so old operators receive a terminal
+    // migration response instead of silently mutating GitHub or repos.json.
     if (url.pathname === '/api/onboard') {
       if (!verifyAdminApi(req)) { json(res, 403, { ok: false, error: 'admin API auth failed' }); return; }
-      try {
-        const ownerRepo = (payload.ownerRepo || payload.repo) as string | undefined;
-        if (!ownerRepo || !ownerRepo.includes('/')) {
-          return json(res, 400, { error: 'Missing or invalid ownerRepo (expected owner/name)' });
-        }
-        const { onboardRepo } = require('../lib/onboard-repo');
-        const result = await onboardRepo(ownerRepo);
-        return json(res, result.ok ? 200 : 400, result);
-      } catch (e: unknown) {
-        return json(res, 500, { error: e instanceof Error ? e.message : String(e) });
-      }
-    }
-
-    // GitHub webhook
-    if (url.pathname === '/webhook/github') {
-      if (!verifyGitHub(req, rawBody)) { json(res, 403, { ok: false, error: 'bad GitHub signature' }); return; }
-      const ghEvent = (req.headers['x-github-event'] || '') as string;
-      const action = (payload.action || '') as string;
-
-      if (
-        (ghEvent === 'pull_request_review_comment' && action === 'created') ||
-        (ghEvent === 'pull_request_review' && action === 'submitted') ||
-        (ghEvent === 'issue_comment' && action === 'created')
-      ) {
-        try {
-          const repo = (payload.repository as Record<string, unknown>)?.full_name as string || '';
-
-          let prNum: number | null = null;
-          let body = '';
-          let context = '';
-          let reviewState = '';
-
-          if (ghEvent === 'pull_request_review_comment') {
-            const comment = payload.comment as Record<string, unknown>;
-            const pr = payload.pull_request as Record<string, unknown>;
-            prNum = Number(pr?.number || 0) || null;
-            body = String(comment?.body || '').trim();
-            const path = String(comment?.path || '').trim();
-            const line = Number(comment?.line || comment?.original_line || 0) || null;
-            context = `${path}${line ? `:${line}` : ''}`;
-          } else if (ghEvent === 'pull_request_review') {
-            const review = payload.review as Record<string, unknown>;
-            const pr = payload.pull_request as Record<string, unknown>;
-            prNum = Number(pr?.number || 0) || null;
-            body = String(review?.body || '').trim();
-            reviewState = String(review?.state || '').toUpperCase();
-          } else if (ghEvent === 'issue_comment') {
-            const issue = payload.issue as Record<string, unknown>;
-            const comment = payload.comment as Record<string, unknown>;
-            if (issue?.pull_request) {
-              prNum = Number(issue?.number || 0) || null;
-              body = String(comment?.body || '').trim();
-            }
-          }
-
-          if (!repo || !prNum || !body) {
-            json(res, 200, { ok: true, action: 'ack', event: ghEvent, reason: 'missing-pr-or-body' });
-            return;
-          }
-
-          const prUrl = `https://github.com/${repo}/pull/${prNum}`;
-          process.stdout.write(`[github-webhook] ${ghEvent}:${action} on ${prUrl}${context ? ` (${context})` : ''}\n`);
-
-          const { listJobs: lj, readJson: rj, resultPath: rp, packetPath: pp, maybeEnqueueReviewRemediation } = require('../lib/jobs');
-          const allJobs = lj();
-
-          let matchedJob: { job: Record<string, unknown>; result: Record<string, unknown> } | null = null;
-          for (const job of allJobs) {
-            try {
-              const jobResult = rj(rp(job.job_id));
-              if (jobResult.pr_url === prUrl) { matchedJob = { job, result: jobResult }; break; }
-            } catch { continue; }
-          }
-
-          if (!matchedJob) {
-            json(res, 200, { ok: true, action: 'ack', event: ghEvent, pr_url: prUrl, tracked: false });
-            return;
-          }
-
-          const { job, result: jobResult } = matchedJob;
-          const packet = rj(pp(job.job_id));
-          const blockerText = `${ghEvent}${reviewState ? ` ${reviewState}` : ''}${context ? ` ${context}` : ''}: ${body}`;
-          const blockers = await collectPrReviewFeedback(repo, prNum);
-          if (blockers.length === 0) blockers.push(blockerText);
-          const review = {
-            ok: true,
-            skipped: false,
-            disposition: 'block',
-            blockerType: 'review',
-            blockers,
-            failedChecks: [],
-            merged: false,
-            autoMergeEnabled: false,
-          };
-          const remResult = maybeEnqueueReviewRemediation(job.job_id, packet, jobResult, review);
-          process.stdout.write(`[github-webhook] review-comment remediation for ${job.job_id} (${blockers.length} blockers): ${JSON.stringify(remResult)}\n`);
-          json(res, 200, { ok: true, action: 'remediation-attempted', job_id: job.job_id, pr_url: prUrl, remediation: remResult });
-          return;
-        } catch (error) {
-          process.stderr.write(`[github-webhook] error processing ${ghEvent}: ${(error as Error).message}\n`);
-          json(res, 200, { ok: false, action: 'ack', event: ghEvent, error: (error as Error).message });
-          return;
-        }
-      }
-
-      if (ghEvent === 'check_run' && action === 'completed' && (payload.check_run as Record<string, unknown>)?.conclusion === 'failure') {
-        const cr = payload.check_run as Record<string, unknown>;
-        const repo = (payload.repository as Record<string, unknown>)?.full_name as string || '';
-        const checkSuite = cr.check_suite as Record<string, unknown> | undefined;
-        const branch = (checkSuite?.head_branch as string) || '';
-        const sha = ((cr.head_sha as string) || '').slice(0, 7);
-        const checkName = (cr.name as string) || 'unknown';
-        const detailsUrl = (cr.details_url as string) || (cr.html_url as string) || '';
-
-        const prs = (cr.pull_requests as Array<Record<string, unknown>>) || [];
-        const prNum = (prs[0]?.number as number) || null;
-        const prUrl = prNum ? `https://github.com/${repo}/pull/${prNum}` : null;
-
-        process.stdout.write(`[github-webhook] check_run FAILURE: ${checkName} on ${repo}@${branch} (${sha})${prUrl ? ` PR#${prNum}` : ''}\n`);
-
-        if (prUrl) {
-          try {
-            const { listJobs: lj, readJson: rj, resultPath: rp, packetPath: pp } = require('../lib/jobs');
-            const { reviewPr: rp2 } = require('../lib/pr-review');
-            const { findRepoMapping } = require('../lib/repos');
-            const allJobs = lj();
-
-            let matchedJob: { job: Record<string, unknown>; result: Record<string, unknown> } | null = null;
-            for (const job of allJobs) {
-              try {
-                const jobResult = rj(rp(job.job_id));
-                if (jobResult.pr_url === prUrl) { matchedJob = { job, result: jobResult }; break; }
-              } catch { continue; }
-            }
-
-            if (matchedJob) {
-              const { job, result: jobResult } = matchedJob;
-              const packet = rj(pp(job.job_id));
-              const { prReviewPolicy } = require('../lib/jobs');
-              const policy = prReviewPolicy(packet?.repo);
-              const review = rp2({ prUrl, autoMerge: false, mergeMethod: policy.mergeMethod });
-
-              if (review.disposition === 'block') {
-                const { maybeEnqueueReviewRemediation } = require('../lib/jobs');
-                const remResult = maybeEnqueueReviewRemediation(job.job_id, packet, jobResult, review);
-                process.stdout.write(`[github-webhook] remediation for ${job.job_id}: ${JSON.stringify(remResult)}\n`);
-                json(res, 200, { ok: true, action: 'remediation-attempted', job_id: job.job_id, remediation: remResult });
-                return;
-              }
-              json(res, 200, { ok: true, action: 'reviewed', job_id: job.job_id, disposition: review.disposition });
-              return;
-            }
-
-            const repoMapping = findRepoMapping({ repo });
-            if (repoMapping) {
-              process.stderr.write(`[github-webhook] untracked CI failure on ${repo}#${prNum}; CCP incident creation is retired\n`);
-              retiredIntake(res, 'github-check-run', true);
-              return;
-            }
-          } catch (error) {
-            process.stderr.write(`[github-webhook] error processing check_run: ${(error as Error).message}\n`);
-          }
-        }
-
-        json(res, 200, { ok: true, action: 'ack', event: ghEvent });
-        return;
-      }
-
-      if (ghEvent === 'pull_request' && action === 'closed' && (payload.pull_request as Record<string, unknown>)?.merged) {
-        const pr = payload.pull_request as Record<string, unknown>;
-        const repo = (payload.repository as Record<string, unknown>)?.full_name as string || '';
-        const prUrl = (pr.html_url as string) || '';
-        const mergedBy = ((pr.merged_by as Record<string, unknown>)?.login as string) || 'unknown';
-        process.stdout.write(`[github-webhook] PR merged: ${repo}#${pr.number} ${pr.title}\n`);
-
-        let matchedTicket: string | null = null;
-        try {
-          const { listJobs: lj, readJson: rj, resultPath: rp, saveStatus: ss, packetPath: pktPath } = require('../lib/jobs');
-          const allJobs = lj();
-          for (const job of allJobs) {
-            try {
-              const jobResult = rj(rp(job.job_id));
-              if (jobResult.pr_url === prUrl) {
-                try {
-                  const pkt = rj(pktPath(job.job_id));
-                  matchedTicket = pkt.ticket_id || null;
-                } catch (e) { console.error(`[ccp] failed to read packet for ticket match: ${(e as Error).message}`); }
-                if (job.state !== 'done' && job.state !== 'verified') {
-                  ss(job.job_id, { state: 'verified' });
-                  process.stdout.write(`[github-webhook] job ${job.job_id} → verified (PR merged)\n`);
-                }
-                break;
-              }
-            } catch { continue; }
-          }
-        } catch (error) {
-          process.stderr.write(`[github-webhook] error processing PR merge: ${(error as Error).message}\n`);
-        }
-
-        // Post merge notification to Discord status channel
-        try {
-          const { sendDiscordMessage } = require('../lib/jobs');
-          const statusChannel = process.env.CCP_DISCORD_STATUS_CHANNEL || process.env.CCP_DISCORD_REVIEW_CHANNEL || '';
-          if (statusChannel) {
-            const ticketLabel = matchedTicket || 'untracked';
-            const repoName = repo.split('/').pop() || repo;
-            const mergeMsg = `🔀 MERGED — ${ticketLabel} | ${repoName} | PR #${pr.number}\nTitle: ${(pr.title as string) || ''}\nMerged by: ${mergedBy}`;
-            sendDiscordMessage(statusChannel, mergeMsg);
-          }
-        } catch (error) {
-          process.stderr.write(`[github-webhook] error sending merge notification: ${(error as Error).message}\n`);
-        }
-
-        json(res, 200, { ok: true, action: 'pr-merged', pr: pr.number });
-        return;
-      }
-
-      json(res, 200, { ok: true, action: 'ack', event: ghEvent });
+      retiredIntake(res, 'onboard');
       return;
     }
 

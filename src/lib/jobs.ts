@@ -5,7 +5,7 @@ import type {
   JobPacket, JobStatus, JobResult, RepoProof,
   PRReviewResult, PrReviewIntegration, RemediationResult, DiscordMessageResult, DiscordThreadResult,
   SupervisorCycleSummary, PreflightResult, PrWatcherCycleResult,
-  ReviewComment, AddressedComment, ValidationReport,
+  AddressedComment, ValidationReport,
   AutoRemediationStatus, HarnessFailureInfo,
 } from '../types';
 import { run, commandExists, shellQuote } from './shell';
@@ -18,9 +18,7 @@ const { loadRepoMemory } = require('./memory');
 const { getParallelJobLimit, acquireRequiredWorktree, releaseWorktree } = require('./worktree');
 const { runPlanner } = require('./planner');
 const { inspectDiscordTransport, hasDiscordTransport, sendDiscordMessage, createDiscordThread } = require('./discord');
-const { reviewPr } = require('./pr-review');
 const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = require('./outage');
-const { prReviewPolicy, isNightlyPacket } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
 const {
   summarizeAutoRemediation,
@@ -28,7 +26,6 @@ const {
   isRemediationJobId,
   downgradeWebhookStatus,
 } = require('./auto-remediation');
-const { fetchPrReviewComments, postRemediationComments } = require('./pr-comments');
 const {
   buildDecisionInstructions,
   createDecisionContinuationPacket,
@@ -160,10 +157,14 @@ function saveStatus(jobId: string, patch: Partial<JobStatus>): JobStatus {
     const mergedNotifications = patch.notifications
       ? { ...(current.notifications || {}), ...patch.notifications }
       : current.notifications;
+    const mergedIntegrations = patch.integrations
+      ? { ...(current.integrations || {}), ...patch.integrations }
+      : current.integrations;
     const next: JobStatus = {
       ...current,
       ...patch,
       notifications: mergedNotifications,
+      integrations: mergedIntegrations,
       updated_at: nowIso(),
     } as JobStatus;
     writeJson(file, next);
@@ -602,7 +603,7 @@ interface FinalNotificationSignal {
   body: string;
 }
 
-const NON_BLOCKING_AUTO_REMEDIATION = new Set(['queued', 'existing', 'pending-watcher', 'superseded']);
+const NON_BLOCKING_AUTO_REMEDIATION = new Set(['queued', 'existing', 'superseded']);
 
 function truncateSignal(text: string | null | undefined, max = 1800): string {
   const s = text && text.trim() ? text.trim() : 'none captured';
@@ -646,11 +647,9 @@ function classifyFinalNotificationSignal(result: Partial<JobResult>, exitCode: n
   const nonBlocking = !!autoDisposition && NON_BLOCKING_AUTO_REMEDIATION.has(autoDisposition);
 
   if (normallyError && nonBlocking) {
-    const heading = autoDisposition === 'pending-watcher'
-      ? '🟡 WATCHING'
-      : autoDisposition === 'superseded'
-        ? '🟡 SUPERSEDED'
-        : '🔁 AUTO-REMEDIATING';
+    const heading = autoDisposition === 'superseded'
+      ? '🟡 SUPERSEDED'
+      : '🔁 AUTO-REMEDIATING';
     const raw = truncateSignal(result.blocker || result.summary || null, 700);
     const body = [
       autoLine || 'Auto-remediation: active',
@@ -680,128 +679,14 @@ function classifyFinalNotificationSignal(result: Partial<JobResult>, exitCode: n
   };
 }
 
-// prReviewPolicy is now imported from ./pr-policy
-
-function formatPrReview(review: PRReviewResult | null): string | null {
-  if (!review) return null;
-  return [
-    `PR review: ${review.disposition}`,
-    `PR URL: ${review.prUrl}`,
-    `Mergeable: ${review.mergeable}`,
-    `Review decision: ${review.reviewDecision}`,
-    `Auto-merge: ${review.autoMergeEnabled ? 'enabled' : 'no'}`,
-    review.blockers?.length ? `Review blockers: ${review.blockers.join('; ')}` : 'Review blockers: none',
-  ].join('\n');
-}
-
-function maybeReviewPr(jobId: string, result: JobResult): PRReviewResult & { skipped?: boolean; reason?: string } {
-  const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
-  const policy = prReviewPolicy(packet?.repo || undefined, { isNightly: isNightlyPacket(packet) });
-  if (!policy.enabled || !result?.pr_url) {
-    return { ok: false, skipped: true, reason: !result?.pr_url ? 'no PR URL' : 'PR review disabled' } as PRReviewResult & { skipped?: boolean; reason?: string };
-  }
-  try {
-    const review: PRReviewResult = reviewPr({ prUrl: result.pr_url, autoMerge: policy.autoMerge, mergeMethod: policy.mergeMethod });
-    appendLog(jobId, `[${nowIso()}] pr review: ${review.disposition}${review.autoMergeEnabled ? ' (auto-merge enabled)' : ''}`);
-    return { ...review, ok: true, skipped: false };
-  } catch (error) {
-    appendLog(jobId, `[${nowIso()}] pr review error: ${(error as Error).message}`);
-    return { ok: false, skipped: false, reason: (error as Error).message } as PRReviewResult & { skipped?: boolean; reason?: string };
-  }
-}
 
 /**
- * Phase 2b: if validation gating promoted the job to `validation-failed`, spawn
- * a `__valfix` remediation job with the failing-step output as feedback. The
- * fix job targets the same branch so the existing PR gets updated in place.
+ * Historical smoke-remediation constructor retained for isolated compatibility
+ * tests and replaying old records. No production finalizer or bounded watcher
+ * calls this function; native Hermes Kanban owns current PR remediation.
  *
- * Gated on CCP_PR_REMEDIATE_ENABLED (shared with PR-review remediation) and
- * the per-repo `validation.gate` flag that already produced the blocker.
- */
-function maybeEnqueueValidationRemediation(
-  jobId: string,
-  packet: JobPacket,
-  result: JobResult,
-): RemediationResult {
-  const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
-  if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
-  // Depth guard: skip if the job is already a remediation/retry child
-  // (valfix/deployfix/reviewfix/autoretry). Phase 6a auto-unblock uses
-  // the same guard so we never cascade a watchdog retry into another
-  // one-shot remediation.
-  if (/__deployfix|__reviewfix|__valfix|__autoretry/.test(jobId)) {
-    return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
-  }
-  if (result.blocker_type !== 'validation-failed') {
-    return { ok: false, skipped: true, reason: 'job is not blocked on validation' };
-  }
-  if (!result.validation || result.validation.skipped) {
-    return { ok: false, skipped: true, reason: 'no validation report to remediate' };
-  }
-
-  const remediationJobId = `${jobId}__valfix`;
-  if (fs.existsSync(statusPath(remediationJobId))) {
-    return { ok: true, skipped: true, reason: 'remediation job already exists', job_id: remediationJobId };
-  }
-
-  const blocker = buildValidationBlocker(result.validation);
-  const failingList = blocker.failedStepNames.join(', ') || 'unknown';
-  const feedback: string[] = [
-    `Static validation failed for ${packet.ticket_id || jobId}.`,
-    `Failing required steps: ${failingList}.`,
-    result.pr_url ? `PR: ${result.pr_url}` : `Branch: ${result.branch || 'unknown'}`,
-    'Fix every failing step on the existing branch. Do not create a new PR.',
-    'Re-run the same validation commands locally after your fix to confirm green before pushing.',
-    ...blocker.feedback,
-  ];
-
-  const remediationPacket: JobPacket = {
-    ...packet,
-    job_id: remediationJobId,
-    goal: `Remediate validation failure(s) for ${packet.ticket_id || jobId} (${failingList})`,
-    source: 'validation',
-    kind: 'bug',
-    label: 'validation-fix',
-    review_feedback: feedback,
-    // Clear inherited PR review comments — this is a validation-fix task, not a
-    // review-fix task. Leaving them set would cause buildPrompt to instruct the
-    // agent to also "address each review comment individually" + emit an
-    // AddressedComments block, which is irrelevant here and splits attention.
-    reviewComments: undefined,
-    working_branch: result.branch && result.branch !== 'unknown' ? result.branch : packet.working_branch || null,
-    base_branch: packet.base_branch || 'main',
-    acceptance_criteria: [
-      ...(packet.acceptance_criteria || []),
-      `Make every failing validation step pass: ${failingList}.`,
-      'Push updates to the existing PR branch.',
-      'Do not create a new PR.',
-    ],
-    verification_steps: [
-      ...(packet.verification_steps || []),
-      'Re-run the failing validation commands locally before declaring done.',
-      'If a command cannot reasonably be made green in this patch, leave a precise blocker note explaining why.',
-    ],
-    created_at: nowIso(),
-  };
-  const created = createJob(remediationPacket);
-  appendLog(jobId, `[${nowIso()}] validation remediation job queued: ${created.jobId}`);
-  return { ok: true, skipped: false, job_id: created.jobId, branch: remediationPacket.working_branch, blockerType: 'validation-failed' };
-}
-
-/**
- * Phase 4 PR D: if smoke gating promoted the job to `smoke-failed`, spawn
- * a `__deployfix` remediation job with the SmokeResult details as feedback.
- * Targets the same branch so the existing PR gets updated in place.
- *
- * Gated on `CCP_PR_REMEDIATE_ENABLED` (shared with PR-review and validation
- * remediation) and the per-repo `smoke.gate` flag that already produced the
- * blocker. Uses the `__deployfix` suffix to stay coherent with the existing
- * PR-review "deploy" blockerType that already spawns the same shape of job
- * — a repo operator sees one class of remediation for "deployment broke".
- *
- * Depth guard: `__deployfix|__reviewfix|__valfix|__autoretry` in the job ID short-
- * circuits, so a smoke-failed remediation won't cascade into a second
- * __deployfix on the same original ticket.
+ * The legacy depth guard recognizes `__deployfix|__reviewfix|__valfix|__autoretry`
+ * so replaying an old remediation record cannot create a second child.
  */
 function maybeEnqueueSmokeRemediation(
   jobId: string,
@@ -878,74 +763,6 @@ function maybeEnqueueSmokeRemediation(
   };
 }
 
-function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result: JobResult, prReview: PRReviewResult & { skipped?: boolean }): RemediationResult {
-  const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
-  if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
-  // Include __valfix so a Phase 2b validation remediation PR that picks up a
-  // blocking review doesn't cascade into a __valfix__reviewfix job — one layer
-  // of auto-remediation per original job id, period.
-  if (/__deployfix|__reviewfix|__valfix|__autoretry/.test(jobId)) return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
-  if (!prReview?.ok || prReview.disposition !== 'block') return { ok: false, skipped: true, reason: 'no blocking PR review' };
-  const remediationSuffix = prReview.blockerType === 'deploy' ? '__deployfix' : '__reviewfix';
-  const remediationJobId = `${jobId}${remediationSuffix}`;
-  if (fs.existsSync(statusPath(remediationJobId))) {
-    return { ok: true, skipped: true, reason: 'remediation job already exists', job_id: remediationJobId };
-  }
-  const relevantChecks = (prReview.failedChecks?.length ? prReview.failedChecks : (prReview.checks || []).filter((c) => c.state !== 'SUCCESS' && c.state !== 'NEUTRAL' && c.state !== 'SKIPPED'));
-  const feedback: string[] = [
-    `PR review blocked for ${packet.ticket_id || jobId}`,
-    `PR: ${prReview.prUrl}`,
-    `Disposition: ${prReview.disposition}`,
-    `Blocker type: ${prReview.blockerType || 'unknown'}`,
-    ...(prReview.blockers || []).map((b) => `Blocker: ${b}`),
-    ...relevantChecks.map((c) => `Check ${c.name}: ${c.state}${c.url ? ` (${c.url})` : ''}`),
-    prReview.blockerType === 'deploy'
-      ? 'Investigate the deployment/platform failure, fix anything code-side that can resolve it, and push updates to the same branch. If the issue is definitely external/platform-only, leave a precise blocker note with the exact failing service and URL.'
-      : 'Fix the blocking PR issues on the existing branch, push updates to the same branch, and do not create a new PR.',
-  ];
-
-  // Fetch structured review comments from the PR for comment-level tracking
-  let reviewComments: ReviewComment[] = [];
-  if (prReview.blockerType === 'review' || prReview.blockerType === 'checks') {
-    try {
-      reviewComments = fetchPrReviewComments(prReview.prUrl);
-      if (reviewComments.length > 0) {
-        appendLog(jobId, `[${nowIso()}] fetched ${reviewComments.length} review comments from PR`);
-      }
-    } catch (e) {
-      appendLog(jobId, `[${nowIso()}] failed to fetch review comments: ${(e as Error).message}`);
-    }
-  }
-
-  const remediationPacket: JobPacket = {
-    ...packet,
-    job_id: remediationJobId,
-    goal: `${prReview.blockerType === 'deploy' ? 'Remediate deploy blocker' : 'Remediate PR blockers'} for ${packet.ticket_id || jobId}`,
-    source: prReview.blockerType === 'deploy' ? 'vercel' : 'pr-review',
-    kind: prReview.blockerType === 'deploy' ? 'deploy' : 'bug',
-    label: prReview.blockerType === 'deploy' ? 'deploy' : 'review-fix',
-    review_feedback: feedback,
-    reviewComments: reviewComments.length > 0 ? reviewComments : undefined,
-    working_branch: prReview.headRefName || packet.working_branch || null,
-    base_branch: prReview.baseRefName || packet.base_branch || 'main',
-    acceptance_criteria: [
-      ...(packet.acceptance_criteria || []),
-      'Address every blocking PR review finding individually, not just the first one.',
-      'Push updates to the existing PR branch.',
-      'Do not create a new PR.',
-    ],
-    verification_steps: [
-      ...(packet.verification_steps || []),
-      'Re-run failing checks or the closest local equivalent.',
-      'Explicitly verify each review comment is addressed in code or call out why it is not applicable.',
-      'Leave the PR in a state that can pass reviewer re-check.',
-    ],
-    created_at: nowIso(),
-  };
-  const created = createJob(remediationPacket);
-  appendLog(jobId, `[${nowIso()}] remediation job queued: ${created.jobId}`);
-  return { ok: true, skipped: false, job_id: created.jobId, branch: remediationPacket.working_branch, blockerType: prReview.blockerType || 'unknown' };
-}
 
 function notifyStart(jobId: string): void {
   const status = loadStatus(jobId);
@@ -1097,29 +914,6 @@ function classifyHarnesslessSuccess(input: {
   };
 }
 
-function recoverPrMetadata(prUrl: string | null, repoPath: string | null): { commit: string | null; branch: string | null } {
-  if (!prUrl) return { commit: null, branch: null };
-  const gh = commandExists('gh');
-  if (!gh) return { commit: null, branch: null };
-
-  const args = ['pr', 'view', prUrl, '--json', 'headRefOid,headRefName'];
-  const ownerRepo = repoPath ? resolveOwnerRepo(repoPath) : null;
-  if (ownerRepo) args.push('--repo', ownerRepo);
-
-  const out = run(gh, args);
-  if (out.status !== 0) return { commit: null, branch: null };
-
-  try {
-    const parsed = JSON.parse(out.stdout || '{}') as { headRefOid?: unknown; headRefName?: unknown };
-    return {
-      commit: typeof parsed.headRefOid === 'string' && parsed.headRefOid ? parsed.headRefOid : null,
-      branch: typeof parsed.headRefName === 'string' && parsed.headRefName ? parsed.headRefName : null,
-    };
-  } catch {
-    return { commit: null, branch: null };
-  }
-}
-
 function inspectRepoProof(repo: string | null, claimedCommit: string): RepoProof {
   // Normalize: workers sometimes report "abc1234 (already merged to main)" — extract just the hash
   const commitMatch = claimedCommit.match(/^([0-9a-f]{7,40})/i);
@@ -1155,13 +949,6 @@ function inspectRepoProof(repo: string | null, claimedCommit: string): RepoProof
     // First try local object store
     const revOut = run(git, ['-C', repo, 'rev-parse', '--verify', `${claimedCommit}^{commit}`]);
     commitExists = revOut.status === 0;
-    // If not found locally, fetch and check origin/main (covers reviewfix case where
-    // work was already merged to main and the worker correctly identifies it)
-    if (!commitExists) {
-      run(git, ['-C', repo, 'fetch', '--quiet', 'origin', 'main']);
-      const remoteOut = run(git, ['-C', repo, 'merge-base', '--is-ancestor', claimedCommit, 'FETCH_HEAD']);
-      if (remoteOut.status === 0) commitExists = true;
-    }
   }
   return {
     repoExists: true,
@@ -1303,46 +1090,6 @@ function extractPrReferences(text: string): { urls: string[]; numbers: string[] 
   return { urls: [...urls], numbers: [...numbers] };
 }
 
-/**
- * PRO-594: Verify PR candidates against GitHub via `gh pr view` and return
- * the first candidate whose `--repo <owner/repo>` lookup succeeds. This is
- * the recovery path for cases where:
- *   - the worker mentioned `PR #465` but never wrote the full URL, OR
- *   - the local branch was reset (`proof.pushed=false`) so a branch-based
- *     `gh pr view <branch>` was previously skipped.
- *
- * Guardrail: text-mention is necessary but not sufficient — every
- * candidate is verified with `gh pr view --repo <ownerRepo>` so we never
- * hydrate a PR that doesn't actually exist in the matching repo.
- */
-function verifyPrCandidates(
-  candidates: { urls: string[]; numbers: string[] },
-  ownerRepo: string,
-): string | null {
-  const gh = commandExists('gh');
-  if (!gh) return null;
-  const seen = new Set<string>();
-  // Prefer explicit URLs first — they uniquely identify a repo and are the
-  // strongest evidence the worker actually delivered the work to GitHub.
-  for (const url of candidates.urls) {
-    if (seen.has(url)) continue;
-    seen.add(url);
-    const out = run(gh, ['pr', 'view', url, '--json', 'url', '-q', '.url']);
-    if (out.status === 0 && out.stdout.trim().startsWith('https://')) {
-      return out.stdout.trim();
-    }
-  }
-  for (const num of candidates.numbers) {
-    if (seen.has(num)) continue;
-    seen.add(num);
-    const out = run(gh, ['pr', 'view', num, '--repo', ownerRepo, '--json', 'url', '-q', '.url']);
-    if (out.status === 0 && out.stdout.trim().startsWith('https://')) {
-      return out.stdout.trim();
-    }
-  }
-  return null;
-}
-
 function inferBlockedReason(logText: string, result: { state: string; commit: string; prod: string; verified: string; pr_url: string | null }, proof: RepoProof): string | null {
   const permissionMatch = logText.match(/I need file write permission to proceed\.[\s\S]*?(?=WORKER_EXIT_CODE:|$)/i);
   if (permissionMatch) {
@@ -1382,8 +1129,8 @@ function tmuxSessionAlive(session: string | null): boolean {
  *
  * Phase 2a: **informational only** — the report is attached to result.json and
  * surfaced in logs/Discord, but the final job state is NOT changed by validation
- * outcome. Phase 2b will promote a failing required step into a blocking state
- * and auto-spawn a `__valfix` remediation job.
+ * outcome. Phase 2b promotes a failing required step into a blocking state and
+ * records evidence; native Hermes Kanban owns any follow-up remediation.
  *
  * Returns null if validation wasn't even attempted (e.g. no repo mapping,
  * globally disabled, or terminal state with no produced commit).
@@ -1494,64 +1241,16 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const proof = inspectRepoProof(workdir, summary.commit || 'none');
   const hasSummaryOutput = !!(summary.state || summary.summary || summary.commit);
 
-  // PRO-594: Recover PR metadata from every reliable source before classification
-  // so a real PR (existing or just pushed) is never misclassified as blocked. The
-  // priority order, strongest signal first:
-  //   1. explicit URL in worker summary / log
-  //   2. URL passed in from packet metadata or review_feedback
-  //   3. `PR #<n>` / `pull request #<n>` references in worker log, verified with
-  //      `gh pr view <num> --repo <owner/repo>`
-  //   4. branch-based remote lookup `gh pr view <branch> --repo <owner/repo>`
-  //      (no longer gated on `proof.pushed` — the local branch may have been
-  //      reset/cleaned by the worker even when the remote PR exists)
-  //   5. `gh pr list --head <branch> --state all` fallback
-  let prUrl: string | null = summary.pr_url || inferPrUrlFromPacket(packet) || null;
-  const ownerRepo = workdir ? resolveOwnerRepo(workdir) : null;
-  if (!prUrl && workdir && ownerRepo) {
-    const gh = commandExists('gh');
-    if (gh) {
-      // (3) Verify any PR # references found in worker log against the repo.
-      const refs = extractPrReferences(currentAttemptLog);
-      const verified = verifyPrCandidates(refs, ownerRepo);
-      if (verified) {
-        prUrl = verified;
-        appendLog(jobId, `[${nowIso()}] pr_url recovered from worker log reference: ${prUrl}`);
-      }
-      // (4) Fall back to branch-based lookup. Note: we intentionally drop the
-      // `proof.pushed` precondition so a reset/clean local branch with an
-      // open remote PR (PRO-593 incident) is still recoverable.
-      if (!prUrl && proof.branch && proof.branch !== 'main' && proof.branch !== 'master') {
-        const prCheck = run(gh, ['pr', 'view', proof.branch, '--repo', ownerRepo, '--json', 'url', '-q', '.url']);
-        if (prCheck.status === 0 && prCheck.stdout.trim().startsWith('https://')) {
-          prUrl = prCheck.stdout.trim();
-          appendLog(jobId, `[${nowIso()}] pr_url recovered from GitHub branch: ${prUrl}`);
-        } else {
-          // (5) `gh pr view <branch>` only finds open PRs by default; widen to
-          // any state (open/merged/closed) via list — operator triage still
-          // benefits from a closed/merged URL.
-          const listCheck = run(gh, [
-            'pr', 'list', '--head', proof.branch, '--repo', ownerRepo,
-            '--state', 'all', '--json', 'url', '-q', '.[0].url',
-          ]);
-          if (listCheck.status === 0 && listCheck.stdout.trim().startsWith('https://')) {
-            prUrl = listCheck.stdout.trim();
-            appendLog(jobId, `[${nowIso()}] pr_url recovered via gh pr list --head: ${prUrl}`);
-          }
-        }
-      }
-    }
-  }
-  const recoveredPr = recoverPrMetadata(prUrl, workdir);
-  if (prUrl && recoveredPr.commit && !summary.commit) {
-    appendLog(jobId, `[${nowIso()}] PR metadata recovered: commit=${recoveredPr.commit.slice(0, 12)} branch=${recoveredPr.branch || 'unknown'}`);
-  }
+  // General finalization is local-only after the native Kanban migration.
+  // Accept only an explicit PR URL emitted by the worker or carried in packet
+  // metadata; GitHub lookup and reconciliation belong to the bounded watcher.
+  const prUrl: string | null = summary.pr_url || inferPrUrlFromPacket(packet) || null;
 
   // Classification priority:
-  // 1. Harnessless PR success: exit 0 + PR metadata recovered but no final summary contract
-  // 2. Harness failure: exit 0 but worker produced no parseable summary and no PR metadata
-  // 3. No-op: worker produced summary but determined nothing needs to change
-  // 4. Dirty-repo: uncommitted changes but no commit created
-  // 5. Regular blocked inference
+  // 1. Harness failure: exit 0 without the required final summary contract
+  // 2. No-op: worker produced summary but determined nothing needs to change
+  // 3. Dirty-repo: uncommitted changes but no commit created
+  // 4. Regular blocked inference
   let finalState: string;
   let inferredBlocker: string | null;
   let synthesizedSummary: string | null = null;
@@ -1561,7 +1260,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     exitCode,
     hasSummaryOutput,
     prUrl,
-    recoveredCommit: recoveredPr.commit,
+    recoveredCommit: null,
     workerContext: workerContextForHarness,
     proof,
   });
@@ -1576,7 +1275,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     inferredBlocker = harnessless.blocker;
     synthesizedSummary = harnessless.summary;
     const prRecovered = !!prUrl;
-    const commitRecovered = !!recoveredPr.commit;
+    const commitRecovered = false;
     harnessFailureInfo = {
       kind: harnessless.state === 'coded' ? 'reporting-contract-recovered' : 'reporting-contract',
       prRecovered,
@@ -1590,12 +1289,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     const workerContext = extractWorkerFailureContext(logText);
     inferredBlocker = `uncommitted local changes but no commit created — worker may have been interrupted or failed to commit. Branch: ${proof.branch || 'unknown'}. Action: inspect repo changes, commit manually, or discard with git checkout. Worker said: ${workerContext}`;
   } else {
-    // PRO-594: prefer the PR's canonical head commit when we recovered a PR
-    // — workers sometimes emit a short/local sha while the actual remote
-    // commit on the PR is the truth-of-record.
     inferredBlocker = inferBlockedReason(logText, {
       state: provisionalState,
-      commit: recoveredPr.commit || summary.commit || 'none',
+      commit: summary.commit || 'none',
       prod: summary.prod || 'no',
       verified: summary.verified || 'not yet',
       pr_url: prUrl,
@@ -1614,8 +1310,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   // `ambiguity-operator` (needs a human) vs `ambiguity-transient`
   // (environmental noise — watchdog can retry) based on the blocker
   // text. Only fires when the job is actually blocked and no more
-  // specific blocker_type is set later (validation-failed,
-  // smoke-failed, or a pr-review blockerType override below).
+  // specific blocker_type is set later (validation-failed or smoke-failed).
   const resolvedBlocker = inferredBlocker
     || (summary.blocker && summary.blocker !== 'none' ? summary.blocker : null)
     || (exitCode !== 0
@@ -1630,12 +1325,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   const result: JobResult = {
     job_id: jobId,
     state: finalState,
-    // PRO-594: when a real PR is recovered, hydrate from its headRefOid/headRefName
-    // first so we don't preserve a stale/short worker-reported commit on top of
-    // the canonical remote sha.
-    commit: recoveredPr.commit || summary.commit || 'none',
-    branch: recoveredPr.branch || proof.branch || 'unknown',
-    pushed: recoveredPr.commit ? 'yes' : (typeof proof.pushed === 'boolean' ? (proof.pushed ? 'yes' : 'no') : 'unknown'),
+    commit: summary.commit || 'none',
+    branch: proof.branch || 'unknown',
+    pushed: typeof proof.pushed === 'boolean' ? (proof.pushed ? 'yes' : 'no') : 'unknown',
     pr_url: prUrl,
     prod: finalState === 'blocked' ? 'no' : (summary.prod || 'no'),
     verified: finalState === 'blocked' ? 'not yet' : (summary.verified || 'not yet'),
@@ -1672,11 +1364,10 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   //   Phase 2a: attach the report to result.json for visibility (always on).
   //   Phase 2b: if the repo opts in via `validation.gate=true` (or global
   //             CCP_VALIDATION_GATE=true), a failing required step promotes the
-  //             job to `blocked` with blocker_type='validation-failed' and a
-  //             `__valfix` remediation job is spawned below.
+  //             job to `blocked` with blocker_type='validation-failed'. Native
+  //             Kanban owns any follow-up remediation work.
   // See docs/validation.md. Gate with CCP_VALIDATION_ENABLED=false to disable globally.
   const validationReport = runPostWorkerValidation(jobId, packet, result, finalState, workdir || '');
-  let validationGated = false;
   if (validationReport) {
     result.validation = validationReport;
     appendLog(jobId, `[${nowIso()}] validation: ${summarizeReport(validationReport)}`);
@@ -1695,7 +1386,6 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       result.failed_checks = blocker.failedChecks;
       result.prod = 'no';
       result.verified = 'not yet';
-      validationGated = true;
       appendLog(jobId, `[${nowIso()}] validation gate: promoted to blocked (${blocker.failedStepNames.join(', ') || 'unknown'})`);
     }
   }
@@ -1718,44 +1408,28 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   saveStatus(jobId, statusPatch);
   writeJson(resultPath(jobId), result);
 
-  const prReview = decisionRequest
-    ? { ok: false, skipped: true, reason: 'operator decision pending' } as PRReviewResult & { skipped?: boolean; reason?: string }
-    : maybeReviewPr(jobId, result);
-  if (prReview?.ok) {
-    // Preserve the validation blocker if we set one \u2014 a green PR-review disposition
-    // must not silently erase a local validation failure. Likewise, preserve a
-    // Phase 6b ambiguity classification (`ambiguity-operator`/`ambiguity-transient`)
-    // when pr-review has nothing stronger to say \u2014 a green-but-silent review
-    // must not regress a classified ambiguity back to null.
-    //
-    // `prReview.blockerType` defaults to `'none'` (non-empty truthy string)
-    // when the PR has no issues, so treat `'none'` as "nothing to say" when
-    // deciding whether to overwrite a prior classification. Otherwise the
-    // naive `||` chain would clobber `ambiguity-transient` \u2192 `'none'` and
-    // silently disqualify the job from the auto-unblock watchdog.
-    const prBlockerType =
-      prReview.blockerType && prReview.blockerType !== 'none' ? prReview.blockerType : null;
-    if (!validationGated && !decisionRequest) {
-      result.blocker_type = prBlockerType || result.blocker_type || null;
-      result.failed_checks = prReview.failedChecks || [];
-    } else if (prBlockerType) {
-      // PR review found its own blocker on top of the validation failure: keep
-      // the validation blocker_type (it's the primary signal locally) but append
-      // PR-side failing checks so operators see both.
-      const existing = result.failed_checks || [];
-      const extra = (prReview.failedChecks || []).filter(
-        (c) => !existing.some((e) => e.name === c.name),
-      );
-      result.failed_checks = [...existing, ...extra];
-    }
-    writeJson(resultPath(jobId), result);
-  }
-  const remediation = decisionRequest
-    ? { ok: false, skipped: true, reason: 'operator decision pending' } as RemediationResult
-    : maybeEnqueueReviewRemediation(jobId, packet, result, prReview);
-  const validationRemediation = validationGated
-    ? maybeEnqueueValidationRemediation(jobId, packet, result)
-    : { ok: false, skipped: true, reason: 'validation not gated' } as RemediationResult;
+  // Native Hermes Kanban owns all new PR review and remediation. General CCP
+  // finalization must not query or mutate GitHub; only pr-watcher's exact
+  // two-job historical drain cohort may perform read-only PR status checks.
+  const prReview = {
+    ok: false,
+    skipped: true,
+    reason: decisionRequest
+      ? 'operator decision pending'
+      : 'retired: native Kanban owns PR review; historical drain is watcher-only',
+  } as PRReviewResult & { skipped: true; reason: string };
+  const remediation: RemediationResult = {
+    ok: false,
+    skipped: true,
+    reason: decisionRequest
+      ? 'operator decision pending'
+      : 'retired: native Kanban owns PR remediation',
+  };
+  const validationRemediation: RemediationResult = {
+    ok: false,
+    skipped: true,
+    reason: 'retired: native Kanban owns validation remediation',
+  };
   const autoRemediation: AutoRemediationStatus = summarizeAutoRemediation({
     state: result.state,
     blockerType: result.blocker_type,
@@ -1770,22 +1444,6 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   result.autoRemediation = autoRemediation;
   writeJson(resultPath(jobId), result);
 
-  // Post per-comment replies and summary for remediation jobs that have addressedComments
-  const isRemediationJob = /__deployfix|__reviewfix/.test(jobId);
-  if (isRemediationJob && result.addressedComments?.length && prUrl) {
-    try {
-      const commentResult = postRemediationComments({
-        prUrl,
-        addressedComments: result.addressedComments,
-        reviewComments: packet.reviewComments,
-        commitSha: result.commit !== 'none' ? result.commit : null,
-        resolveThreads: result.addressedComments.some((c: AddressedComment) => c.status === 'fixed'),
-      });
-      appendLog(jobId, `[${nowIso()}] pr comment replies: ${commentResult.replyResults.length} sent, ${commentResult.replyResults.filter((r: { ok: boolean }) => r.ok).length} ok, summary=${commentResult.summaryResult.ok ? 'ok' : 'failed'}${commentResult.fallbackUsed ? ' (fallback)' : ''}`);
-    } catch (e) {
-      appendLog(jobId, `[${nowIso()}] pr comment replies error: ${(e as Error).message}`);
-    }
-  }
 
   const currentAfterIntegrations = loadStatus(jobId);
   saveStatus(jobId, {
@@ -2821,10 +2479,7 @@ module.exports = {
   inspectEnvironment,
   interruptJob,
   answerDecision,
-  maybeEnqueueReviewRemediation,
   maybeEnqueueSmokeRemediation,
-  maybeReviewPr,
-  prReviewPolicy,
   statusPath,
   archiveOldJobs,
   healthCheck,
@@ -2866,10 +2521,7 @@ export {
   inspectEnvironment,
   interruptJob,
   answerDecision,
-  maybeEnqueueReviewRemediation,
   maybeEnqueueSmokeRemediation,
-  maybeReviewPr,
-  prReviewPolicy,
   statusPath,
   archiveOldJobs,
   healthCheck,
