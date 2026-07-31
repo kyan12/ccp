@@ -157,10 +157,14 @@ function saveStatus(jobId: string, patch: Partial<JobStatus>): JobStatus {
     const mergedNotifications = patch.notifications
       ? { ...(current.notifications || {}), ...patch.notifications }
       : current.notifications;
+    const mergedIntegrations = patch.integrations
+      ? { ...(current.integrations || {}), ...patch.integrations }
+      : current.integrations;
     const next: JobStatus = {
       ...current,
       ...patch,
       notifications: mergedNotifications,
+      integrations: mergedIntegrations,
       updated_at: nowIso(),
     } as JobStatus;
     writeJson(file, next);
@@ -599,7 +603,7 @@ interface FinalNotificationSignal {
   body: string;
 }
 
-const NON_BLOCKING_AUTO_REMEDIATION = new Set(['queued', 'existing', 'pending-watcher', 'superseded']);
+const NON_BLOCKING_AUTO_REMEDIATION = new Set(['queued', 'existing', 'superseded']);
 
 function truncateSignal(text: string | null | undefined, max = 1800): string {
   const s = text && text.trim() ? text.trim() : 'none captured';
@@ -643,11 +647,9 @@ function classifyFinalNotificationSignal(result: Partial<JobResult>, exitCode: n
   const nonBlocking = !!autoDisposition && NON_BLOCKING_AUTO_REMEDIATION.has(autoDisposition);
 
   if (normallyError && nonBlocking) {
-    const heading = autoDisposition === 'pending-watcher'
-      ? '🟡 WATCHING'
-      : autoDisposition === 'superseded'
-        ? '🟡 SUPERSEDED'
-        : '🔁 AUTO-REMEDIATING';
+    const heading = autoDisposition === 'superseded'
+      ? '🟡 SUPERSEDED'
+      : '🔁 AUTO-REMEDIATING';
     const raw = truncateSignal(result.blocker || result.summary || null, 700);
     const body = [
       autoLine || 'Auto-remediation: active',

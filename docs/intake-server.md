@@ -8,6 +8,7 @@ A lightweight local HTTP server receives the remaining authenticated CCP webhook
 - `POST /ingest/sentry`
 - `POST /ingest/manual` returns `410 Gone`; its former CCP/Linear producer is retired
 - `POST /api/intake` returns `410 Gone` after successful authentication; its former CCP/Linear producer is retired
+- `POST /api/onboard` returns `410 Gone` after admin authentication; repository/GitHub auto-onboarding is retired
 - `POST /webhook/linear` returns `410 Gone`; Linear intake is retired
 - `POST /webhook/github` verifies the exact raw-body signature, then returns non-retryable `410 Gone`; GitHub webhook mutation/remediation is retired
 

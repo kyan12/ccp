@@ -484,20 +484,13 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       return;
     }
 
-    // Onboard a new repo
+    // Repository auto-onboarding retired with general CCP intake. Keep the
+    // authenticated endpoint explicit so old operators receive a terminal
+    // migration response instead of silently mutating GitHub or repos.json.
     if (url.pathname === '/api/onboard') {
       if (!verifyAdminApi(req)) { json(res, 403, { ok: false, error: 'admin API auth failed' }); return; }
-      try {
-        const ownerRepo = (payload.ownerRepo || payload.repo) as string | undefined;
-        if (!ownerRepo || !ownerRepo.includes('/')) {
-          return json(res, 400, { error: 'Missing or invalid ownerRepo (expected owner/name)' });
-        }
-        const { onboardRepo } = require('../lib/onboard-repo');
-        const result = await onboardRepo(ownerRepo);
-        return json(res, result.ok ? 200 : 400, result);
-      } catch (e: unknown) {
-        return json(res, 500, { error: e instanceof Error ? e.message : String(e) });
-      }
+      retiredIntake(res, 'onboard');
+      return;
     }
 
     json(res, 404, { ok: false, error: 'not found' });

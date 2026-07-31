@@ -149,25 +149,26 @@ console.log('\nTest: summarizeAutoRemediation — existing with "already enqueue
   assert(result.disposition === 'existing', 'disposition is existing for "already enqueued" reason');
 }
 
-// ── summarizeAutoRemediation: pending-watcher ───────────────────
+// ── summarizeAutoRemediation: retired general watcher ──────────
 
-console.log('\nTest: summarizeAutoRemediation — pending-watcher (blocked + PR)');
+console.log('\nTest: summarizeAutoRemediation — blocked + PR is not hidden behind retired watcher');
 {
   const result: AutoRemediationStatus = summarizeAutoRemediation(base({
     state: 'blocked',
     prUrl: 'https://github.com/org/repo/pull/42',
   }));
-  assert(result.disposition === 'pending-watcher', 'disposition is pending-watcher');
-  assert(result.source === 'review', 'source is review');
+  assert(result.disposition === 'not-applicable', 'disposition is not-applicable');
+  assert(result.source === 'none', 'source is none');
+  assert(result.reason!.includes('native Kanban'), 'reason names native Kanban ownership');
 }
 
-console.log('\nTest: summarizeAutoRemediation — pending-watcher (coded + PR)');
+console.log('\nTest: summarizeAutoRemediation — coded + PR is not marked pending watcher');
 {
   const result: AutoRemediationStatus = summarizeAutoRemediation(base({
     state: 'coded',
     prUrl: 'https://github.com/org/repo/pull/42',
   }));
-  assert(result.disposition === 'pending-watcher', 'disposition is pending-watcher for coded state');
+  assert(result.disposition === 'not-applicable', 'coded PR is not-applicable to retired CCP watcher');
 }
 
 // ── summarizeAutoRemediation: harness-failure not-applicable ────
@@ -184,9 +185,8 @@ console.log('\nTest: summarizeAutoRemediation — harness-failure, no PR, no com
 }
 
 // ── summarizeAutoRemediation: harness-failure WITH recovered PR ─
-// Note: in practice, if CCP recovers a PR from a harnessless exit, the
-// final state is `coded` (not `harness-failure`), so the pending-watcher
-// path applies via the coded branch. A harness-failure + prUrl is not a
+// Note: in practice, if a worker reports a PR from a harnessless exit, the
+// final state is `coded` (not `harness-failure`). A harness-failure + prUrl is not a
 // realistic combination, but verify the catch-all handles it gracefully.
 
 console.log('\nTest: summarizeAutoRemediation — harness-failure with PR falls to catch-all');

@@ -82,6 +82,20 @@ test('drain watcher scopes exactly two historical jobs and performs status-only 
   seedJob(DRAIN_IDS[1], 12);
   seedJob('unrelated_ccp_job', 99);
 
+  const firstDrainStatus = readJson(statusPath(DRAIN_IDS[0])) as unknown as JobStatus;
+  const concurrentDecision = {
+    id: 'decision-preserved',
+    job_id: DRAIN_IDS[0],
+    question: 'already answered',
+    options: [],
+    created_at: new Date(0).toISOString(),
+    status: 'answered' as const,
+  };
+  writeJson(statusPath(DRAIN_IDS[0]), {
+    ...firstDrainStatus,
+    integrations: { ...(firstDrainStatus.integrations || {}), decision: concurrentDecision },
+  });
+
   const unrelatedStatusBefore = fs.readFileSync(statusPath('unrelated_ccp_job'));
   const unrelatedResultBefore = fs.readFileSync(resultPath('unrelated_ccp_job'));
   const drainResultsBefore = new Map(DRAIN_IDS.map((id) => [id, fs.readFileSync(resultPath(id))]));
@@ -100,6 +114,7 @@ test('drain watcher scopes exactly two historical jobs and performs status-only 
   assert.equal(openStatus.state, 'coded');
   assert.equal((mergedStatus.integrations?.prReview as { merged?: boolean })?.merged, true);
   assert.equal((openStatus.integrations?.prReview as { disposition?: string })?.disposition, 'approve');
+  assert.deepEqual(mergedStatus.integrations?.decision, concurrentDecision);
 
   for (const id of DRAIN_IDS) {
     assert.deepEqual(fs.readFileSync(resultPath(id)), drainResultsBefore.get(id));
@@ -116,4 +131,5 @@ test('drain watcher scopes exactly two historical jobs and performs status-only 
 
   const watcherSource = fs.readFileSync(path.join(__dirname, 'pr-watcher.js'), 'utf8');
   assert.doesNotMatch(watcherSource, /fireWebhookCallback|sendDiscordMessage|runSmoke|maybeEnqueue|attemptAutoRebase|appendLog/);
+  assert.doesNotMatch(watcherSource, /\.\.\.\(current\.integrations/);
 });

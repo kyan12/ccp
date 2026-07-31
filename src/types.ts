@@ -805,7 +805,7 @@ export interface JobResult {
    * read it from result.json. Notifier renders it as the
    * "Auto-remediation: ..." line; callbacks downgrade `failed`
    * statuses when the disposition means CCP has a non-terminal automatic next
-   * step (`queued`, `existing`, `pending-watcher`, or `superseded`).
+   * step (`queued`, `existing`, or `superseded`).
    */
   autoRemediation?: AutoRemediationStatus;
   /**
@@ -996,8 +996,6 @@ export interface RemediationResult {
  *                    enqueued (`remediationJobId` populated).
  * - `existing`       an existing remediation child for the same parent is
  *                    already running.
- * - `pending-watcher` the job has a PR but the pr-watcher cycle hasn't
- *                    fired remediation yet — operator can wait one cycle.
  * - `depth-limit`    the remediation depth guard tripped (this job is
  *                    itself a remediation/auto-retry); no further auto
  *                    retries.
@@ -1012,7 +1010,6 @@ export interface RemediationResult {
 export type AutoRemediationDisposition =
   | 'queued'
   | 'existing'
-  | 'pending-watcher'
   | 'depth-limit'
   | 'disabled'
   | 'not-applicable'

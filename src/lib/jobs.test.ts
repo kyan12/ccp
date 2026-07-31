@@ -508,23 +508,42 @@ console.log('\nTest: final notification signal explains true blocking reason, no
   assert(signal.body.includes('Raw signal:'), 'raw error is secondary context only');
 }
 
-console.log('\nTest: pending watcher is non-blocking while GitHub review signal is still settling');
+console.log('\nTest: retired general watcher does not suppress a real blocker');
 {
   const signal = classifyFinalNotificationSignal(
     {
-      state: 'coded',
+      state: 'blocked',
       pr_url: 'https://github.com/kyan12/ccp/pull/99',
+      blocker: 'manual reconciliation required',
       autoRemediation: {
-        disposition: 'pending-watcher',
+        disposition: 'not-applicable',
         superseding: false,
-        source: 'review',
-        reason: 'PR present; awaiting pr-watcher review/check signal',
+        source: 'none',
+        reason: 'native Kanban owns PR lifecycle; no general CCP watcher applies',
       },
     },
     0,
   );
-  assert(signal.channel === 'status', 'pending watcher signal is status');
-  assert(signal.isBlocking === false, 'pending watcher signal is non-blocking');
+  assert(signal.channel === 'errors', 'unhandled blocker routes to errors');
+  assert(signal.isBlocking === true, 'retired watcher cannot make blocker non-blocking');
+}
+
+console.log('\nTest: stale persisted pending-watcher status is treated as blocking');
+{
+  const signal = classifyFinalNotificationSignal(
+    {
+      state: 'blocked',
+      blocker: 'legacy blocker still needs reconciliation',
+      autoRemediation: {
+        disposition: 'pending-watcher',
+        superseding: false,
+        source: 'review',
+      } as never,
+    },
+    0,
+  );
+  assert(signal.channel === 'errors', 'legacy pending-watcher no longer routes to status');
+  assert(signal.isBlocking === true, 'legacy pending-watcher no longer suppresses blocker');
 }
 
 console.log('\nTest: workerLogForCurrentAttempt ignores stale earlier attempt rate-limit text');

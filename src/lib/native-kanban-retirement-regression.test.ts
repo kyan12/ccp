@@ -22,6 +22,7 @@ test('current-main legacy intake routes remain retired while Sentry targets nati
   const sentry = routeSlice("url.pathname === '/ingest/sentry'", "url.pathname === '/ingest/manual'");
   const manual = routeSlice("url.pathname === '/ingest/manual'", "url.pathname === '/api/intake'");
   const app = routeSlice("url.pathname === '/api/intake'", "url.pathname === '/api/onboard'");
+  const onboard = routeSlice("url.pathname === '/api/onboard'", "json(res, 404");
 
   assert.match(vercel, /retiredIntake\(res, 'vercel'/);
   assert.match(sentry, /submitSentryToKanban/);
@@ -29,6 +30,9 @@ test('current-main legacy intake routes remain retired while Sentry targets nati
   assert.match(manual, /retiredIntake\(res, 'manual'/);
   assert.match(app, /retiredIntake\(res, 'app'/);
   assert.doesNotMatch([vercel, manual, app].join('\n'), /onboardRepo|createJob|saveStatus|intakeToLinear/);
+  assert.match(onboard, /retiredIntake\(res, 'onboard'/);
+  assert.doesNotMatch(onboard, /onboardRepo|require|createJob|saveStatus/);
+  assert.equal(fs.existsSync(path.join(sourceRoot, 'lib', 'onboard-repo.ts')), false);
 
   const linear = routeSlice("url.pathname === '/webhook/linear'", '// ── Dashboard');
   assert.match(linear, /json\(res, 410/);

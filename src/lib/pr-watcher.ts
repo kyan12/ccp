@@ -92,26 +92,25 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
     }
 
     const current = loadStatus(jobId) as JobStatus;
-    const integrations = {
-      ...(current.integrations || {}),
-      prReview: {
-        ok: review.ok,
-        skipped: false,
-        disposition: review.disposition,
-        blockerType: review.blockerType,
-        blockers: review.blockers,
-        failedChecks: review.failedChecks,
-        merged: review.merged || false,
-        autoMergeEnabled: false,
-        watchedAt: nowIso(),
-        previewUrl: review.previewUrl ?? null,
-      },
+    const prReview = {
+      ok: review.ok,
+      skipped: false,
+      disposition: review.disposition,
+      blockerType: review.blockerType,
+      blockers: review.blockers,
+      failedChecks: review.failedChecks,
+      merged: review.merged || false,
+      autoMergeEnabled: false,
+      watchedAt: nowIso(),
+      previewUrl: review.previewUrl ?? null,
     };
 
     const merged = review.merged === true;
     saveStatus(jobId, {
       ...(merged && current.state !== 'done' && current.state !== 'verified' ? { state: 'done' } : {}),
-      integrations,
+      // saveStatus merges this key with the latest integrations while holding
+      // the status lock, so a concurrent decision update cannot be overwritten.
+      integrations: { prReview },
     });
 
     entry.disposition = review.disposition;
