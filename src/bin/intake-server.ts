@@ -6,6 +6,7 @@ const { loadConfig } = require('../lib/config');
 const { getSecret } = require('../lib/secrets');
 const { constantTimeEquals: safeEquals, verifyHmacSha256, isLoopbackAddress } = require('../lib/webhook-auth');
 const { retiredGitHubWebhookResponse } = require('../lib/github-webhook-retirement');
+const { submitSentryToKanban } = require('../lib/sentry-kanban');
 const { listJobs, jobsByState, loadStatus, readJson, healthCheck, packetPath, resultPath, jobDir } = require('../lib/jobs');
 
 const port: number = Number(process.env.CCP_INTAKE_PORT || 4318);
@@ -13,12 +14,10 @@ const vercelCfg = loadConfig('vercel', {});
 const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(__dirname, '..', '..'));
 const REPOS_PATH: string = path.join(ROOT, 'configs', 'repos.json');
 const DASHBOARD_PATH: string = path.join(__dirname, '..', 'dashboard', 'index.html');
-const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
-
-class RequestBodyTooLargeError extends Error {
-  constructor() {
-    super('request body too large');
-    this.name = 'RequestBodyTooLargeError';
+class RequestBodyError extends Error {
+  constructor(message: string, readonly statusCode: number) {
+    super(message);
+    this.name = 'RequestBodyError';
   }
 }
 
@@ -45,15 +44,19 @@ interface ParsedBody {
 
 function readRawBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
+    const configuredLimit = Number(process.env.CCP_INTAKE_MAX_BODY_BYTES || 1024 * 1024);
+    const maxBodyBytes = Number.isFinite(configuredLimit) && configuredLimit > 0
+      ? Math.floor(configuredLimit)
+      : 1024 * 1024;
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     let rejected = false;
 
     const contentLength = Number(req.headers['content-length'] || 0);
-    if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
+    if (Number.isFinite(contentLength) && contentLength > maxBodyBytes) {
       rejected = true;
       req.resume();
-      reject(new RequestBodyTooLargeError());
+      reject(new RequestBodyError('request body too large', 413));
       return;
     }
 
@@ -61,11 +64,11 @@ function readRawBody(req: http.IncomingMessage): Promise<Buffer> {
       if (rejected) return;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       totalBytes += buffer.length;
-      if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+      if (totalBytes > maxBodyBytes) {
         rejected = true;
         chunks.length = 0;
         req.resume();
-        reject(new RequestBodyTooLargeError());
+        reject(new RequestBodyError('request body too large', 413));
         return;
       }
       chunks.push(buffer);
@@ -81,10 +84,14 @@ function readRawBody(req: http.IncomingMessage): Promise<Buffer> {
 
 async function parseBody(req: http.IncomingMessage): Promise<ParsedBody> {
   const rawBody = await readRawBody(req);
-  return {
-    payload: rawBody.length ? JSON.parse(rawBody.toString('utf8')) : {},
-    rawBody,
-  };
+  try {
+    return {
+      payload: rawBody.length ? JSON.parse(rawBody.toString('utf8')) : {},
+      rawBody,
+    };
+  } catch {
+    throw new RequestBodyError('request body is not valid JSON', 400);
+  }
 }
 
 function verifyVercel(req: http.IncomingMessage): boolean {
@@ -92,12 +99,6 @@ function verifyVercel(req: http.IncomingMessage): boolean {
   if (!expected) return false;
   const provided = (req.headers['x-vercel-signature'] || req.headers['x-webhook-secret'] || '') as string;
   return !!provided && safeEquals(provided, expected);
-}
-
-function verifyLinear(req: http.IncomingMessage, rawBody: Buffer): boolean {
-  const expected = getSecret('LINEAR_WEBHOOK_SECRET');
-  const provided = String(req.headers['linear-signature'] || '');
-  return verifyHmacSha256(expected, rawBody, provided);
 }
 
 function verifySentry(req: http.IncomingMessage, rawBody: Buffer): boolean {
@@ -344,6 +345,11 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
   try {
     const url = new URL(req.url!, `http://${req.headers.host}`);
 
+    if (req.method === 'POST' && url.pathname === '/webhook/linear') {
+      json(res, 410, { ok: false, retired: true, error: 'Linear intake is retired; use native Hermes Kanban' });
+      return;
+    }
+
     // ── Dashboard ──
     if (req.method === 'GET' && url.pathname === '/') {
       res.writeHead(302, { Location: '/dashboard' });
@@ -425,7 +431,7 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       const sentryAction = (payload.action || '') as string;
       const sentryResource = (payload.resource || '') as string;
       if (sentryResource === 'installation' || sentryAction === 'installation') {
-        process.stdout.write(`[sentry-webhook] lifecycle event: ${sentryAction} ${sentryResource}\n`);
+        process.stdout.write('[sentry-webhook] acknowledged lifecycle event\n');
         json(res, 200, { ok: true, action: 'ack-lifecycle' });
         return;
       }
@@ -435,10 +441,23 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
           json(res, 200, { ok: true, action: 'skipped', reason: sentryAction });
           return;
         }
-        const issue = (payload.data as Record<string, unknown>).issue as Record<string, unknown>;
-        process.stdout.write(`[sentry-webhook] processing ${sentryAction} issue: ${issue.shortId || issue.title}\n`);
+        process.stdout.write('[sentry-webhook] processing issue webhook\n');
+      } else {
+        process.stderr.write('[sentry-webhook] rejected malformed issue payload\n');
+        json(res, 422, { ok: false, action: 'validation-failed', retryable: false, error: 'Sentry issue payload is missing data.issue' });
+        return;
       }
-      retiredIntake(res, 'sentry', true);
+      try {
+        json(res, 200, await submitSentryToKanban(payload));
+      } catch (error) {
+        const intakeError = error as Error & { statusCode?: number };
+        const status = typeof intakeError.statusCode === 'number' ? intakeError.statusCode : 503;
+        const publicError = status >= 500 ? 'native Kanban task creation failed' : intakeError.message;
+        process.stderr.write(
+          `[sentry-webhook] native Kanban intake failed (HTTP ${status}): ${intakeError.stack || intakeError.message}\n`,
+        );
+        json(res, status, { ok: false, action: 'kanban-create-failed', retryable: status >= 500, error: publicError });
+      }
       return;
     }
 
@@ -481,17 +500,15 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
       }
     }
 
-    // Linear webhook is retired; authenticate before returning the explicit terminal response.
-    if (url.pathname === '/webhook/linear') {
-      if (!verifyLinear(req, rawBody)) { json(res, 403, { ok: false, error: 'bad Linear signature' }); return; }
-      retiredIntake(res, 'linear');
-      return;
-    }
-
     json(res, 404, { ok: false, error: 'not found' });
   } catch (error) {
-    const status = error instanceof RequestBodyTooLargeError ? 413 : 500;
-    json(res, status, { ok: false, error: (error as Error).message });
+    const requestError = error as Error & { statusCode?: number };
+    const status = typeof requestError.statusCode === 'number' ? requestError.statusCode : 500;
+    const message = status >= 500 ? 'internal intake error' : requestError.message;
+    if (status >= 500) {
+      process.stderr.write(`[intake] unhandled request error (HTTP ${status}): ${requestError.stack || requestError.message}\n`);
+    }
+    json(res, status, { ok: false, error: message });
   }
 });
 

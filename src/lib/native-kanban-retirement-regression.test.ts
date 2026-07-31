@@ -15,7 +15,7 @@ function routeSlice(start: string, end: string): string {
   return intakeServer.slice(startAt, endAt);
 }
 
-test('current-main intake routes remain retired and cannot recreate Linear or repository onboarding', () => {
+test('current-main legacy intake routes remain retired while Sentry targets native Kanban', () => {
   assert.doesNotMatch(intakeServer, /intakeToLinear|dispatchLinearIssues|handleLinearWebhook/);
 
   const vercel = routeSlice("url.pathname === '/ingest/vercel'", "url.pathname === '/ingest/sentry'");
@@ -24,15 +24,15 @@ test('current-main intake routes remain retired and cannot recreate Linear or re
   const app = routeSlice("url.pathname === '/api/intake'", "url.pathname === '/api/onboard'");
 
   assert.match(vercel, /retiredIntake\(res, 'vercel'/);
-  assert.match(sentry, /retiredIntake\(res, 'sentry'/);
+  assert.match(sentry, /submitSentryToKanban/);
+  assert.doesNotMatch(sentry, /retiredIntake|createJob|saveStatus|intakeToLinear/);
   assert.match(manual, /retiredIntake\(res, 'manual'/);
   assert.match(app, /retiredIntake\(res, 'app'/);
-  assert.doesNotMatch([vercel, sentry, manual, app].join('\n'), /onboardRepo|createJob|saveStatus|intakeToLinear/);
+  assert.doesNotMatch([vercel, manual, app].join('\n'), /onboardRepo|createJob|saveStatus|intakeToLinear/);
 
-  const linear = routeSlice("url.pathname === '/webhook/linear'", "json(res, 404");
-  assert.match(linear, /verifyLinear/);
-  assert.match(linear, /retiredIntake\(res, 'linear'/);
-  assert.doesNotMatch(linear, /dispatchLinearIssues|createJob|saveStatus/);
+  const linear = routeSlice("url.pathname === '/webhook/linear'", '// ── Dashboard');
+  assert.match(linear, /json\(res, 410/);
+  assert.doesNotMatch(linear, /parseBody|verifyLinear|dispatchLinearIssues|createJob|saveStatus/);
 
   assert.doesNotMatch(intakeRunner, /Linear|GraphQL|mutation|createIssue|updateIssue/);
   assert.equal(fs.existsSync(path.join(sourceRoot, 'lib', 'linear.ts')), false);
