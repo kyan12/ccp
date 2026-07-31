@@ -183,6 +183,9 @@ console.log('\nTest: claudeCodeDriver.failurePatterns match known claude outage 
   const m = rlMatch("You've hit your limit. Resets 2pm (America/New_York)");
   assert(!!m, 'matches "hit your limit, resets 2pm"');
   assert(!!m && m[1].toLowerCase().includes('2pm'), 'captures the reset time');
+  const withAt = rlMatch("You've hit your limit. Resets at 3:30pm (America/New_York)");
+  assert(!!withAt, 'matches "hit your limit, resets at 3:30pm"');
+  assert(!!withAt && withAt[1].toLowerCase().includes('3:30pm'), 'captures reset time after "at"');
 }
 
 // ── claudeCodeDriver.preflight returns an AgentPreflight shape (runs actual commandExists) ──
