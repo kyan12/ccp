@@ -777,3 +777,30 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
 
+## 2026-06-02 — Nightly Review
+
+### Bug Fixed: Guard malformed GitHub CLI JSON in PR review
+
+`ghJson()` in `pr-review.ts` parsed `gh pr view --json ...` output directly with `JSON.parse`.
+If the GitHub CLI returned truncated or non-object output, the PR watcher would surface a raw
+parser exception instead of a clear review failure reason. The fix routes parsing through
+`parseGhJsonOutput()`, validates that the result is an object, and reports a concise
+`failed to parse gh JSON output` error.
+
+### Patterns Worth Reinforcing
+
+- **Current-attempt log scoping** (`323c053`, recent PRs #82/#85): Rate-limit and blocker
+  detection should inspect only the active worker attempt so stale failures do not pause or
+  block unrelated successful retries.
+- **Worker completion markers** (`ec2954c`): Finalization should require explicit worker exit
+  evidence before trusting placeholder-looking summary text.
+- **Small resilience fixes with tests**: Recent commits repeatedly harden one failure boundary
+  at a time and add targeted regression tests. That cadence keeps the control plane reliable
+  without broad refactors.
+
+### Code Health Observations
+
+- Several draft nightly PRs remain open with no status checks reported, so review/merge
+  automation health should be monitored separately from implementation health.
+- Config mapping churn around the G8 iOS repository suggests repo aliases should stay
+  canonicalized to avoid dispatching the same target under multiple keys.

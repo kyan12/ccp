@@ -13,7 +13,7 @@ import type { CheckInfo } from '../types';
 // extractPreviewUrl, which isn't re-exported via the TS `export { ... }`
 // footer). This mirrors how the rest of the codebase consumes pr-review.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { extractPreviewUrl, classifyPr } = require('./pr-review');
+const { extractPreviewUrl, classifyPr, parseGhJsonOutput } = require('./pr-review');
 
 let passed = 0;
 let failed = 0;
@@ -285,6 +285,34 @@ console.log('Test: classifyPr — open conflicting PR remains remediable');
   assert(result.disposition === 'block', 'open conflict still blocks');
   assert(result.blockerType === 'merge', 'open conflict keeps merge blocker type');
   assert(result.blockers.includes('merge conflicts'), 'open conflict records merge conflict');
+}
+
+console.log('Test: parseGhJsonOutput — malformed gh output gets useful error');
+{
+  const parsed = parseGhJsonOutput('{"number":123}');
+  assert(parsed.number === 123, 'valid JSON object parses');
+
+  let message = '';
+  try {
+    parseGhJsonOutput('not-json');
+  } catch (err) {
+    message = (err as Error).message;
+  }
+  assert(
+    /failed to parse gh JSON output/i.test(message),
+    'malformed output reports gh JSON parse failure',
+  );
+
+  message = '';
+  try {
+    parseGhJsonOutput('[]');
+  } catch (err) {
+    message = (err as Error).message;
+  }
+  assert(
+    /expected JSON object/i.test(message),
+    'non-object JSON is rejected',
+  );
 }
 
 console.log(`pr-review.test: ${passed} passed, ${failed} failed`);
