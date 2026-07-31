@@ -1,17 +1,9 @@
 /**
  * Phase 6a: auto-unblock watchdog.
  *
- * Jobs that land in `blocked` today only recover via:
- *   - human operator intervention (Discord `/ccp retry`, dashboard)
- *   - a one-shot remediation spawn (`__valfix` / `__deployfix` /
- *     `__reviewfix`) that runs immediately at finalize time and then
- *     gives up if it too ends in `blocked`.
- *
- * That leaves a class of flaky-but-fixable failures stuck forever.
- * Example: a smoke test fails because the preview deployment hadn't
- * finished building yet, `__deployfix` fires a new attempt that also
- * fails for the same transient reason, and now the job needs an
- * operator to notice + manually retry.
+ * Native Kanban owns current PR follow-up. This default-off watchdog remains
+ * only for explicitly configured legacy non-PR jobs whose transient blockers
+ * would otherwise require operator retry.
  *
  * This watchdog adds a bounded, configurable second-chance loop:
  *   - scan `blocked` jobs every supervisor cycle,
@@ -26,9 +18,9 @@
  *     (`CCP_AUTO_UNBLOCK_ENABLED=false` globally disables). Default OFF.
  *   - Idempotent: if a retry with the target `__autoretryN` id already
  *     exists (e.g. from a previous cycle) we skip spawning a duplicate.
- *   - Depth-guarded: remediation jobs (`__valfix` / `__deployfix` /
- *     `__reviewfix` / `__autoretry`) never spawn their own retry.
- *     Failing remediations are the signal to give up, not to cascade.
+ *   - Depth-guarded: historical remediation ids and `__autoretry` children
+ *     never spawn their own retry. The legacy suffixes are recognized for
+ *     compatibility; current general finalization does not produce them.
  *   - Every branch is logged to `worker.log` of the parent job so an
  *     operator scrolling the job's log sees exactly what the watchdog
  *     did and why.
@@ -77,9 +69,8 @@ export const DEFAULT_AUTO_UNBLOCK_ELIGIBLE_TYPES = [
  * Any job id matching this pattern is itself a remediation or retry
  * child — the watchdog MUST NOT spawn further retries from it or the
  * dispatch tree would fan out without bound. A repeat failure on a
- * `__valfix` / `__deployfix` / `__reviewfix` / `__autoretry` job is
- * the signal that we've done all the cheap automation we can and need
- * an operator to look at it.
+ * historical remediation suffix or `__autoretry` job is the signal to stop;
+ * suffix recognition does not imply that current finalization produces it.
  */
 export const AUTO_UNBLOCK_DEPTH_GUARD = /__valfix|__deployfix|__reviewfix|__autoretry/;
 
@@ -183,6 +174,9 @@ export function shouldAutoUnblock(input: ShouldAutoUnblockInput): AutoUnblockDec
   if (status.state !== 'blocked') {
     return { shouldRetry: false, reason: `job state is "${status.state}", not blocked` };
   }
+  if (result?.pr_url) {
+    return { shouldRetry: false, reason: 'native Kanban owns PR remediation' };
+  }
   if (AUTO_UNBLOCK_DEPTH_GUARD.test(status.job_id)) {
     return { shouldRetry: false, reason: 'depth guard: job id is itself a remediation/retry child' };
   }
@@ -212,8 +206,8 @@ export function shouldAutoUnblock(input: ShouldAutoUnblockInput): AutoUnblockDec
     };
   }
 
-  // Cool-down: the watchdog gives the immediate one-shot remediation a
-  // window to land its own fix before piling on. `updated_at` is the
+  // Cool-down gives legacy transient conditions time to settle before a
+  // compatibility retry. `updated_at` is the
   // last write on the status — which for a blocked job is the moment
   // it transitioned to `blocked`. Using the last heartbeat would make
   // the cool-down reset on every reconcile, which is not what we want.

@@ -35,9 +35,9 @@ export interface SummarizeAutoRemediationInput {
   prUrl?: string | null;
   /** Recovered commit hash, if any (only relevant for harness-failure). */
   commitRecovered?: boolean;
-  /** Result of `maybeEnqueueReviewRemediation` if it ran. */
+  /** Historical review-remediation slot; general finalization supplies a retired/skipped result. */
   reviewRemediation?: RemediationResult | null;
-  /** Result of `maybeEnqueueValidationRemediation` if it ran. */
+  /** Historical validation-remediation slot; general finalization supplies a retired/skipped result. */
   validationRemediation?: RemediationResult | null;
   /** Result of `maybeEnqueueSmokeRemediation` if it ran. */
   smokeRemediation?: RemediationResult | null;

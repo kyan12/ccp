@@ -133,10 +133,8 @@ export interface RepoMapping {
    * the same branch with a refined prompt. Bounded by `maxRetries` so a
    * genuinely stuck job never loops forever.
    *
-   * Opt-in per repo. Default disabled — no repo auto-enables retries.
-   * The existing one-shot `__valfix` / `__deployfix` / `__reviewfix`
-   * remediations still fire immediately; this watchdog is the fallback
-   * when those first-pass remediations themselves land in `blocked`.
+   * Opt-in per repo. Default disabled — no repo auto-enables retries. Retained
+   * for legacy non-PR compatibility; native Kanban owns current PR follow-up.
    */
   autoUnblock?: AutoUnblockConfig;
 }
@@ -150,10 +148,8 @@ export interface SmokeConfig {
   /** If false or omitted, the smoke step is skipped. Default: false. */
   enabled?: boolean;
   /**
-   * Phase 4 (PR D): when true, a failing smoke result promotes the job to
-   * `blocked` with `blocker_type: 'smoke-failed'` and spawns a `__deployfix`
-   * remediation job. Default: false (Phase 4 PR B/C behavior —
-   * informational only).
+   * Historical Phase 4 gate retained for schema compatibility. The bounded PR
+   * watcher does not consume it, mutate job state, or enqueue remediation.
    *
    * Can be overridden globally with CCP_SMOKE_GATE=true|false. Any falsy
    * env value hard-disables gating across every repo; any truthy env
@@ -376,9 +372,8 @@ export interface AutoUnblockConfig {
   /**
    * Seconds the job must have been in `blocked` (measured from the
    * status's `updated_at`) before the watchdog will spawn a retry.
-   * Default: 600 (10 minutes). Prevents the watchdog from tripping
-   * before the one-shot `__valfix` / `__deployfix` remediation has
-   * had a chance to land its own fix.
+   * Default: 600 (10 minutes). Gives legacy transient conditions time to
+   * settle before the compatibility watchdog retries.
    */
   retryAfterSec?: number;
   /**
@@ -468,8 +463,8 @@ export interface ValidationConfig {
   enabled?: boolean;
   /**
    * Phase 2b: when true, a failing required step promotes the job to `blocked`
-   * with `blocker_type: 'validation-failed'` and spawns a `__valfix` remediation
-   * job. Default: false (Phase 2a behavior — informational only).
+   * with `blocker_type: 'validation-failed'` and records evidence. Native
+   * Kanban owns follow-up remediation. Default: false.
    *
    * Can be overridden globally with CCP_VALIDATION_GATE=true|false.
    */
@@ -658,13 +653,11 @@ export interface JobIntegrations {
   linear?: LinearIntegration;
   prReview?: PrReviewIntegration;
   remediation?: RemediationResult;
-  /** Phase 2b: record of the __valfix remediation spawn attempt (if any). */
+  /** Retained historical validation-remediation record; current finalization writes a retired/skipped result. */
   validationRemediation?: RemediationResult;
   /**
-   * Phase 4 (PR B): most recent smoke-test result for this job's preview
-   * URL. Updated each pr-watcher cycle once the preview URL is known.
-   * Null when smoke is disabled for the repo or no preview has been
-   * detected yet.
+   * Historical smoke-test record retained for old jobs. The bounded watcher
+   * does not update it.
    */
   smoke?: SmokeResult;
   /** Current/past operator decision request for this job, if the worker paused for one. */

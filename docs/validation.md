@@ -61,7 +61,7 @@ Add a `validation` block to any entry in `configs/repos.json`:
 | Field | Required | Default | Purpose |
 |-------|----------|---------|---------|
 | `enabled` | no | true when `steps` present | Per-repo kill switch. |
-| `gate` | no | false | Phase 2b: when true, a failing required step promotes the job to `blocked` and spawns `__valfix`. Leave false while you're still building trust in the signal. |
+| `gate` | no | false | Phase 2b: when true, a failing required step promotes the job to `blocked` and records evidence. Native Hermes Kanban owns follow-up remediation; CCP does not spawn a PR-targeted child. |
 | `steps` | yes | — | Ordered list of step definitions. |
 
 ### Step fields

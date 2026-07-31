@@ -319,6 +319,19 @@ const NOW = new Date('2025-01-01T01:00:00.000Z');
 }
 
 {
+  // Native Kanban owns remediation for every PR-backed job.
+  const d = shouldAutoUnblock({
+    status: mkStatus(),
+    result: mkResult({ pr_url: 'https://github.com/acme/repo/pull/42' }),
+    config: mkConfig(),
+    globallyEnabled: true,
+    now: NOW,
+  });
+  assert.strictEqual(d.shouldRetry, false);
+  assert.ok(/native Kanban owns PR remediation/i.test(d.reason));
+}
+
+{
   // Depth guard: valfix id.
   const d = shouldAutoUnblock({
     status: mkStatus({ job_id: 'JOB-1__valfix' }),

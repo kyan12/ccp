@@ -1136,8 +1136,8 @@ function tmuxSessionAlive(session: string | null): boolean {
  *
  * Phase 2a: **informational only** — the report is attached to result.json and
  * surfaced in logs/Discord, but the final job state is NOT changed by validation
- * outcome. Phase 2b will promote a failing required step into a blocking state
- * and auto-spawn a `__valfix` remediation job.
+ * outcome. Phase 2b promotes a failing required step into a blocking state and
+ * records evidence; native Hermes Kanban owns any follow-up remediation.
  *
  * Returns null if validation wasn't even attempted (e.g. no repo mapping,
  * globally disabled, or terminal state with no produced commit).
