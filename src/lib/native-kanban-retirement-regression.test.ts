@@ -4,6 +4,7 @@ import path = require('node:path');
 import test = require('node:test');
 
 const sourceRoot = path.resolve(__dirname, '..', '..', 'src');
+const repoRoot = path.resolve(sourceRoot, '..');
 const intakeServer = fs.readFileSync(path.join(sourceRoot, 'bin', 'intake-server.ts'), 'utf8');
 const intakeRunner = fs.readFileSync(path.join(sourceRoot, 'lib', 'intake-runner.ts'), 'utf8');
 
@@ -50,4 +51,15 @@ test('retired GitHub webhook has one terminal route and no legacy mutation machi
     intakeServer,
     /verifyGitHub|collectPrReviewFeedback|maybeEnqueueReviewRemediation|saveStatus: ss|sendDiscordMessage/,
   );
+});
+
+test('operator guidance does not advertise retired PR remediation producers', () => {
+  const envExample = fs.readFileSync(path.join(repoRoot, '.env.example'), 'utf8');
+  const plannerDoc = fs.readFileSync(path.join(repoRoot, 'docs', 'planner.md'), 'utf8');
+  const jobsSource = fs.readFileSync(path.join(sourceRoot, 'lib', 'jobs.ts'), 'utf8');
+
+  assert.doesNotMatch(envExample, /failing smoke[\s\S]{0,160}spawn a __deployfix/i);
+  assert.match(envExample, /bounded PR drain never runs smoke, changes job state, or spawns remediation/);
+  assert.match(plannerDoc, /Historical remediation records/);
+  assert.match(jobsSource, /Historical smoke-remediation constructor retained for isolated compatibility/);
 });

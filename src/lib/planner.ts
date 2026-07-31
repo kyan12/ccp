@@ -158,9 +158,9 @@ export interface RunPlannerOptions {
   /** Resolved per-repo memory contents (from loadRepoMemory). */
   memory?: string | null;
   /**
-   * If the job id matches `__valfix`, `__reviewfix`, or `__deployfix`
-   * we skip the planner. Injected rather than hardcoded so tests can
-   * exercise the skip logic without touching real filesystem state.
+   * Historical remediation ids (`__valfix`, `__reviewfix`, `__deployfix`) skip
+   * planning during compatibility replay. CCP no longer creates them for
+   * current PR work. Injected so tests avoid real filesystem state.
    */
   remediationPattern?: RegExp;
 }

@@ -985,7 +985,8 @@ export interface RemediationResult {
  * handoff/webhook callbacks reason about whether CCP will retry without
  * scraping the prose blocker text.
  *
- * - `queued`         a `__reviewfix|__valfix|__deployfix` child was just
+ * Historical compatibility values (not produced by current PR finalization):
+ * - `queued`         a legacy `__reviewfix|__valfix|__deployfix` child was
  *                    enqueued (`remediationJobId` populated).
  * - `existing`       an existing remediation child for the same parent is
  *                    already running.

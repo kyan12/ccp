@@ -39,10 +39,10 @@ export interface SummarizeAutoRemediationInput {
   reviewRemediation?: RemediationResult | null;
   /** Historical validation-remediation slot; general finalization supplies a retired/skipped result. */
   validationRemediation?: RemediationResult | null;
-  /** Result of `maybeEnqueueSmokeRemediation` if it ran. */
+  /** Historical smoke-remediation slot; current finalization supplies no producer. */
   smokeRemediation?: RemediationResult | null;
   /**
-   * True when this job is itself a remediation/auto-retry child
+   * True when replaying a historical remediation/auto-retry child
    * (`__reviewfix|__valfix|__deployfix|__autoretry` job-id suffix). Forces
    * `disposition: 'depth-limit'` regardless of the per-path results.
    */

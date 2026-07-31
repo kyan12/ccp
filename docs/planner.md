@@ -51,9 +51,10 @@ per repo after measuring dispatch success on that repo.
 
 Even when `enabled: true`, the planner is **automatically skipped** for:
 
-1. **Remediation jobs** — `__valfix`, `__reviewfix`, `__deployfix`.
-   These already have explicit failing-step or review-comment feedback;
-   a planner pass would dilute that context.
+1. **Historical remediation records** — job ids containing `__valfix`,
+   `__reviewfix`, or `__deployfix`. CCP no longer creates these for current PR
+   work, but the planner still recognizes old records and skips them so a
+   compatibility replay cannot dilute their captured feedback.
 2. **Continuation jobs** — `packet.working_branch` set. The agent is
    picking up mid-stream on a branch; re-planning is confusing.
 3. **Repo without a mapping** — nowhere to read `planner.enabled` from.

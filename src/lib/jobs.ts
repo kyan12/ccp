@@ -681,19 +681,12 @@ function classifyFinalNotificationSignal(result: Partial<JobResult>, exitCode: n
 
 
 /**
- * Phase 4 PR D: if smoke gating promoted the job to `smoke-failed`, spawn
- * a `__deployfix` remediation job with the SmokeResult details as feedback.
- * Targets the same branch so the existing PR gets updated in place.
+ * Historical smoke-remediation constructor retained for isolated compatibility
+ * tests and replaying old records. No production finalizer or bounded watcher
+ * calls this function; native Hermes Kanban owns current PR remediation.
  *
- * Gated on `CCP_PR_REMEDIATE_ENABLED` (shared with PR-review and validation
- * remediation) and the per-repo `smoke.gate` flag that already produced the
- * blocker. Uses the `__deployfix` suffix to stay coherent with the existing
- * PR-review "deploy" blockerType that already spawns the same shape of job
- * — a repo operator sees one class of remediation for "deployment broke".
- *
- * Depth guard: `__deployfix|__reviewfix|__valfix|__autoretry` in the job ID short-
- * circuits, so a smoke-failed remediation won't cascade into a second
- * __deployfix on the same original ticket.
+ * The legacy depth guard recognizes `__deployfix|__reviewfix|__valfix|__autoretry`
+ * so replaying an old remediation record cannot create a second child.
  */
 function maybeEnqueueSmokeRemediation(
   jobId: string,
