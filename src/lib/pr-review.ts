@@ -57,13 +57,22 @@ export function extractPreviewUrl(params: {
   return null;
 }
 
+function parseGhJson(stdout: string): Record<string, unknown> {
+  try {
+    return JSON.parse(stdout || '{}');
+  } catch (err) {
+    const excerpt = stdout.trim().slice(0, 200) || '<empty>';
+    throw new Error(`gh returned invalid JSON: ${excerpt}`, { cause: err });
+  }
+}
+
 function ghJson(args: string[]): Record<string, unknown> {
   const gh = commandExists('gh') || 'gh';
   const out = run(gh, args);
   if (out.status !== 0) {
     throw new Error((out.stderr || out.stdout || 'gh command failed').trim());
   }
-  return JSON.parse(out.stdout || '{}');
+  return parseGhJson(out.stdout);
 }
 
 interface StatusCheckItem {
@@ -247,6 +256,7 @@ module.exports = {
   reviewPr,
   classifyPr,
   extractPreviewUrl,
+  parseGhJson,
 };
 
-export { parsePrUrl, reviewPr, classifyPr };
+export { parsePrUrl, reviewPr, classifyPr, parseGhJson };

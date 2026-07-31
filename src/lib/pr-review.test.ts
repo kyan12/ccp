@@ -13,7 +13,7 @@ import type { CheckInfo } from '../types';
 // extractPreviewUrl, which isn't re-exported via the TS `export { ... }`
 // footer). This mirrors how the rest of the codebase consumes pr-review.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { extractPreviewUrl, classifyPr } = require('./pr-review');
+const { extractPreviewUrl, classifyPr, parseGhJson } = require('./pr-review');
 
 let passed = 0;
 let failed = 0;
@@ -285,6 +285,27 @@ console.log('Test: classifyPr — open conflicting PR remains remediable');
   assert(result.disposition === 'block', 'open conflict still blocks');
   assert(result.blockerType === 'merge', 'open conflict keeps merge blocker type');
   assert(result.blockers.includes('merge conflicts'), 'open conflict records merge conflict');
+}
+
+console.log('Test: parseGhJson — parses valid and empty gh output');
+{
+  const parsed = parseGhJson('{"state":"OPEN"}');
+  assert(parsed.state === 'OPEN', 'valid JSON parsed');
+
+  const empty = parseGhJson('');
+  assert(Object.keys(empty).length === 0, 'empty stdout treated as empty object');
+}
+
+console.log('Test: parseGhJson — malformed gh output gets actionable error');
+{
+  let message = '';
+  try {
+    parseGhJson('not-json-from-gh');
+  } catch (err) {
+    message = err instanceof Error ? err.message : String(err);
+  }
+  assert(message.includes('gh returned invalid JSON'), 'invalid JSON error names gh output problem');
+  assert(message.includes('not-json-from-gh'), 'invalid JSON error includes stdout excerpt');
 }
 
 console.log(`pr-review.test: ${passed} passed, ${failed} failed`);
