@@ -74,6 +74,7 @@ test('general job finalization exposes no GitHub review or remediation path', ()
   assert.doesNotMatch(jobsSource, /require\(['"]\.\/pr-review['"]\)/);
   assert.doesNotMatch(jobsSource, /require\(['"]\.\/pr-comments['"]\)/);
   assert.doesNotMatch(jobsSource, /maybeReviewPr|maybeEnqueueReviewRemediation|postRemediationComments/);
+  assert.doesNotMatch(jobsSource, /recoverPrMetadata|verifyPrCandidates|['"]pr['"],\s*['"](?:view|list)['"]/);
 });
 
 test('drain watcher scopes exactly two historical jobs and performs status-only reconciliation', async () => {
