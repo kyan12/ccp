@@ -5,7 +5,7 @@ import type {
   JobPacket, JobStatus, JobResult, RepoProof,
   PRReviewResult, PrReviewIntegration, RemediationResult, DiscordMessageResult, DiscordThreadResult,
   SupervisorCycleSummary, PreflightResult, PrWatcherCycleResult,
-  ReviewComment, AddressedComment, ValidationReport,
+  AddressedComment, ValidationReport,
   AutoRemediationStatus, HarnessFailureInfo,
 } from '../types';
 import { run, commandExists, shellQuote } from './shell';
@@ -18,9 +18,7 @@ const { loadRepoMemory } = require('./memory');
 const { getParallelJobLimit, acquireRequiredWorktree, releaseWorktree } = require('./worktree');
 const { runPlanner } = require('./planner');
 const { inspectDiscordTransport, hasDiscordTransport, sendDiscordMessage, createDiscordThread } = require('./discord');
-const { reviewPr } = require('./pr-review');
 const { isApiOutageLog, recordJobOutcome, runOutageProbe, getOutageStatus } = require('./outage');
-const { prReviewPolicy, isNightlyPacket } = require('./pr-policy');
 const { fireWebhookCallback } = require('./webhook-callback');
 const {
   summarizeAutoRemediation,
@@ -28,7 +26,6 @@ const {
   isRemediationJobId,
   downgradeWebhookStatus,
 } = require('./auto-remediation');
-const { fetchPrReviewComments, postRemediationComments } = require('./pr-comments');
 const {
   buildDecisionInstructions,
   createDecisionContinuationPacket,
@@ -680,35 +677,6 @@ function classifyFinalNotificationSignal(result: Partial<JobResult>, exitCode: n
   };
 }
 
-// prReviewPolicy is now imported from ./pr-policy
-
-function formatPrReview(review: PRReviewResult | null): string | null {
-  if (!review) return null;
-  return [
-    `PR review: ${review.disposition}`,
-    `PR URL: ${review.prUrl}`,
-    `Mergeable: ${review.mergeable}`,
-    `Review decision: ${review.reviewDecision}`,
-    `Auto-merge: ${review.autoMergeEnabled ? 'enabled' : 'no'}`,
-    review.blockers?.length ? `Review blockers: ${review.blockers.join('; ')}` : 'Review blockers: none',
-  ].join('\n');
-}
-
-function maybeReviewPr(jobId: string, result: JobResult): PRReviewResult & { skipped?: boolean; reason?: string } {
-  const packet = readJson(packetPath(jobId)) as unknown as JobPacket;
-  const policy = prReviewPolicy(packet?.repo || undefined, { isNightly: isNightlyPacket(packet) });
-  if (!policy.enabled || !result?.pr_url) {
-    return { ok: false, skipped: true, reason: !result?.pr_url ? 'no PR URL' : 'PR review disabled' } as PRReviewResult & { skipped?: boolean; reason?: string };
-  }
-  try {
-    const review: PRReviewResult = reviewPr({ prUrl: result.pr_url, autoMerge: false, mergeMethod: policy.mergeMethod });
-    appendLog(jobId, `[${nowIso()}] pr review: ${review.disposition}${review.autoMergeEnabled ? ' (auto-merge enabled)' : ''}`);
-    return { ...review, ok: true, skipped: false };
-  } catch (error) {
-    appendLog(jobId, `[${nowIso()}] pr review error: ${(error as Error).message}`);
-    return { ok: false, skipped: false, reason: (error as Error).message } as PRReviewResult & { skipped?: boolean; reason?: string };
-  }
-}
 
 /**
  * Phase 2b: if validation gating promoted the job to `validation-failed`, spawn
@@ -878,74 +846,6 @@ function maybeEnqueueSmokeRemediation(
   };
 }
 
-function maybeEnqueueReviewRemediation(jobId: string, packet: JobPacket, result: JobResult, prReview: PRReviewResult & { skipped?: boolean }): RemediationResult {
-  const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
-  if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
-  // Include __valfix so a Phase 2b validation remediation PR that picks up a
-  // blocking review doesn't cascade into a __valfix__reviewfix job — one layer
-  // of auto-remediation per original job id, period.
-  if (/__deployfix|__reviewfix|__valfix|__autoretry/.test(jobId)) return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
-  if (!prReview?.ok || prReview.disposition !== 'block') return { ok: false, skipped: true, reason: 'no blocking PR review' };
-  const remediationSuffix = prReview.blockerType === 'deploy' ? '__deployfix' : '__reviewfix';
-  const remediationJobId = `${jobId}${remediationSuffix}`;
-  if (fs.existsSync(statusPath(remediationJobId))) {
-    return { ok: true, skipped: true, reason: 'remediation job already exists', job_id: remediationJobId };
-  }
-  const relevantChecks = (prReview.failedChecks?.length ? prReview.failedChecks : (prReview.checks || []).filter((c) => c.state !== 'SUCCESS' && c.state !== 'NEUTRAL' && c.state !== 'SKIPPED'));
-  const feedback: string[] = [
-    `PR review blocked for ${packet.ticket_id || jobId}`,
-    `PR: ${prReview.prUrl}`,
-    `Disposition: ${prReview.disposition}`,
-    `Blocker type: ${prReview.blockerType || 'unknown'}`,
-    ...(prReview.blockers || []).map((b) => `Blocker: ${b}`),
-    ...relevantChecks.map((c) => `Check ${c.name}: ${c.state}${c.url ? ` (${c.url})` : ''}`),
-    prReview.blockerType === 'deploy'
-      ? 'Investigate the deployment/platform failure, fix anything code-side that can resolve it, and push updates to the same branch. If the issue is definitely external/platform-only, leave a precise blocker note with the exact failing service and URL.'
-      : 'Fix the blocking PR issues on the existing branch, push updates to the same branch, and do not create a new PR.',
-  ];
-
-  // Fetch structured review comments from the PR for comment-level tracking
-  let reviewComments: ReviewComment[] = [];
-  if (prReview.blockerType === 'review' || prReview.blockerType === 'checks') {
-    try {
-      reviewComments = fetchPrReviewComments(prReview.prUrl);
-      if (reviewComments.length > 0) {
-        appendLog(jobId, `[${nowIso()}] fetched ${reviewComments.length} review comments from PR`);
-      }
-    } catch (e) {
-      appendLog(jobId, `[${nowIso()}] failed to fetch review comments: ${(e as Error).message}`);
-    }
-  }
-
-  const remediationPacket: JobPacket = {
-    ...packet,
-    job_id: remediationJobId,
-    goal: `${prReview.blockerType === 'deploy' ? 'Remediate deploy blocker' : 'Remediate PR blockers'} for ${packet.ticket_id || jobId}`,
-    source: prReview.blockerType === 'deploy' ? 'vercel' : 'pr-review',
-    kind: prReview.blockerType === 'deploy' ? 'deploy' : 'bug',
-    label: prReview.blockerType === 'deploy' ? 'deploy' : 'review-fix',
-    review_feedback: feedback,
-    reviewComments: reviewComments.length > 0 ? reviewComments : undefined,
-    working_branch: prReview.headRefName || packet.working_branch || null,
-    base_branch: prReview.baseRefName || packet.base_branch || 'main',
-    acceptance_criteria: [
-      ...(packet.acceptance_criteria || []),
-      'Address every blocking PR review finding individually, not just the first one.',
-      'Push updates to the existing PR branch.',
-      'Do not create a new PR.',
-    ],
-    verification_steps: [
-      ...(packet.verification_steps || []),
-      'Re-run failing checks or the closest local equivalent.',
-      'Explicitly verify each review comment is addressed in code or call out why it is not applicable.',
-      'Leave the PR in a state that can pass reviewer re-check.',
-    ],
-    created_at: nowIso(),
-  };
-  const created = createJob(remediationPacket);
-  appendLog(jobId, `[${nowIso()}] remediation job queued: ${created.jobId}`);
-  return { ok: true, skipped: false, job_id: created.jobId, branch: remediationPacket.working_branch, blockerType: prReview.blockerType || 'unknown' };
-}
 
 function notifyStart(jobId: string): void {
   const status = loadStatus(jobId);
@@ -1614,8 +1514,7 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   // `ambiguity-operator` (needs a human) vs `ambiguity-transient`
   // (environmental noise — watchdog can retry) based on the blocker
   // text. Only fires when the job is actually blocked and no more
-  // specific blocker_type is set later (validation-failed,
-  // smoke-failed, or a pr-review blockerType override below).
+  // specific blocker_type is set later (validation-failed or smoke-failed).
   const resolvedBlocker = inferredBlocker
     || (summary.blocker && summary.blocker !== 'none' ? summary.blocker : null)
     || (exitCode !== 0
@@ -1718,41 +1617,23 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   saveStatus(jobId, statusPatch);
   writeJson(resultPath(jobId), result);
 
-  const prReview = decisionRequest
-    ? { ok: false, skipped: true, reason: 'operator decision pending' } as PRReviewResult & { skipped?: boolean; reason?: string }
-    : maybeReviewPr(jobId, result);
-  if (prReview?.ok) {
-    // Preserve the validation blocker if we set one \u2014 a green PR-review disposition
-    // must not silently erase a local validation failure. Likewise, preserve a
-    // Phase 6b ambiguity classification (`ambiguity-operator`/`ambiguity-transient`)
-    // when pr-review has nothing stronger to say \u2014 a green-but-silent review
-    // must not regress a classified ambiguity back to null.
-    //
-    // `prReview.blockerType` defaults to `'none'` (non-empty truthy string)
-    // when the PR has no issues, so treat `'none'` as "nothing to say" when
-    // deciding whether to overwrite a prior classification. Otherwise the
-    // naive `||` chain would clobber `ambiguity-transient` \u2192 `'none'` and
-    // silently disqualify the job from the auto-unblock watchdog.
-    const prBlockerType =
-      prReview.blockerType && prReview.blockerType !== 'none' ? prReview.blockerType : null;
-    if (!validationGated && !decisionRequest) {
-      result.blocker_type = prBlockerType || result.blocker_type || null;
-      result.failed_checks = prReview.failedChecks || [];
-    } else if (prBlockerType) {
-      // PR review found its own blocker on top of the validation failure: keep
-      // the validation blocker_type (it's the primary signal locally) but append
-      // PR-side failing checks so operators see both.
-      const existing = result.failed_checks || [];
-      const extra = (prReview.failedChecks || []).filter(
-        (c) => !existing.some((e) => e.name === c.name),
-      );
-      result.failed_checks = [...existing, ...extra];
-    }
-    writeJson(resultPath(jobId), result);
-  }
-  const remediation = decisionRequest
-    ? { ok: false, skipped: true, reason: 'operator decision pending' } as RemediationResult
-    : maybeEnqueueReviewRemediation(jobId, packet, result, prReview);
+  // Native Hermes Kanban owns all new PR review and remediation. General CCP
+  // finalization must not query or mutate GitHub; only pr-watcher's exact
+  // two-job historical drain cohort may perform read-only PR status checks.
+  const prReview = {
+    ok: false,
+    skipped: true,
+    reason: decisionRequest
+      ? 'operator decision pending'
+      : 'retired: native Kanban owns PR review; historical drain is watcher-only',
+  } as PRReviewResult & { skipped: true; reason: string };
+  const remediation: RemediationResult = {
+    ok: false,
+    skipped: true,
+    reason: decisionRequest
+      ? 'operator decision pending'
+      : 'retired: native Kanban owns PR remediation',
+  };
   const validationRemediation = validationGated
     ? maybeEnqueueValidationRemediation(jobId, packet, result)
     : { ok: false, skipped: true, reason: 'validation not gated' } as RemediationResult;
@@ -1770,22 +1651,6 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   result.autoRemediation = autoRemediation;
   writeJson(resultPath(jobId), result);
 
-  // Post per-comment replies and summary for remediation jobs that have addressedComments
-  const isRemediationJob = /__deployfix|__reviewfix/.test(jobId);
-  if (isRemediationJob && result.addressedComments?.length && prUrl) {
-    try {
-      const commentResult = postRemediationComments({
-        prUrl,
-        addressedComments: result.addressedComments,
-        reviewComments: packet.reviewComments,
-        commitSha: result.commit !== 'none' ? result.commit : null,
-        resolveThreads: result.addressedComments.some((c: AddressedComment) => c.status === 'fixed'),
-      });
-      appendLog(jobId, `[${nowIso()}] pr comment replies: ${commentResult.replyResults.length} sent, ${commentResult.replyResults.filter((r: { ok: boolean }) => r.ok).length} ok, summary=${commentResult.summaryResult.ok ? 'ok' : 'failed'}${commentResult.fallbackUsed ? ' (fallback)' : ''}`);
-    } catch (e) {
-      appendLog(jobId, `[${nowIso()}] pr comment replies error: ${(e as Error).message}`);
-    }
-  }
 
   const currentAfterIntegrations = loadStatus(jobId);
   saveStatus(jobId, {
@@ -2821,10 +2686,7 @@ module.exports = {
   inspectEnvironment,
   interruptJob,
   answerDecision,
-  maybeEnqueueReviewRemediation,
   maybeEnqueueSmokeRemediation,
-  maybeReviewPr,
-  prReviewPolicy,
   statusPath,
   archiveOldJobs,
   healthCheck,
@@ -2866,10 +2728,7 @@ export {
   inspectEnvironment,
   interruptJob,
   answerDecision,
-  maybeEnqueueReviewRemediation,
   maybeEnqueueSmokeRemediation,
-  maybeReviewPr,
-  prReviewPolicy,
   statusPath,
   archiveOldJobs,
   healthCheck,

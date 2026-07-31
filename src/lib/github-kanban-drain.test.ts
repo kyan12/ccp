@@ -25,13 +25,13 @@ process.env.CCP_PR_AUTOMERGE = 'true';
 process.env.GH_LOG = ghLog;
 process.env.PATH = `${binDir}:${process.env.PATH || ''}`;
 
+const jobs = require('./jobs') as typeof import('./jobs');
 const {
   createJob,
-  maybeReviewPr,
   readJson,
   resultPath,
   statusPath,
-} = require('./jobs') as typeof import('./jobs');
+} = jobs;
 const { collectWatchableJobs, runPrWatcherCycle } = require('./pr-watcher') as typeof import('./pr-watcher');
 
 const DRAIN_IDS = [
@@ -66,18 +66,14 @@ function seedJob(jobId: string, prNumber: number): void {
   writeJson(resultPath(jobId), result);
 }
 
-test('initial finalization review is read-only even when auto-merge policy is enabled', () => {
-  seedJob('finalization-green', 13);
-  fs.writeFileSync(ghLog, '');
+test('general job finalization exposes no GitHub review or remediation path', () => {
+  assert.equal((jobs as Record<string, unknown>).maybeReviewPr, undefined);
+  assert.equal((jobs as Record<string, unknown>).maybeEnqueueReviewRemediation, undefined);
 
-  const review = maybeReviewPr('finalization-green', readJson(resultPath('finalization-green')) as unknown as JobResult);
-  assert.equal(review.ok, true);
-  assert.equal(review.disposition, 'approve');
-
-  const commands = fs.readFileSync(ghLog, 'utf8').trim().split('\n').filter(Boolean);
-  assert.equal(commands.length, 1);
-  assert.match(commands[0], /^pr view /);
-  assert.doesNotMatch(commands.join('\n'), /\bpr (review|merge)\b/);
+  const jobsSource = fs.readFileSync(path.join(__dirname, 'jobs.js'), 'utf8');
+  assert.doesNotMatch(jobsSource, /require\(['"]\.\/pr-review['"]\)/);
+  assert.doesNotMatch(jobsSource, /require\(['"]\.\/pr-comments['"]\)/);
+  assert.doesNotMatch(jobsSource, /maybeReviewPr|maybeEnqueueReviewRemediation|postRemediationComments/);
 });
 
 test('drain watcher scopes exactly two historical jobs and performs status-only reconciliation', async () => {

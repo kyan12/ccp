@@ -7,7 +7,9 @@
 > rebase, remediation, smoke, callbacks, and notifications are not production
 > watcher behavior.
 
-PR review and auto-merge behavior is controlled by `src/lib/pr-policy.ts`. Both the job finalizer (`jobs.ts`) and the PR watcher (`pr-watcher.ts`) import from this shared module to prevent policy drift.
+Legacy PR policy settings are parsed by `src/lib/pr-policy.ts`. Only the bounded
+historical watcher consumes them now; general job finalization performs no
+GitHub PR review or remediation.
 
 ## `prReviewPolicy(repoPath?)`
 

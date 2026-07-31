@@ -43,7 +43,7 @@ async function waitForServer(child: ChildProcessWithoutNullStreams): Promise<voi
   });
 }
 
-async function post(port: number, signature?: string): Promise<{ status: number; body: Record<string, unknown> }> {
+async function post(port: number, signature?: string, requestBody = malformedBody): Promise<{ status: number; body: Record<string, unknown> }> {
   return await new Promise((resolve, reject) => {
     const req = http.request({
       host: '127.0.0.1',
@@ -52,7 +52,7 @@ async function post(port: number, signature?: string): Promise<{ status: number;
       path: '/webhook/github',
       headers: {
         'content-type': 'application/json',
-        'content-length': malformedBody.length,
+        'content-length': requestBody.length,
         ...(signature ? { 'x-hub-signature-256': signature } : {}),
       },
     }, (res) => {
@@ -70,7 +70,7 @@ async function post(port: number, signature?: string): Promise<{ status: number;
       });
     });
     req.once('error', reject);
-    req.end(malformedBody);
+    req.end(requestBody);
   });
 }
 
@@ -97,6 +97,11 @@ test('actual GitHub webhook route authenticates raw bytes before JSON parsing', 
     assert.equal(signed.body.action, 'retired');
     assert.equal(signed.body.retryable, false);
     assert.equal(signed.body.replacement, 'native-hermes-kanban');
+
+    const oversizedBody = Buffer.alloc(1_048_577, 0x61);
+    const oversized = await post(port, undefined, oversizedBody);
+    assert.equal(oversized.status, 413);
+    assert.equal(oversized.body.error, 'request body too large');
   } finally {
     child.kill('SIGTERM');
     await new Promise<void>((resolve) => {

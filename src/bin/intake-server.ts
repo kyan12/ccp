@@ -13,6 +13,14 @@ const vercelCfg = loadConfig('vercel', {});
 const ROOT: string = path.resolve(process.env.CCP_ROOT || path.join(__dirname, '..', '..'));
 const REPOS_PATH: string = path.join(ROOT, 'configs', 'repos.json');
 const DASHBOARD_PATH: string = path.join(__dirname, '..', 'dashboard', 'index.html');
+const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+
+class RequestBodyTooLargeError extends Error {
+  constructor() {
+    super('request body too large');
+    this.name = 'RequestBodyTooLargeError';
+  }
+}
 
 function json(res: http.ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
@@ -38,13 +46,36 @@ interface ParsedBody {
 function readRawBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let rejected = false;
+
+    const contentLength = Number(req.headers['content-length'] || 0);
+    if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
+      rejected = true;
+      req.resume();
+      reject(new RequestBodyTooLargeError());
+      return;
+    }
+
     req.on('data', (chunk: Buffer | string) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      if (rejected) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+        rejected = true;
+        chunks.length = 0;
+        req.resume();
+        reject(new RequestBodyTooLargeError());
+        return;
+      }
+      chunks.push(buffer);
     });
     req.on('end', () => {
-      resolve(Buffer.concat(chunks));
+      if (!rejected) resolve(Buffer.concat(chunks));
     });
-    req.on('error', reject);
+    req.on('error', (error) => {
+      if (!rejected) reject(error);
+    });
   });
 }
 
@@ -459,7 +490,8 @@ const server = http.createServer(async (req: http.IncomingMessage, res: http.Ser
 
     json(res, 404, { ok: false, error: 'not found' });
   } catch (error) {
-    json(res, 500, { ok: false, error: (error as Error).message });
+    const status = error instanceof RequestBodyTooLargeError ? 413 : 500;
+    json(res, status, { ok: false, error: (error as Error).message });
   }
 });
 
