@@ -38,9 +38,8 @@ Important nuances:
   operators can force a retry on a known-broken provider to drive the
   probe cycle.
 - **Never swaps mid-run.** Fallback is resolved once, when preflight runs.
-  A job that started on Claude never gets a new tmux worker running Codex —
-  the supervisor only remediates via a fresh `__valfix` / review-remediation
-  / retry cycle.
+  A job that started on Claude never gets a new tmux worker running Codex.
+  Native Hermes Kanban owns follow-up remediation after the CCP retirement.
 - **Both circuits open ⇒ keep primary.** If both primary and fallback are
   out, the resolver keeps the primary and logs a warning, so whichever
   provider's next probe comes back first will drive recovery.
