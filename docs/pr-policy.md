@@ -62,9 +62,10 @@ The `mergeMethod` field maps directly to GitHub's merge strategies:
 ## Current drain flow
 
 The watcher collects only the two named historical jobs, reads their GitHub PR
-state, and reconciles `status.json`. It may mark a named drain job done after
-observing that GitHub already merged the PR. It never reviews, approves, merges,
-rebases, creates remediation work, runs preview smoke, or fires callbacks.
+state, and reconciles only its owned `status.integrations.prReview` field. It
+never changes top-level job state or result data, and never reviews, approves,
+merges, rebases, creates remediation work, runs preview smoke, or fires
+callbacks.
 
 ## Environment variables
 
