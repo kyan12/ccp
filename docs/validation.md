@@ -28,13 +28,11 @@ shows up in the final Discord message, but the job still finishes as `coded`/
 - set `result.state` to `blocked`
 - set `result.blocker_type` to `'validation-failed'`
 - populate `result.failed_checks` with synthetic `validation:<step>` entries
-- auto-spawn a `__valfix` remediation job (suffix added to the original job id)
-  whose packet targets the existing branch, inherits the original goal, and
-  carries the failing steps' command + trailing stderr as `review_feedback`
+- record that automatic validation remediation is retired; native Hermes
+  Kanban owns any follow-up work instead of CCP spawning a PR-targeted child
 
-The `__valfix` job is gated behind the same `CCP_PR_REMEDIATE_ENABLED` flag
-that the PR-review remediation already uses. Remediation is refused when the
-job id already ends in `__valfix|__reviewfix|__deployfix` to bound recursion.
+Validation gating still records the full report and blocker evidence, but it
+does not enqueue, update, or push any PR branch.
 
 ## Configuring a repo
 
