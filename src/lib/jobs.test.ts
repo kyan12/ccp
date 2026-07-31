@@ -546,6 +546,22 @@ console.log('\nTest: workerLogForCurrentAttempt ignores stale earlier attempt ra
   assert(current.includes('WORKER_EXIT_CODE: 0'), 'keeps latest exit marker');
 }
 
+console.log('\nTest: current attempt context ignores stale earlier summaries');
+{
+  const log = [
+    '[2026-05-19T01:00:00.000Z] preflight start',
+    'Summary: stale earlier success',
+    'WORKER_EXIT_CODE: 0',
+    '[2026-05-19T02:00:00.000Z] preflight start',
+    'ERROR: current attempt auth failed',
+    'WORKER_EXIT_CODE: 1',
+  ].join('\n');
+  const current = workerLogForCurrentAttempt(log);
+  const ctx = extractWorkerFailureContext(current);
+  assert(ctx.includes('current attempt auth failed'), 'failure context comes from latest attempt');
+  assert(!ctx.includes('stale earlier success'), 'failure context drops stale earlier summary');
+}
+
 // ── Summary ──
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
