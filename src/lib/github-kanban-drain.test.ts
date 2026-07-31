@@ -69,12 +69,15 @@ function seedJob(jobId: string, prNumber: number): void {
 test('general job finalization exposes no GitHub review or remediation path', () => {
   assert.equal((jobs as Record<string, unknown>).maybeReviewPr, undefined);
   assert.equal((jobs as Record<string, unknown>).maybeEnqueueReviewRemediation, undefined);
+  assert.equal((jobs as Record<string, unknown>).maybeEnqueueValidationRemediation, undefined);
 
   const jobsSource = fs.readFileSync(path.join(__dirname, 'jobs.js'), 'utf8');
   assert.doesNotMatch(jobsSource, /require\(['"]\.\/pr-review['"]\)/);
   assert.doesNotMatch(jobsSource, /require\(['"]\.\/pr-comments['"]\)/);
-  assert.doesNotMatch(jobsSource, /maybeReviewPr|maybeEnqueueReviewRemediation|postRemediationComments/);
+  assert.doesNotMatch(jobsSource, /maybeReviewPr|maybeEnqueueReviewRemediation|maybeEnqueueValidationRemediation|postRemediationComments/);
   assert.doesNotMatch(jobsSource, /recoverPrMetadata|verifyPrCandidates|['"]pr['"],\s*['"](?:view|list)['"]/);
+  assert.doesNotMatch(jobsSource, /['"]fetch['"],\s*['"]--quiet['"],\s*['"]origin['"],\s*['"]main['"]/);
+  assert.doesNotMatch(jobsSource, /`\$\{jobId\}__valfix`|label:\s*['"]validation-fix['"]/);
 });
 
 test('drain watcher scopes exactly two historical jobs and performs status-only reconciliation', async () => {
@@ -110,11 +113,12 @@ test('drain watcher scopes exactly two historical jobs and performs status-only 
 
   const mergedStatus = readJson(statusPath(DRAIN_IDS[0])) as unknown as JobStatus;
   const openStatus = readJson(statusPath(DRAIN_IDS[1])) as unknown as JobStatus;
-  assert.equal(mergedStatus.state, 'done');
+  assert.equal(mergedStatus.state, 'coded');
   assert.equal(openStatus.state, 'coded');
   assert.equal((mergedStatus.integrations?.prReview as { merged?: boolean })?.merged, true);
   assert.equal((openStatus.integrations?.prReview as { disposition?: string })?.disposition, 'approve');
   assert.deepEqual(mergedStatus.integrations?.decision, concurrentDecision);
+  assert.equal(actions.some((entry: Record<string, unknown>) => 'stateChange' in entry), false);
 
   for (const id of DRAIN_IDS) {
     assert.deepEqual(fs.readFileSync(resultPath(id)), drainResultsBefore.get(id));

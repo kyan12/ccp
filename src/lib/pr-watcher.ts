@@ -3,7 +3,6 @@ import type { JobStatus, JobResult, JobPacket, PRReviewResult, PrWatcherCycleRes
 const { reviewPr } = require('./pr-review');
 const {
   listJobs,
-  loadStatus,
   readJson,
   saveStatus,
   packetPath,
@@ -91,7 +90,6 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
       continue;
     }
 
-    const current = loadStatus(jobId) as JobStatus;
     const prReview = {
       ok: review.ok,
       skipped: false,
@@ -107,7 +105,6 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
 
     const merged = review.merged === true;
     saveStatus(jobId, {
-      ...(merged && current.state !== 'done' && current.state !== 'verified' ? { state: 'done' } : {}),
       // saveStatus merges this key with the latest integrations while holding
       // the status lock, so a concurrent decision update cannot be overwritten.
       integrations: { prReview },
@@ -118,9 +115,6 @@ async function runPrWatcherCycle(): Promise<PrWatcherCycleResult> {
     entry.merged = merged;
     entry.autoMergeEnabled = false;
     entry.action = merged ? 'merge-reconciled' : 'status-reconciled';
-    if (merged && current.state !== 'done' && current.state !== 'verified') {
-      entry.stateChange = `${current.state}→done`;
-    }
     actions.push(entry);
   }
 

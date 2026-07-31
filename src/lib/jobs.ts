@@ -681,84 +681,6 @@ function classifyFinalNotificationSignal(result: Partial<JobResult>, exitCode: n
 
 
 /**
- * Phase 2b: if validation gating promoted the job to `validation-failed`, spawn
- * a `__valfix` remediation job with the failing-step output as feedback. The
- * fix job targets the same branch so the existing PR gets updated in place.
- *
- * Gated on CCP_PR_REMEDIATE_ENABLED (shared with PR-review remediation) and
- * the per-repo `validation.gate` flag that already produced the blocker.
- */
-function maybeEnqueueValidationRemediation(
-  jobId: string,
-  packet: JobPacket,
-  result: JobResult,
-): RemediationResult {
-  const enabled = String(process.env.CCP_PR_REMEDIATE_ENABLED || 'true').toLowerCase() !== 'false';
-  if (!enabled) return { ok: false, skipped: true, reason: 'remediation disabled' };
-  // Depth guard: skip if the job is already a remediation/retry child
-  // (valfix/deployfix/reviewfix/autoretry). Phase 6a auto-unblock uses
-  // the same guard so we never cascade a watchdog retry into another
-  // one-shot remediation.
-  if (/__deployfix|__reviewfix|__valfix|__autoretry/.test(jobId)) {
-    return { ok: false, skipped: true, reason: 'remediation depth limit: job is already a remediation' };
-  }
-  if (result.blocker_type !== 'validation-failed') {
-    return { ok: false, skipped: true, reason: 'job is not blocked on validation' };
-  }
-  if (!result.validation || result.validation.skipped) {
-    return { ok: false, skipped: true, reason: 'no validation report to remediate' };
-  }
-
-  const remediationJobId = `${jobId}__valfix`;
-  if (fs.existsSync(statusPath(remediationJobId))) {
-    return { ok: true, skipped: true, reason: 'remediation job already exists', job_id: remediationJobId };
-  }
-
-  const blocker = buildValidationBlocker(result.validation);
-  const failingList = blocker.failedStepNames.join(', ') || 'unknown';
-  const feedback: string[] = [
-    `Static validation failed for ${packet.ticket_id || jobId}.`,
-    `Failing required steps: ${failingList}.`,
-    result.pr_url ? `PR: ${result.pr_url}` : `Branch: ${result.branch || 'unknown'}`,
-    'Fix every failing step on the existing branch. Do not create a new PR.',
-    'Re-run the same validation commands locally after your fix to confirm green before pushing.',
-    ...blocker.feedback,
-  ];
-
-  const remediationPacket: JobPacket = {
-    ...packet,
-    job_id: remediationJobId,
-    goal: `Remediate validation failure(s) for ${packet.ticket_id || jobId} (${failingList})`,
-    source: 'validation',
-    kind: 'bug',
-    label: 'validation-fix',
-    review_feedback: feedback,
-    // Clear inherited PR review comments — this is a validation-fix task, not a
-    // review-fix task. Leaving them set would cause buildPrompt to instruct the
-    // agent to also "address each review comment individually" + emit an
-    // AddressedComments block, which is irrelevant here and splits attention.
-    reviewComments: undefined,
-    working_branch: result.branch && result.branch !== 'unknown' ? result.branch : packet.working_branch || null,
-    base_branch: packet.base_branch || 'main',
-    acceptance_criteria: [
-      ...(packet.acceptance_criteria || []),
-      `Make every failing validation step pass: ${failingList}.`,
-      'Push updates to the existing PR branch.',
-      'Do not create a new PR.',
-    ],
-    verification_steps: [
-      ...(packet.verification_steps || []),
-      'Re-run the failing validation commands locally before declaring done.',
-      'If a command cannot reasonably be made green in this patch, leave a precise blocker note explaining why.',
-    ],
-    created_at: nowIso(),
-  };
-  const created = createJob(remediationPacket);
-  appendLog(jobId, `[${nowIso()}] validation remediation job queued: ${created.jobId}`);
-  return { ok: true, skipped: false, job_id: created.jobId, branch: remediationPacket.working_branch, blockerType: 'validation-failed' };
-}
-
-/**
  * Phase 4 PR D: if smoke gating promoted the job to `smoke-failed`, spawn
  * a `__deployfix` remediation job with the SmokeResult details as feedback.
  * Targets the same branch so the existing PR gets updated in place.
@@ -1034,13 +956,6 @@ function inspectRepoProof(repo: string | null, claimedCommit: string): RepoProof
     // First try local object store
     const revOut = run(git, ['-C', repo, 'rev-parse', '--verify', `${claimedCommit}^{commit}`]);
     commitExists = revOut.status === 0;
-    // If not found locally, fetch and check origin/main (covers reviewfix case where
-    // work was already merged to main and the worker correctly identifies it)
-    if (!commitExists) {
-      run(git, ['-C', repo, 'fetch', '--quiet', 'origin', 'main']);
-      const remoteOut = run(git, ['-C', repo, 'merge-base', '--is-ancestor', claimedCommit, 'FETCH_HEAD']);
-      if (remoteOut.status === 0) commitExists = true;
-    }
   }
   return {
     repoExists: true,
@@ -1456,11 +1371,10 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   //   Phase 2a: attach the report to result.json for visibility (always on).
   //   Phase 2b: if the repo opts in via `validation.gate=true` (or global
   //             CCP_VALIDATION_GATE=true), a failing required step promotes the
-  //             job to `blocked` with blocker_type='validation-failed' and a
-  //             `__valfix` remediation job is spawned below.
+  //             job to `blocked` with blocker_type='validation-failed'. Native
+  //             Kanban owns any follow-up remediation work.
   // See docs/validation.md. Gate with CCP_VALIDATION_ENABLED=false to disable globally.
   const validationReport = runPostWorkerValidation(jobId, packet, result, finalState, workdir || '');
-  let validationGated = false;
   if (validationReport) {
     result.validation = validationReport;
     appendLog(jobId, `[${nowIso()}] validation: ${summarizeReport(validationReport)}`);
@@ -1479,7 +1393,6 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       result.failed_checks = blocker.failedChecks;
       result.prod = 'no';
       result.verified = 'not yet';
-      validationGated = true;
       appendLog(jobId, `[${nowIso()}] validation gate: promoted to blocked (${blocker.failedStepNames.join(', ') || 'unknown'})`);
     }
   }
@@ -1519,9 +1432,11 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       ? 'operator decision pending'
       : 'retired: native Kanban owns PR remediation',
   };
-  const validationRemediation = validationGated
-    ? maybeEnqueueValidationRemediation(jobId, packet, result)
-    : { ok: false, skipped: true, reason: 'validation not gated' } as RemediationResult;
+  const validationRemediation: RemediationResult = {
+    ok: false,
+    skipped: true,
+    reason: 'retired: native Kanban owns validation remediation',
+  };
   const autoRemediation: AutoRemediationStatus = summarizeAutoRemediation({
     state: result.state,
     blockerType: result.blocker_type,
