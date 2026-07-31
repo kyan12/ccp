@@ -307,6 +307,27 @@ console.log('\nTest: inferBlockedReason catches unpushed commit');
   assert(reason !== null && reason.includes('not pushed'), 'detects unpushed commit');
 }
 
+// ── Test: inferBlockedReason uses current attempt diagnostics only ──
+console.log('\nTest: inferBlockedReason uses current attempt diagnostics only');
+{
+  const log = [
+    '[2026-05-19T01:00:00.000Z] preflight start',
+    'Blocker: stale first-attempt authentication failure',
+    'WORKER_EXIT_CODE: 1',
+    '[2026-05-19T02:00:00.000Z] preflight start',
+    'Summary: current attempt completed but produced no commit',
+    'WORKER_EXIT_CODE: 0',
+  ].join('\n');
+  const current = workerLogForCurrentAttempt(log);
+  const reason = inferBlockedReason(
+    current,
+    { state: 'coded', commit: 'none', prod: 'no', verified: 'not yet', pr_url: null },
+    makeProof(),
+  );
+  assert(!!reason?.includes('current attempt completed'), 'uses current attempt summary');
+  assert(!reason?.includes('stale first-attempt'), 'ignores stale prior-attempt blocker');
+}
+
 // ── Test: extractWorkerFailureContext ──
 console.log('\nTest: extractWorkerFailureContext');
 {
