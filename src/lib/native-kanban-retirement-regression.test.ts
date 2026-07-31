@@ -63,3 +63,29 @@ test('operator guidance does not advertise retired PR remediation producers', ()
   assert.match(plannerDoc, /Historical remediation records/);
   assert.match(jobsSource, /Historical smoke-remediation constructor retained for isolated compatibility/);
 });
+
+test('repository operational docs route current work only to native Hermes Kanban', () => {
+  const docNames = [
+    'routing.md',
+    'incident-jobs.md',
+    'nightly-compound.md',
+    'worktrees.md',
+    'agents.md',
+    'coding-control-plane-spec.md',
+    'pr-policy.md',
+  ];
+  const docs = docNames.map((name) => fs.readFileSync(path.join(repoRoot, 'docs', name), 'utf8'));
+  const combined = docs.join('\n');
+  const envExample = fs.readFileSync(path.join(repoRoot, '.env.example'), 'utf8');
+
+  for (const [index, content] of docs.entries()) {
+    assert.match(content, /Native Hermes Kanban|native Hermes Kanban/, `${docNames[index]} lacks current ownership`);
+  }
+
+  assert.doesNotMatch(combined, /Linear is the source of truth|All coding work lands in the single Linear team/);
+  assert.doesNotMatch(combined, /Attach a Linear label|all route into Linear|creates a CCP job per repo/);
+  assert.doesNotMatch(combined, /notifications \+ Linear sync|PR URL recovery/);
+  assert.doesNotMatch(combined, /"autoMerge"\s*:\s*true|maps directly to GitHub's merge strategies/);
+  assert.doesNotMatch(envExample, /^LINEAR_API_KEY=|^# CCP_LINEAR_DISABLED=false|CCP_PR_REMEDIATE_ENABLED=true/m);
+  assert.doesNotMatch(envExample, /CCP_DISCORD_STATUS_CHANNEL=.*Full lifecycle/);
+});

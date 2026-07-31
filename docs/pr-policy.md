@@ -1,76 +1,28 @@
-# PR Policy
+# PR Policy (bounded historical drain)
 
-> **Retirement status.** Native Hermes Kanban owns new PR review, remediation,
-> and merge decisions. CCP's watcher is a read-only drain for exactly
-> `nightly_proteusx-os_2026-07-11` and `nightly_papyrx_2026-05-19`.
-> It always calls `reviewPr` with `autoMerge: false`; configured auto-merge,
-> rebase, remediation, smoke, callbacks, and notifications are not production
-> watcher behavior.
+Native Hermes Kanban owns all new PR review, remediation, merge, and completion
+decisions. CCP retains only a read-only watcher for exactly:
 
-Legacy PR policy settings are parsed by `src/lib/pr-policy.ts`. Only the bounded
-historical watcher consumes them now; general job finalization performs no
-GitHub PR review or remediation.
+- `nightly_proteusx-os_2026-07-11`
+- `nightly_papyrx_2026-05-19`
 
-## `prReviewPolicy(repoPath?)`
+The watcher reads PR state with `reviewPr({ autoMerge: false })`/`gh pr view` and
+reconciles only `status.integrations.prReview`. It never changes top-level job
+state or result data; reviews, approves, merges, or rebases; creates
+`__valfix`, `__reviewfix`, or `__deployfix` work; runs preview smoke; fires
+callbacks; or sends lifecycle notifications.
 
-Returns the resolved policy for a given repo:
+## Legacy settings
 
-```ts
-{ enabled: boolean; autoMerge: boolean; mergeMethod: string }
-```
+`src/lib/pr-policy.ts` still parses old policy fields so archived records and
+isolated compatibility tests remain readable:
 
-## Resolution logic
+- per-repository `autoMerge` and `mergeMethod`
+- `CCP_PR_REVIEW_ENABLED`
+- `CCP_PR_AUTOMERGE`
+- `CCP_PR_MERGE_METHOD`
 
-Policy values are resolved in order of precedence (highest wins):
-
-1. **Per-repo config** — `autoMerge` and `mergeMethod` fields in `configs/repos.json`
-2. **Global environment variables** — `CCP_PR_AUTOMERGE` and `CCP_PR_MERGE_METHOD`
-3. **Defaults** — `autoMerge: false`, `mergeMethod: "squash"`
-
-Additionally, `CCP_PR_REVIEW_ENABLED` controls whether the PR review/watch cycle runs at all (default: `true`).
-
-### Example: per-repo config in `repos.json`
-
-```json
-{
-  "key": "my-app",
-  "ownerRepo": "myorg/my-app",
-  "localPath": "/home/user/repos/my-app",
-  "autoMerge": true,
-  "mergeMethod": "squash"
-}
-```
-
-### Example: global defaults via environment
-
-```bash
-CCP_PR_AUTOMERGE=false        # default — no auto-merge unless repo opts in
-CCP_PR_MERGE_METHOD=squash    # default merge strategy
-CCP_PR_REVIEW_ENABLED=true    # default — PR review cycle is active
-```
-
-## mergeMethod options
-
-The `mergeMethod` field maps directly to GitHub's merge strategies:
-
-| Value | GitHub behavior |
-|-------|----------------|
-| `squash` | Squash and merge (default) — all commits combined into one |
-| `merge` | Create a merge commit |
-| `rebase` | Rebase and merge — linear history, no merge commit |
-
-## Current drain flow
-
-The watcher collects only the two named historical jobs, reads their GitHub PR
-state, and reconciles only its owned `status.integrations.prReview` field. It
-never changes top-level job state or result data, and never reviews, approves,
-merges, rebases, creates remediation work, runs preview smoke, or fires
-callbacks.
-
-## Environment variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CCP_PR_REVIEW_ENABLED` | `true` | Enable/disable the PR review cycle |
-| `CCP_PR_AUTOMERGE` | `false` | Legacy policy input; ignored by the read-only drain watcher |
-| `CCP_PR_MERGE_METHOD` | `squash` | Legacy review metadata input; no merge is executed |
+These are historical metadata inputs, not current operational controls.
+`autoMerge` is forced off in the bounded watcher, and `mergeMethod` never causes
+a GitHub merge. Do not add these settings for new work; configure PR policy in
+the native Hermes/GitHub workflow instead.

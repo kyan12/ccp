@@ -1,70 +1,28 @@
-# Routing model
+# Routing model (retired CCP intake)
 
-## Team
+Native Hermes Kanban on the `proteusx-engineering` board is the sole source of
+truth for new engineering work. Linear teams, projects, labels, workflow states,
+and source labels described by earlier versions of this document are historical
+provenance only. Do not create, route, poll, or synchronize new work through
+Linear or CCP.
 
-All coding work lands in the single Linear team:
-- `YourOrg` (`PRO`)
+## Current routing
 
-## Projects
+- Create native Hermes Kanban cards assigned to the appropriate profile.
+- Record repository, source, tenant, dependency, and acceptance information on
+  the card or linked Hermes project.
+- Use isolated Git worktrees for independent code-changing cards.
+- Keep dependent cards serialized through native Kanban parent links.
 
-### Control Plane
-Use for:
-- supervisor / queue / tmux runtime work
-- Discord / Linear / automation integrations
-- coding-machine infrastructure
-- control-plane bugs and enhancements
+## Historical labels
 
-### Reliability / Incidents
-Use for:
-- Sentry runtime issues
-- Vercel build/deploy failures
-- regressions
-- incident-driven bugfixes
-- auto-created error intake
-
-### Product / Delivery
-Use for:
-- planned features
-- product improvements
-- scoped manual engineering tasks
-- normal backlog work across repos
-
-## Repo tracking
-
-Do not use one project per repo.
-
-Track repo at the issue level via labels or issue body, for example:
-- `repo:control-plane`
-- `repo:yourorg-web`
-- `repo:api`
-- `repo:redwood`
-
-## Source tracking
-
-Use source labels for how work entered the system:
-- `source:sentry`
-- `source:vercel`
-- `source:manual`
-- `source:discord`
-- `source:cron`
+Old CCP artifacts may contain values such as `repo:*`, `source:*`, and former
+Linear workflow names. They may be read when reconciling archived evidence, but
+no active dispatcher consumes them.
 
 ## Repository onboarding
 
-Automatic repository onboarding is retired with general CCP intake. The
-authenticated `/api/onboard` compatibility endpoint returns terminal `410 Gone`
-and performs no GitHub, filesystem, webhook, or repository-config mutation.
-Register repositories through the native Hermes Kanban/operator workflow instead.
-
-## Workflow mapping
-
-The YourOrg team currently uses:
-- `Backlog`
-- `Todo`
-- `In Progress`
-- `Done`
-
-Control-plane mapping:
-- new incident / inbox item -> `Backlog`
-- ready-to-run work -> `Todo`
-- active coding job -> `In Progress`
-- coded / verified -> `Done`
+Automatic CCP repository onboarding is retired. The authenticated
+`/api/onboard` compatibility endpoint returns terminal `410 Gone` and performs
+no GitHub, filesystem, webhook, or repository-config mutation. Register
+repositories through the native Hermes project/operator workflow.

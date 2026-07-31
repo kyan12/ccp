@@ -1,12 +1,18 @@
-# Coding Control Plane Spec
+# Coding Control Plane Spec (archived design)
 
-_Last updated: 2026-03-11_
+_Originally written: 2026-03-11. Archived after migration to native Hermes Kanban._
 
-## Purpose
+> **Not current operational guidance.** This document preserves the original
+> OpenClaw/Linear/CCP design for historical context. Native Hermes Kanban on
+> `proteusx-engineering` is now the sole engineering task system. Do not create,
+> route, poll, or synchronize new work through Linear or CCP, and do not restore
+> retired OpenClaw, nightly, remediation, or lifecycle-notification producers.
 
-This spec defines a dedicated coding-only OpenClaw system whose job is to turn well-scoped engineering tasks into reliable code changes with clear status, observability, error intake, and verification.
+## Historical purpose
 
-This machine is separate from the main business/ops OpenClaw. Its purpose is to reduce context pollution, improve coding quality, and create a reliable execution loop around Claude Code on Opus.
+The original system turned scoped engineering tickets into observable tmux and
+Claude Code jobs. Its requirements below describe that former architecture, not
+the current runtime contract.
 
 ---
 
@@ -64,14 +70,13 @@ This is an engineering runtime, not a general-purpose assistant.
 
 The system has 5 layers:
 
-### Layer 1 — Intake / Ticketing
-- Linear is the source of truth for tasks
-- Tickets may be created manually by the operator or auto-created from failure intake
+### Layer 1 — Historical intake / ticketing
+- Linear was the source of truth in the original design.
+- Native Hermes Kanban replaced both manual and failure-driven CCP ticket intake.
 
-### Layer 2 — Coding Agent / Orchestrator
-- OpenClaw coding agent monitors tickets and manages jobs
-- It does not do the coding itself
-- It prepares task packets and supervises worker execution
+### Layer 2 — Historical coding agent / orchestrator
+- OpenClaw formerly monitored tickets and prepared CCP job packets.
+- Native Hermes workers now execute and supervise engineering tasks directly.
 
 ### Layer 3 — Job Supervisor
 - Custom supervisor process launches and tracks coding jobs
@@ -81,26 +86,20 @@ The system has 5 layers:
 ### Layer 4 — Coding Worker
 - Claude Code on Opus (`claude-opus`) runs in repo and performs edits/tests/builds
 
-### Layer 5 — Error Ingestion
-- Vercel build failures
-- runtime errors (e.g. Sentry)
-- manual bug reports
-- cron/runtime failures
-- all route into Linear as issues or update existing tickets
+### Layer 5 — Historical error ingestion
+- The original design sent Vercel, Sentry, manual, and cron failures to Linear.
+- Current Sentry engineering intake routes only to native Hermes Kanban; other
+  retired CCP/Linear producers must not be restored.
 
 ---
 
 ## 5. Required components
 
-### A. Ticket system
-**Choice:** Linear
+### A. Historical ticket system
+**Former choice:** Linear
 
-Why:
-- persistent source of truth
-- API-friendly
-- fast enough for daily use
-- good status model
-- suitable for both manual and auto-created issues
+Linear is no longer an engineering source of truth. Native Hermes Kanban owns
+current cards, dependencies, state, evidence, and completion.
 
 ### B. Coding worker
 **Choice:** Claude Code on Opus via `claude-opus`
@@ -132,31 +131,12 @@ This is the most important missing piece.
 
 ---
 
-## 6. Linear workflow
+## 6. Historical Linear workflow (retired)
 
-### Recommended teams / scopes
-Create one Linear team for coding operations, or one shared engineering team with project labels.
-
-### Recommended states
-- **Inbox** — new task, not yet normalized
-- **Ready** — ready to run
-- **Running** — active coding job in progress
-- **Blocked** — waiting on human/env/credentials/clarification
-- **Review** — coded, needs validation/review
-- **Verified** — confirmed working
-- **Closed** — completed and done
-
-### Recommended labels
-- `bug`
-- `feature`
-- `deploy`
-- `runtime`
-- `regression`
-- `autocreated`
-- `urgent`
-
-### Rule
-Every coding job must map to exactly one ticket.
+Earlier CCP deployments mapped jobs to Linear teams, states, and labels. That
+workflow is archived and must not be used for current operations. Every new
+engineering task maps to one native Hermes Kanban card; its dependencies,
+review evidence, and terminal state remain on the native board.
 
 ---
 

@@ -1,20 +1,22 @@
-# Coding Agent Drivers
+# Coding Agent Drivers (historical CCP compatibility)
 
-CCP runs the actual code-writing step inside a tmux worker. Historically that
-worker was hardcoded to invoke Claude Code (`cat prompt | claude --print
---permission-mode bypassPermissions`). As of Phase 1 PR A that invocation
-goes through a pluggable **AgentDriver** interface so additional agents
-(Codex, Aider, etc.) slot in without touching the supervisor. Phase 1 PR B
-lights up the OpenAI Codex driver, per-repo fallback orchestration, and
-Linear label mapping.
+Native Hermes Kanban owns all new coding execution and provider routing. This
+file documents the former CCP tmux-worker driver interface only for archived job
+replay and bounded drain maintenance; it is not a current intake or routing
+manual.
+
+Legacy CCP workers originally invoked Claude Code directly, then added a
+pluggable **AgentDriver** interface, Codex support, per-repository fallback, and
+Linear label routing. No current producer creates jobs that consume those
+Linear labels or driver settings.
 
 ## Resolver precedence
 
 The supervisor picks the driver for a job with this precedence (highest
 first):
 
-1. `JobPacket.agent` — per-job override (set by Linear `agent:<name>` label,
-   Discord command, or dashboard)
+1. `JobPacket.agent` — archived per-job override recorded by former Linear,
+   Discord, or dashboard intake
 2. `RepoMapping.agent` — per-repo default in `configs/repos.json`
 3. `process.env.CCP_AGENT` — global default
 4. `'claude-code'` — built-in default
@@ -32,11 +34,9 @@ Important nuances:
 
 - **Opt-in only, per repo.** There is no global `CCP_AGENT_FALLBACK` env
   var — a repo without `agentFallback` never swaps, even during outage.
-- **Explicit packet overrides win.** If a job was explicitly routed to an
-  agent via `JobPacket.agent` (Linear label, Discord retry, dashboard), the
-  resolver respects that choice even if the circuit is open. This is so
-  operators can force a retry on a known-broken provider to drive the
-  probe cycle.
+- **Archived packet overrides win during compatibility replay.** If an old
+  record contains `JobPacket.agent`, the resolver preserves that historical
+  choice. Operators must not use this path to create or reroute new work.
 - **Never swaps mid-run.** Fallback is resolved once, when preflight runs.
   A job that started on Claude never gets a new tmux worker running Codex.
   Native Hermes Kanban owns follow-up remediation after the CCP retirement.
@@ -156,19 +156,12 @@ This sets the default driver for every job that doesn't have a per-job or
 per-repo override. Unknown values log a warning and fall back to
 `claude-code`.
 
-## Linear label mapping (PR B)
+## Historical Linear label mapping (retired)
 
-Attach a Linear label with the pattern `agent:<name>` to flip one ticket to
-a specific driver without editing any config:
-
-- `agent:codex` → route this ticket's job to the Codex driver.
-- `agent:claude-code` → pin it back to Claude Code even if the repo default
-  is Codex.
-
-Labels are case-insensitive (`Agent:Codex` works). The first `agent:<name>`
-label wins if multiple are present. The extracted value is written into
-`JobPacket.agent`, which is the highest-precedence agent selector — so a
-Linear label beats both `repos.json` and `CCP_AGENT`.
+Archived packets may contain an `agent:<name>` label that was normalized into
+`JobPacket.agent`. Linear intake and label polling are retired; adding or
+changing such a label does not route current work. Use native Hermes Kanban
+model/provider settings for new tasks.
 
 ## Per-agent outage state (PR B)
 
