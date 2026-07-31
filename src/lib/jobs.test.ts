@@ -343,6 +343,21 @@ console.log('\nTest: missing worker exit marker defaults to failed');
   assert(workerExitCodeForFinalize('State: coded\nWORKER_EXIT_CODE: 0', 1) === 0, 'explicit marker wins');
   assert(workerExitCodeForFinalize('ERROR: 401 Unauthorized', 0) === 1, 'missing marker with shell exit 0 becomes failure');
   assert(workerExitCodeForFinalize('ERROR: process died', 7) === 7, 'nonzero shell exit is preserved');
+  assert(
+    workerExitCodeForFinalize([
+      'Worker printed a fixture containing WORKER_EXIT_CODE: 0 before it finished.',
+      'WORKER_EXIT_CODE: 1',
+    ].join('\n'), 0) === 1,
+    'ignores inline marker echoes and uses anchored wrapper marker',
+  );
+  assert(
+    workerExitCodeForFinalize([
+      'WORKER_EXIT_CODE: 0',
+      'later cleanup failed',
+      'WORKER_EXIT_CODE: 2',
+    ].join('\n'), 0) === 2,
+    'last anchored wrapper marker wins',
+  );
 }
 
 // ── Test: harness-failure scenario (exit 0, no summary fields) ──
