@@ -17,7 +17,7 @@ const mappings = cfg.mappings || [];
 
 console.log('\nTest: production repo mappings use canonical Mac Studio local paths');
 {
-  assert.equal(mappings.length, 27, 'expected 27 production repo mappings');
+  assert.equal(mappings.length, 28, 'expected 28 production repo mappings');
 
   for (const mapping of mappings) {
     assert.ok(mapping.key, 'mapping has a key');
@@ -127,6 +127,44 @@ console.log('\nTest: partner-service-broker mapping is present, locked down, and
   if (VALIDATE_LOCAL_PATHS) {
     assert.equal(enriched.repoResolved, true, 'moshi service broker resolves to an existing checkout');
     assert.ok(fs.existsSync(path.join(mapping!.localPath, '.git')), 'partner-service-broker localPath is an existing git repo');
+  }
+}
+
+console.log('\nTest: myfont-ai mapping is present, isolated, locked down, and resolves by key, owner/name, and aliases');
+{
+  const mapping = mappings.find((entry) => entry.key === 'myfont-ai') as (RepoMapping & { baseBranch?: string }) | undefined;
+  assert.ok(mapping, 'myfont-ai mapping exists');
+  assert.equal(mapping?.ownerRepo, 'ProteusX-Consulting/myfont-ai');
+  assert.equal(mapping?.gitUrl, 'git@github.com:ProteusX-Consulting/myfont-ai.git');
+  assert.equal(mapping?.localPath, '/Users/kyan/code-crab/repos/myfont-ai');
+  assert.equal(mapping?.baseBranch, 'main');
+  assert.equal(mapping?.worktree, true, 'myfont-ai uses isolated per-job worktrees');
+  assert.equal(mapping?.parallelJobs, 1, 'myfont-ai permits one CCP job at a time');
+  assert.equal(mapping?.mergeMethod, 'squash');
+  assert.equal(mapping?.autoMerge, false, 'myfont-ai auto-merge stays disabled');
+  assert.equal(mapping?.nightly?.enabled, false, 'myfont-ai nightly automation stays disabled');
+  assert.deepEqual(mapping?.aliases, ['myfont-ai', 'myfont ai', 'myfont', 'myfont.ai']);
+
+  for (const repo of [
+    'myfont-ai',
+    'ProteusX-Consulting/myfont-ai',
+    'myfont ai',
+    'myfont',
+    'myfont.ai',
+  ]) {
+    const resolved = findRepoMapping({ repo });
+    assert.equal(resolved?.key, 'myfont-ai', `${repo} resolves to myfont-ai`);
+    assert.equal(resolved?.localPath, '/Users/kyan/code-crab/repos/myfont-ai', `${repo} resolves to canonical checkout`);
+  }
+
+  const enriched = enrichPayloadWithRepo({ repo: 'myfont.ai' });
+  assert.equal(enriched.repoKey, 'myfont-ai');
+  assert.equal(enriched.ownerRepo, 'ProteusX-Consulting/myfont-ai');
+  assert.equal(enriched.repo, '/Users/kyan/code-crab/repos/myfont-ai');
+
+  if (VALIDATE_LOCAL_PATHS) {
+    assert.equal(enriched.repoResolved, true, 'myfont.ai resolves to an existing checkout');
+    assert.ok(fs.existsSync(path.join(mapping!.localPath, '.git')), 'myfont-ai localPath is an existing git repo');
   }
 }
 

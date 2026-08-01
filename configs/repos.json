@@ -456,6 +456,26 @@
       "autoMerge": false,
       "baseBranch": "main",
       "mergeMethod": "squash"
+    },
+    {
+      "key": "myfont-ai",
+      "ownerRepo": "ProteusX-Consulting/myfont-ai",
+      "gitUrl": "git@github.com:ProteusX-Consulting/myfont-ai.git",
+      "localPath": "/Users/kyan/code-crab/repos/myfont-ai",
+      "baseBranch": "main",
+      "aliases": [
+        "myfont-ai",
+        "myfont ai",
+        "myfont",
+        "myfont.ai"
+      ],
+      "worktree": true,
+      "parallelJobs": 1,
+      "autoMerge": false,
+      "mergeMethod": "squash",
+      "nightly": {
+        "enabled": false
+      }
     }
   ]
 }
