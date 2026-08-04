@@ -3,7 +3,7 @@ import fs = require('fs');
 import path = require('path');
 import type { RepoMapping } from '../types';
 const { loadConfig } = require('./config') as typeof import('./config');
-const { findRepoMapping, enrichPayloadWithRepo } = require('./repos') as typeof import('./repos');
+const { findRepoMapping, enrichPayloadWithRepo, validateReposConfig } = require('./repos') as typeof import('./repos');
 
 const LEGACY_PREFIX = '/Users/crab/';
 const CANONICAL_REPO_PREFIX = '/Users/kyan/code-crab/repos/';
@@ -17,7 +17,7 @@ const mappings = cfg.mappings || [];
 
 console.log('\nTest: production repo mappings use canonical Mac Studio local paths');
 {
-  assert.equal(mappings.length, 28, 'expected 28 production repo mappings');
+  assert.equal(mappings.length, 29, 'expected 29 production repo mappings');
 
   for (const mapping of mappings) {
     assert.ok(mapping.key, 'mapping has a key');
@@ -29,6 +29,8 @@ console.log('\nTest: production repo mappings use canonical Mac Studio local pat
 
     if (mapping.key === 'ccp') {
       assert.equal(mapping.localPath, CANONICAL_CCP_PATH, 'ccp maps to canonical control-plane checkout');
+    } else if (mapping.key === 'hermes-local-extensions') {
+      assert.equal(mapping.localPath, '/Users/kyan/.hermes/local-extensions', 'local-only extensions map to the installation-local checkout');
     } else {
       assert.ok(
         mapping.localPath.startsWith(CANONICAL_REPO_PREFIX),
@@ -36,6 +38,90 @@ console.log('\nTest: production repo mappings use canonical Mac Studio local pat
       );
     }
   }
+}
+
+console.log('\nTest: hermes-local-extensions is an explicit local-only mapping without remote integrations');
+{
+  const mapping = mappings.find((entry) => entry.key === 'hermes-local-extensions') as (RepoMapping & { localOnly?: boolean }) | undefined;
+  assert.ok(mapping, 'hermes-local-extensions mapping exists');
+  assert.equal(mapping?.localOnly, true, 'local-only mode is explicit');
+  assert.equal(mapping?.localPath, '/Users/kyan/.hermes/local-extensions');
+  assert.deepEqual(mapping?.aliases, ['hermes local extensions', 'local Hermes plugins', 'sink-guard']);
+  assert.equal(mapping?.worktree, false);
+  assert.equal(mapping?.parallelJobs, 1);
+  assert.equal(mapping?.autoMerge, false);
+  assert.equal(mapping?.ownerRepo, undefined, 'local-only mapping has no GitHub owner/repo');
+  assert.equal(mapping?.gitUrl, undefined, 'local-only mapping has no remote URL');
+  assert.equal(mapping?.productionUrl, undefined, 'local-only mapping has no production URL');
+  assert.equal(mapping?.callbackUrl, undefined, 'local-only mapping has no webhook callback');
+  assert.equal(mapping?.nightly, undefined, 'local-only mapping has no deployment/nightly producer');
+
+  for (const repo of ['hermes-local-extensions', 'hermes local extensions', 'local Hermes plugins', 'sink-guard']) {
+    const resolved = findRepoMapping({ repo });
+    assert.equal(resolved?.key, 'hermes-local-extensions', `${repo} resolves to the local-only mapping`);
+  }
+
+  const enriched = enrichPayloadWithRepo({ repo: 'sink-guard' }) as ReturnType<typeof enrichPayloadWithRepo> & { localOnly?: boolean };
+  assert.equal(enriched.repoKey, 'hermes-local-extensions');
+  assert.equal(enriched.repo, '/Users/kyan/.hermes/local-extensions');
+  assert.equal(enriched.localOnly, true, 'payload carries explicit local-only mode');
+  assert.equal(enriched.ownerRepo, undefined);
+  assert.equal(enriched.gitUrl, undefined);
+}
+
+console.log('\nTest: local-only config validation rejects ambiguous and remote-enabled mappings');
+{
+  assert.throws(
+    () => validateReposConfig({ mappings: [{ key: 'ambiguous', localPath: '/tmp/ambiguous', localOnly: false }] }),
+    /localOnly must be true when present/,
+  );
+  assert.throws(
+    () => validateReposConfig({ mappings: [{
+      key: 'published-by-mistake',
+      localPath: '/tmp/published-by-mistake',
+      localOnly: true,
+      ownerRepo: 'owner/repo',
+      worktree: false,
+      parallelJobs: 1,
+      autoMerge: false,
+    }] }),
+    /ownerRepo must be omitted/,
+  );
+  assert.throws(
+    () => validateReposConfig({ mappings: [{
+      key: 'unsafe-concurrency',
+      localPath: '/tmp/unsafe-concurrency',
+      localOnly: true,
+      worktree: false,
+      parallelJobs: 2,
+      autoMerge: false,
+    }] }),
+    /parallelJobs must be 1/,
+  );
+  assert.throws(
+    () => validateReposConfig({ mappings: [{
+      key: 'smoke-enabled-local',
+      localPath: '/tmp/smoke-enabled-local',
+      localOnly: true,
+      worktree: false,
+      parallelJobs: 1,
+      autoMerge: false,
+      smoke: { enabled: true },
+    }] }),
+    /smoke must be omitted/,
+  );
+  assert.throws(
+    () => validateReposConfig({ mappings: [{
+      key: 'planned-local',
+      localPath: '/tmp/planned-local',
+      localOnly: true,
+      worktree: false,
+      parallelJobs: 1,
+      autoMerge: false,
+      planner: { enabled: true },
+    }] }),
+    /planner must be omitted/,
+  );
 }
 
 console.log('\nTest: high-volume repos use isolated two-job worktrees');

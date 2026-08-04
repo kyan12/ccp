@@ -6,7 +6,7 @@ import type {
   PRReviewResult, PrReviewIntegration, RemediationResult, DiscordMessageResult, DiscordThreadResult,
   SupervisorCycleSummary, PreflightResult, PrWatcherCycleResult,
   AddressedComment, ValidationReport,
-  AutoRemediationStatus, HarnessFailureInfo,
+  AutoRemediationStatus, HarnessFailureInfo, LocalOnlyCompletionHandoff,
 } from '../types';
 import { run, commandExists, shellQuote } from './shell';
 import { resolveAgent, getAgent, claudeCodeDriver } from './agents';
@@ -81,7 +81,8 @@ function appendLog(jobId: string, text: string): void {
   fs.appendFileSync(file, text.endsWith('\n') ? text : text + '\n');
 }
 
-function gitIdentity(): { name: string; email: string } {
+function gitIdentity(localOnly = false): { name: string; email: string } {
+  if (localOnly) return { name: 'kyan12', email: 'kevyan1998@gmail.com' };
   const name = process.env.CCP_GIT_USER_NAME || process.env.GIT_AUTHOR_NAME || (run('git', ['config', '--global', '--get', 'user.name']).stdout || '').trim() || 'CodePlane';
   const email = process.env.CCP_GIT_USER_EMAIL || process.env.GIT_AUTHOR_EMAIL || (run('git', ['config', '--global', '--get', 'user.email']).stdout || '').trim() || 'codeplane@localhost';
   return { name, email };
@@ -463,6 +464,30 @@ function preflight(jobId: string): PreflightResult {
   if (!agentPf.ok) failures.push(...agentPf.failures);
   if (!cmds.git) failures.push('git not found on PATH');
   if (!cmds.node) failures.push('node not found on PATH');
+  if (mapping?.localOnly === true && packet.repo) {
+    const gitStatus = env.git_status as { ok?: boolean; clean?: boolean | null; stdout?: string; stderr?: string } | null;
+    if (!gitStatus?.ok) {
+      failures.push(`local-only repo is not a readable Git checkout: ${packet.repo}${gitStatus?.stderr ? ` (${gitStatus.stderr})` : ''}`);
+    } else if (gitStatus.clean !== true) {
+      failures.push(`local-only repo must be clean before dispatch: ${packet.repo}${gitStatus.stdout ? ` (${gitStatus.stdout.replace(/\s+/g, ' ')})` : ''}`);
+    }
+    const localConfig = (key: string): string => {
+      const out = run(cmds.git || 'git', ['-C', packet.repo!, 'config', '--local', '--get', key]);
+      return out.status === 0 ? out.stdout.trim() : '';
+    };
+    if (localConfig('user.useConfigOnly') !== 'true') {
+      failures.push('local-only repo must set git config user.useConfigOnly=true');
+    }
+    if (localConfig('user.name') !== 'kyan12' || localConfig('user.email') !== 'kevyan1998@gmail.com') {
+      failures.push('local-only repo must use canonical author kyan12 <kevyan1998@gmail.com>');
+    }
+    const remotes = run(cmds.git || 'git', ['-C', packet.repo, 'remote']);
+    if (remotes.status !== 0) {
+      failures.push(`local-only repo remotes could not be inspected: ${remotes.stderr.trim() || packet.repo}`);
+    } else if (remotes.stdout.trim()) {
+      failures.push(`local-only repo must not configure Git remotes: ${remotes.stdout.trim().replace(/\s+/g, ', ')}`);
+    }
+  }
   const discordStatus = (env.discord_status || {}) as { transport?: string; apiOk?: boolean | null; error?: string | null };
   if (discordStatus.transport === 'none' || discordStatus.apiOk !== true) {
     const reason = discordStatus.error || 'DISCORD_BOT_TOKEN missing or invalid';
@@ -561,6 +586,7 @@ function buildPrompt(packet: JobPacket, memory?: string | null, plan?: string | 
   }
 
   const repoMapping = packet.repo ? findRepoByPath(packet.repo) : null;
+  const localOnly = repoMapping?.localOnly === true;
   const decisionPolicy = resolveDecisionPolicy(packet, repoMapping);
   bits.push(buildDecisionInstructions(decisionPolicy));
   const decisionMode = decisionPolicy.mode;
@@ -577,12 +603,23 @@ function buildPrompt(packet: JobPacket, memory?: string | null, plan?: string | 
   bits.push('State: <coded/deployed/verified/blocked>');
   bits.push('Commit: <hash or none>');
   bits.push('Prod: <yes/no>');
-  bits.push('Verified: <exact test or not yet>');
+  bits.push(localOnly
+    ? 'Verified: <PASS/FAIL/not yet>'
+    : 'Verified: <exact test or not yet>');
   bits.push('Blocker: <reason or none>');
   bits.push('Risk: <low/medium/high>');
   bits.push('Summary: <1-3 sentence description of what you did>');
   bits.push('Do not claim pushed or deployed unless it actually happened. A local commit on main is not the same as pushed.');
-  bits.push('If you make code changes, you MUST create a feature branch FROM main (e.g. `git checkout -b feat/my-branch main`), push it to origin, and create a pull request via `gh pr create --base main`. Never push directly to main. Never branch from another feature branch. Do not stop at a local-only commit.');
+  if (localOnly) {
+    bits.push(`This is an explicit local-only repository. Local repository path: ${packet.repo}.`);
+    bits.push('You may commit verified changes locally. Do not push, create a pull request, create a remote, deploy, or publish.');
+    bits.push('Run the configured tests and an independent local code review against the final commit before completion.');
+    bits.push('TestEvidence: <single-line JSON {"command":"...","exitCode":0}>');
+    bits.push('Review: <PASS/FAIL/not yet>');
+    bits.push('ReviewEvidence: <single-line JSON {"verdict":"PASS","reviewer":"independent lane name","sha":"commit-or-HEAD"}>');
+  } else {
+    bits.push('If you make code changes, you MUST create a feature branch FROM main (e.g. `git checkout -b feat/my-branch main`), push it to origin, and create a pull request via `gh pr create --base main`. Never push directly to main. Never branch from another feature branch. Do not stop at a local-only commit.');
+  }
   if (packet.reviewComments?.length) {
     bits.push('IMPORTANT: After your final summary, you MUST also output an AddressedComments JSON block.');
     bits.push('For EACH review comment listed above, report what you did. Output a SINGLE line in this exact format:\nAddressedComments: [{"commentId": <number>, "status": "fixed"|"not_fixed"|"partial", "explanation": "<what changed or why not fixed>"}, ...]');
@@ -816,7 +853,7 @@ function workerExitCodeForFinalize(logText: string, statusExitCode?: number | nu
 
 function parseSummary(logText: string): Record<string, string> & { addressedComments?: AddressedComment[] } {
   const fields: Record<string, string> & { addressedComments?: AddressedComment[] } = {};
-  for (const key of ['State', 'Commit', 'Prod', 'Verified', 'Blocker', 'Risk', 'Summary']) {
+  for (const key of ['State', 'Commit', 'Prod', 'Verified', 'TestEvidence', 'Review', 'ReviewEvidence', 'Blocker', 'Risk', 'Summary']) {
     const re = new RegExp(`^${key}:\\s*(.+)$`, 'gmi');
     const matches = [...logText.matchAll(re)]
       .map((match) => match[1].trim())
@@ -1090,7 +1127,12 @@ function extractPrReferences(text: string): { urls: string[]; numbers: string[] 
   return { urls: [...urls], numbers: [...numbers] };
 }
 
-function inferBlockedReason(logText: string, result: { state: string; commit: string; prod: string; verified: string; pr_url: string | null }, proof: RepoProof): string | null {
+function inferBlockedReason(
+  logText: string,
+  result: { state: string; commit: string; prod: string; verified: string; testEvidence?: string; pr_url?: string | null; review?: string; reviewEvidence?: string },
+  proof: RepoProof,
+  options: { localOnly?: boolean } = {},
+): string | null {
   const permissionMatch = logText.match(/I need file write permission to proceed\.[\s\S]*?(?=WORKER_EXIT_CODE:|$)/i);
   if (permissionMatch) {
     return permissionMatch[0].trim();
@@ -1105,7 +1147,18 @@ function inferBlockedReason(logText: string, result: { state: string; commit: st
   if ((result.state === 'coded' || result.state === 'done' || result.state === 'verified') && !proof.commitExists && !proof.dirty) {
     return `no commit or file changes found ${proofDetail}. Worker said: ${workerContext}`;
   }
-  if ((result.state === 'coded' || result.state === 'done' || result.state === 'verified') && proof.commitExists && proof.pushed === false && !hasReviewDelivery) {
+  if (options.localOnly && (result.pr_url || proof.pushed === true || result.prod === 'yes')) {
+    return `local-only repository must not publish, push, open a PR, or deploy ${proofDetail}. Worker said: ${workerContext}`;
+  }
+  if (options.localOnly && /(?:git\s+push|gh\s+pr\s+create)[\s\S]{0,500}(?:fatal:|error:|failed|denied|rejected)/i.test(logText)) {
+    return `forbidden remote operation failed during local-only execution ${proofDetail}. Worker said: ${workerContext}`;
+  }
+  if (options.localOnly && ['coded', 'done', 'verified'].includes(result.state) && proof.commitExists) {
+    if (!hasPassingLocalEvidence(result)) {
+      return `local-only completion is missing passing test evidence ${proofDetail}. Worker said: ${workerContext}`;
+    }
+  }
+  if (!options.localOnly && (result.state === 'coded' || result.state === 'done' || result.state === 'verified') && proof.commitExists && proof.pushed === false && !hasReviewDelivery) {
     return `local commit exists but was not pushed ${proofDetail}. Worker said: ${workerContext}`;
   }
   if ((result.state === 'done' || result.state === 'verified') && !proof.commitExists) {
@@ -1113,6 +1166,83 @@ function inferBlockedReason(logText: string, result: { state: string; commit: st
   }
   if (result.prod === 'yes' && !proof.commitExists) {
     return `claimed prod=yes but no verifiable commit ${proofDetail}. Worker said: ${workerContext}`;
+  }
+  return null;
+}
+
+function parseLocalEvidence(value: string | undefined): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasPassingLocalEvidence(input: {
+  verified?: string;
+  testEvidence?: string;
+  review?: string;
+  reviewEvidence?: string;
+  commit?: string;
+}): boolean {
+  if (input.verified?.trim().toUpperCase() !== 'PASS' || input.review?.trim().toUpperCase() !== 'PASS') return false;
+  const test = parseLocalEvidence(input.testEvidence);
+  const review = parseLocalEvidence(input.reviewEvidence);
+  if (!test || typeof test.command !== 'string' || !test.command.trim() || test.exitCode !== 0) return false;
+  if (!review || review.verdict !== 'PASS' || typeof review.reviewer !== 'string' || !review.reviewer.trim()) return false;
+  if (typeof review.sha !== 'string' || !/^[0-9a-f]{7,40}$/i.test(review.sha)) return false;
+  if (input.commit && input.commit !== 'none' && review.sha !== input.commit) return false;
+  return true;
+}
+
+function buildLocalOnlyHandoff(input: {
+  localOnly: boolean;
+  repoPath: string | null;
+  state: string;
+  commit: string;
+  verified: string;
+  testEvidence?: string;
+  review?: string;
+  reviewEvidence?: string;
+}): LocalOnlyCompletionHandoff | null {
+  if (!input.localOnly || !input.repoPath || !['coded', 'done', 'verified', 'no-op'].includes(input.state)) return null;
+  if (!hasPassingLocalEvidence(input)) return null;
+  return {
+    action: 'complete',
+    repoPath: input.repoPath,
+    commit: input.commit && input.commit !== 'none' ? input.commit : null,
+    tests: input.testEvidence!,
+    review: input.reviewEvidence!,
+  };
+}
+
+function inspectLocalOnlyPostconditions(workdir: string | null, commit: string, proof: RepoProof): string | null {
+  if (!workdir || !proof.git) return `local-only repo is not a readable Git checkout: ${workdir || '(missing path)'}`;
+  if (proof.dirty) return `local-only repo is dirty after worker execution; preserved for operator inspection: ${workdir}`;
+
+  const git = commandExists('git') || 'git';
+  const remotes = run(git, ['-C', workdir, 'remote']);
+  if (remotes.status !== 0) return `local-only repo remotes could not be inspected: ${remotes.stderr.trim() || workdir}`;
+  if (remotes.stdout.trim()) return `local-only repo must not configure Git remotes: ${remotes.stdout.trim().replace(/\s+/g, ', ')}`;
+
+  const localConfig = (key: string): string => {
+    const out = run(git, ['-C', workdir, 'config', '--local', '--get', key]);
+    return out.status === 0 ? out.stdout.trim() : '';
+  };
+  if (localConfig('user.useConfigOnly') !== 'true') return 'local-only repo must preserve git config user.useConfigOnly=true';
+  if (localConfig('user.name') !== 'kyan12' || localConfig('user.email') !== 'kevyan1998@gmail.com') {
+    return 'local-only repo must preserve canonical author kyan12 <kevyan1998@gmail.com>';
+  }
+
+  if (commit && commit !== 'none' && proof.commitExists) {
+    const author = run(git, ['-C', workdir, 'show', '-s', '--format=%an%x00%ae', commit]);
+    if (author.status !== 0) return `local-only commit author could not be inspected: ${commit}`;
+    const [name, email] = author.stdout.trim().split('\0');
+    if (name !== 'kyan12' || email !== 'kevyan1998@gmail.com') {
+      return `local-only commit must use canonical author kyan12 <kevyan1998@gmail.com>: ${commit}`;
+    }
   }
   return null;
 }
@@ -1238,6 +1368,8 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   // validator — reads from this single source of truth so the cd target
   // is consistent across the whole finalize path.
   const workdir = status.workdir || packet.repo;
+  const repoMapping = packet.repo ? findRepoByPath(packet.repo) : null;
+  const localOnly = repoMapping?.localOnly === true;
   const proof = inspectRepoProof(workdir, summary.commit || 'none');
   const hasSummaryOutput = !!(summary.state || summary.summary || summary.commit);
 
@@ -1294,16 +1426,59 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       commit: summary.commit || 'none',
       prod: summary.prod || 'no',
       verified: summary.verified || 'not yet',
+      testEvidence: summary.testevidence,
       pr_url: prUrl,
-    }, proof);
+      review: summary.review,
+      reviewEvidence: summary.reviewevidence,
+    }, proof, { localOnly });
     finalState = inferredBlocker ? 'blocked' : provisionalState;
   }
 
-  // If the job is blocked/dirty-repo due to dirty repo state, clean it up immediately so
-  // subsequent jobs don't inherit dirty working tree (e.g. from API 500 mid-run)
-  if ((finalState === 'blocked' || finalState === 'dirty-repo') && proof.dirty && workdir) {
+  if (localOnly && finalState === 'no-op') {
+    const localNoOpBlocker = inferBlockedReason(logText, {
+      state: 'no-op',
+      commit: summary.commit || 'none',
+      prod: summary.prod || 'no',
+      verified: summary.verified || 'not yet',
+      testEvidence: summary.testevidence,
+      pr_url: prUrl,
+      review: summary.review,
+      reviewEvidence: summary.reviewevidence,
+    }, proof, { localOnly: true });
+    if (localNoOpBlocker) {
+      finalState = 'blocked';
+      inferredBlocker = localNoOpBlocker;
+    } else if (!hasPassingLocalEvidence({
+      verified: summary.verified,
+      testEvidence: summary.testevidence,
+      review: summary.review,
+      reviewEvidence: summary.reviewevidence,
+      commit: summary.commit,
+    })) {
+      finalState = 'blocked';
+      inferredBlocker = 'local-only no-op completion is missing structured passing test/review evidence';
+    }
+  }
+
+  if (localOnly && ['coded', 'done', 'verified', 'no-op'].includes(finalState)) {
+    const postconditionBlocker = inspectLocalOnlyPostconditions(workdir, summary.commit || 'none', proof);
+    if (postconditionBlocker) {
+      finalState = 'blocked';
+      inferredBlocker = postconditionBlocker;
+    }
+  } else if (localOnly && !['blocked', 'dirty-repo', 'harness-failure'].includes(finalState)) {
+    const unsupportedState = finalState;
+    finalState = 'blocked';
+    inferredBlocker = `unsupported local-only completion state: ${unsupportedState}`;
+  }
+
+  // Remote worktrees are disposable and can be cleaned after a blocked run. A local-only
+  // checkout is canonical user state: preserve it exactly for operator inspection.
+  if (!localOnly && (finalState === 'blocked' || finalState === 'dirty-repo') && proof.dirty && workdir) {
     const cleanResult = cleanRepoIfDirty(workdir, proof);
     appendLog(jobId, `[${nowIso()}] repo cleanup: ${cleanResult}`);
+  } else if (localOnly && (finalState === 'blocked' || finalState === 'dirty-repo') && proof.dirty && workdir) {
+    appendLog(jobId, `[${nowIso()}] local-only dirty work preserved for operator inspection: ${workdir}`);
   }
 
   // Phase 6b: classify the catch-all "ambiguity" bucket into
@@ -1331,6 +1506,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     pr_url: prUrl,
     prod: finalState === 'blocked' ? 'no' : (summary.prod || 'no'),
     verified: finalState === 'blocked' ? 'not yet' : (summary.verified || 'not yet'),
+    testEvidence: summary.testevidence,
+    review: summary.review,
+    reviewEvidence: summary.reviewevidence,
     blocker: resolvedBlocker,
     blocker_type: initialBlockerType,
     failed_checks: [],
@@ -1389,6 +1567,16 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
       appendLog(jobId, `[${nowIso()}] validation gate: promoted to blocked (${blocker.failedStepNames.join(', ') || 'unknown'})`);
     }
   }
+  result.handoff = buildLocalOnlyHandoff({
+    localOnly,
+    repoPath: packet.repo,
+    state: result.state,
+    commit: result.commit,
+    verified: result.verified,
+    testEvidence: result.testEvidence,
+    review: result.review,
+    reviewEvidence: result.reviewEvidence,
+  }) || undefined;
   const started = status.started_at ? new Date(status.started_at).getTime() : Date.now();
   const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
   const statusPatch: Partial<JobStatus> = {
@@ -1416,7 +1604,9 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
     skipped: true,
     reason: decisionRequest
       ? 'operator decision pending'
-      : 'retired: native Kanban owns PR review; historical drain is watcher-only',
+      : localOnly
+        ? 'local-only repository: GitHub review is not applicable; local review evidence is in the completion handoff'
+        : 'retired: native Kanban owns PR review; historical drain is watcher-only',
   } as PRReviewResult & { skipped: true; reason: string };
   const remediation: RemediationResult = {
     ok: false,
@@ -1562,10 +1752,12 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   };
   const baseWebhookStatus = statusMap[finalState] || 'in_progress';
   const webhookStatus = downgradeWebhookStatus(baseWebhookStatus, result.autoRemediation);
-  const whLog = fireWebhookCallback({
-    packet, jobId, status: webhookStatus,
-    prUrl: result.pr_url || null, error: result.blocker || null,
-  });
+  const whLog = localOnly
+    ? 'webhook callback skipped: local-only repository'
+    : fireWebhookCallback({
+      packet, jobId, status: webhookStatus,
+      prUrl: result.pr_url || null, error: result.blocker || null,
+    });
   if (whLog) appendLog(jobId, `[${nowIso()}] ${whLog}`);
 
   // Outage circuit breaker: detect API failures and trigger outage mode.
@@ -1654,6 +1846,7 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
   // resolved workdir on JobStatus so finalizeJob / reconcileJob survive
   // supervisor restarts mid-job.
   const mapping = packet.repo ? findRepoByPath(packet.repo) : null;
+  const localOnly = mapping?.localOnly === true;
   let workdir: string | null = null;
   try {
     const acquired = acquireRequiredWorktree(mapping, jobId);
@@ -1756,7 +1949,16 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
   const extraEnv = Object.entries(agentCommand.env || {}).map(
     ([k, v]) => `export ${k}=${shellQuote(v)}`,
   );
-  const gitUser = gitIdentity();
+  const gitUser = gitIdentity(localOnly);
+  const localOnlyGitConfig = localOnly ? [
+    'export GIT_CONFIG_COUNT=3',
+    'export GIT_CONFIG_KEY_0=user.useConfigOnly',
+    'export GIT_CONFIG_VALUE_0=true',
+    'export GIT_CONFIG_KEY_1=user.name',
+    `export GIT_CONFIG_VALUE_1=${shellQuote(gitUser.name)}`,
+    'export GIT_CONFIG_KEY_2=user.email',
+    `export GIT_CONFIG_VALUE_2=${shellQuote(gitUser.email)}`,
+  ] : [];
   const shellScript = [
     'set -euo pipefail',
     `export GIT_AUTHOR_NAME=${shellQuote(gitUser.name)}`,
@@ -1764,14 +1966,15 @@ function startTmuxWorker(jobId: string, packet: JobPacket, pf: PreflightResult):
     `export GIT_COMMITTER_NAME=${shellQuote(gitUser.name)}`,
     `export GIT_COMMITTER_EMAIL=${shellQuote(gitUser.email)}`,
     ...extraEnv,
+    ...localOnlyGitConfig,
     `cd ${shellQuote(repoPathForWorker)}`,
     // Ensure repo is on main with latest code before worker starts
     // (prevents stale branch issues and accidental branching from feature branches)
-    packet.working_branch ? null : 'git checkout main 2>/dev/null || true',
-    packet.working_branch ? null : 'git fetch origin main --quiet',
-    packet.working_branch ? null : 'git reset --hard origin/main',
-    packet.working_branch ? `git checkout ${shellQuote(packet.working_branch)}` : null,
-    packet.working_branch ? `git pull --ff-only origin ${shellQuote(packet.working_branch)} || true` : null,
+    localOnly ? null : packet.working_branch ? null : 'git checkout main 2>/dev/null || true',
+    localOnly ? null : packet.working_branch ? null : 'git fetch origin main --quiet',
+    localOnly ? null : packet.working_branch ? null : 'git reset --hard origin/main',
+    localOnly ? null : packet.working_branch ? `git checkout ${shellQuote(packet.working_branch)}` : null,
+    localOnly ? null : packet.working_branch ? `git pull --ff-only origin ${shellQuote(packet.working_branch)} || true` : null,
     `echo "[${nowIso()}] worker start" >> ${shellQuote(logFile)}`,
     `{ ${workerCmd}; } 2>&1 | tee -a ${shellQuote(logFile)}`,
     'exit_code=${PIPESTATUS[0]}',
@@ -2450,6 +2653,7 @@ module.exports = {
   ROOT,
   JOBS_DIR,
   buildPrompt,
+  buildLocalOnlyHandoff,
   buildTelemetryIo,
   isNoOpOutcome,
   inferBlockedReason,
@@ -2492,6 +2696,7 @@ export {
   ROOT,
   JOBS_DIR,
   buildPrompt,
+  buildLocalOnlyHandoff,
   buildTelemetryIo,
   isNoOpOutcome,
   inferBlockedReason,

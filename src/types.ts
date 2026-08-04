@@ -12,6 +12,11 @@ export interface RunResult {
 
 export interface RepoMapping {
   key: string;
+  /**
+   * Explicit opt-in for repositories that intentionally have no remote.
+   * Missing ownerRepo/gitUrl never implies local-only behavior.
+   */
+  localOnly?: true;
   ownerRepo?: string;
   gitUrl?: string;
   localPath: string;
@@ -528,6 +533,8 @@ export interface JobPacket {
   repoKey?: string | null;
   ownerRepo?: string | null;
   gitUrl?: string | null;
+  /** Copied from an explicit local-only mapping; never inferred from absent remote fields. */
+  localOnly?: boolean;
   repoResolved?: boolean;
   goal: string;
   source: string;
@@ -753,6 +760,14 @@ export interface JobResult {
   smoke?: SmokeResult;
   prod: string;
   verified: string;
+  /** Structured local-only test evidence JSON; omitted for remote jobs. */
+  testEvidence?: string;
+  /** Independent review evidence emitted by local-only workers. */
+  review?: string;
+  /** Structured local-only review evidence JSON; omitted for remote jobs. */
+  reviewEvidence?: string;
+  /** Explicit local completion contract; absent for remote repositories and blocked outcomes. */
+  handoff?: LocalOnlyCompletionHandoff;
   blocker: string | null;
   /**
    * Machine-readable bucket for `blocker`. Known values:
@@ -812,6 +827,14 @@ export interface JobResult {
    */
   usage?: import('./lib/agents/types').AgentUsage;
   updated_at: string;
+}
+
+export interface LocalOnlyCompletionHandoff {
+  action: 'complete';
+  repoPath: string;
+  commit: string | null;
+  tests: string;
+  review: string;
 }
 
 // ── PR review ──
