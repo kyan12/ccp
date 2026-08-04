@@ -167,6 +167,19 @@
       }
     },
     {
+      "key": "hermes-local-extensions",
+      "localPath": "/Users/kyan/.hermes/local-extensions",
+      "aliases": [
+        "hermes local extensions",
+        "local Hermes plugins",
+        "sink-guard"
+      ],
+      "localOnly": true,
+      "worktree": false,
+      "parallelJobs": 1,
+      "autoMerge": false
+    },
+    {
       "key": "didanyc",
       "ownerRepo": "kyan12/didanyc",
       "gitUrl": "git@github.com:kyan12/didanyc.git",

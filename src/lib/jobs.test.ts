@@ -1,4 +1,4 @@
-import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, workerLogForCurrentAttempt, extractPrReferences, classifyHarnesslessSuccess, classifyFinalNotificationSignal, parseSummary, workerExitCodeForFinalize } from './jobs';
+import { buildPrompt, isNoOpOutcome, inferBlockedReason, extractWorkerFailureContext, workerLogForCurrentAttempt, extractPrReferences, classifyHarnesslessSuccess, classifyFinalNotificationSignal, parseSummary, workerExitCodeForFinalize, buildLocalOnlyHandoff } from './jobs';
 import type { JobPacket, RepoProof } from '../types';
 
 let passed = 0;
@@ -110,6 +110,20 @@ console.log('\nTest: blocked scenario directs blocker output');
     prompt.includes('do not ask questions'),
     'prompt says do not ask questions when blocked',
   );
+}
+
+console.log('\nTest: local-only prompt permits local commits and forbids remote publication assumptions');
+{
+  const prompt = buildPrompt(makePacket({
+    repo: '/Users/kyan/.hermes/local-extensions',
+    repoKey: 'hermes-local-extensions',
+    localOnly: true,
+  }));
+  assert(prompt.includes('explicit local-only repository'), 'identifies the explicit local-only lane');
+  assert(prompt.includes('Do not push, create a pull request, create a remote, deploy, or publish'), 'forbids remote operations');
+  assert(prompt.includes('Local repository path: /Users/kyan/.hermes/local-extensions'), 'includes canonical local path');
+  assert(prompt.includes('ReviewEvidence: <single-line JSON'), 'requires structured independent review evidence');
+  assert(!prompt.includes('MUST create a feature branch FROM main'), 'does not include remote-only branch/PR instructions');
 }
 
 // ── Test: memory section injection (Phase 5a) ──
@@ -305,6 +319,124 @@ console.log('\nTest: inferBlockedReason catches unpushed commit');
     makeProof({ commitExists: true, pushed: false }),
   );
   assert(reason !== null && reason.includes('not pushed'), 'detects unpushed commit');
+}
+
+console.log('\nTest: local-only completion accepts an unpushed local commit only with tests and review evidence');
+{
+  const testEvidence = JSON.stringify({ command: 'npm test', exitCode: 0 });
+  const reviewEvidence = JSON.stringify({ verdict: 'PASS', reviewer: 'independent fixture', sha: 'abc1234' });
+  const passingEvidence = { verified: 'PASS', testEvidence, review: 'PASS', reviewEvidence };
+  const complete = inferBlockedReason(
+    'Summary: implemented locally\nWORKER_EXIT_CODE: 0',
+    { state: 'verified', commit: 'abc1234', prod: 'no', pr_url: null, ...passingEvidence },
+    makeProof({ commitExists: true, pushed: false }),
+    { localOnly: true },
+  );
+  assert(complete === null, 'local-only commit does not require push or PR');
+
+  const missingReview = inferBlockedReason(
+    'Summary: implemented locally\nWORKER_EXIT_CODE: 0',
+    { state: 'verified', commit: 'abc1234', prod: 'no', pr_url: null, ...passingEvidence, review: 'not yet' },
+    makeProof({ commitExists: true, pushed: false }),
+    { localOnly: true },
+  );
+  assert(missingReview !== null && missingReview.includes('test evidence'), 'missing independent review blocks local-only completion');
+
+  const failedTests = inferBlockedReason(
+    'Summary: implemented locally\nWORKER_EXIT_CODE: 0',
+    { state: 'verified', commit: 'abc1234', prod: 'no', pr_url: null, ...passingEvidence, verified: 'FAIL' },
+    makeProof({ commitExists: true, pushed: false }),
+    { localOnly: true },
+  );
+  assert(failedTests !== null && failedTests.includes('passing test evidence'), 'failed test text cannot count as completion evidence');
+
+  const failedReview = inferBlockedReason(
+    'Summary: implemented locally\nWORKER_EXIT_CODE: 0',
+    { state: 'verified', commit: 'abc1234', prod: 'no', pr_url: null, ...passingEvidence, review: 'FAIL' },
+    makeProof({ commitExists: true, pushed: false }),
+    { localOnly: true },
+  );
+  assert(failedReview !== null && failedReview.includes('passing test evidence'), 'failed review status cannot count as completion evidence');
+
+  const mixedFailingTests = buildLocalOnlyHandoff({
+    localOnly: true,
+    repoPath: '/tmp/local-only',
+    state: 'verified',
+    commit: 'abc1234',
+    verified: '1 test passed, 2 tests failing',
+    review: 'independent PASS',
+  });
+  assert(mixedFailingTests === null, 'mixed passing/failing test text cannot emit completion');
+
+  const reviewWithBlockers = buildLocalOnlyHandoff({
+    localOnly: true,
+    repoPath: '/tmp/local-only',
+    state: 'verified',
+    commit: 'abc1234',
+    verified: 'npm test passed',
+    review: 'independent PASS with blockers remaining',
+  });
+  assert(reviewWithBlockers === null, 'positive review word cannot hide remaining blockers');
+
+  const noFindings = buildLocalOnlyHandoff({
+    localOnly: true,
+    repoPath: '/tmp/local-only',
+    state: 'verified',
+    commit: 'abc1234',
+    ...passingEvidence,
+  });
+  assert(noFindings?.action === 'complete', 'explicit zero-failure/no-findings evidence completes');
+
+  const failedPush = inferBlockedReason(
+    'git push origin HEAD\nfatal: Could not read from remote repository.\nSummary: implemented locally\nWORKER_EXIT_CODE: 0',
+    { state: 'verified', commit: 'abc1234', prod: 'no', pr_url: null, ...passingEvidence },
+    makeProof({ commitExists: true, pushed: false }),
+    { localOnly: true },
+  );
+  assert(failedPush !== null && failedPush.includes('forbidden remote operation failed'), 'failed push cannot be silently classified as local-only success');
+
+  const unexpectedPr = inferBlockedReason(
+    'Summary: implemented locally\nWORKER_EXIT_CODE: 0',
+    { state: 'verified', commit: 'abc1234', prod: 'no', pr_url: 'https://github.com/owner/repo/pull/1', ...passingEvidence },
+    makeProof({ commitExists: true, pushed: true }),
+    { localOnly: true },
+  );
+  assert(unexpectedPr !== null && unexpectedPr.includes('must not publish'), 'unexpected PR prevents local-only success');
+
+  const handoff = buildLocalOnlyHandoff({
+    localOnly: true,
+    repoPath: '/tmp/local-only',
+    state: 'verified',
+    commit: 'abc1234',
+    ...passingEvidence,
+  });
+  assert(handoff?.action === 'complete', 'successful local-only result has an explicit complete action');
+  assert(handoff?.repoPath === '/tmp/local-only', 'handoff names the local repository');
+  assert(handoff?.commit === 'abc1234', 'handoff names the local commit');
+  assert(handoff?.tests === testEvidence, 'handoff carries structured test evidence');
+  assert(handoff?.review === reviewEvidence, 'handoff carries structured review evidence');
+
+  const noOpHandoff = buildLocalOnlyHandoff({
+    localOnly: true,
+    repoPath: '/tmp/local-only',
+    state: 'no-op',
+    commit: 'none',
+    verified: 'PASS',
+    testEvidence,
+    review: 'PASS',
+    reviewEvidence,
+  });
+  assert(noOpHandoff?.action === 'complete' && noOpHandoff.commit === null, 'verified local no-op completes without a fake commit');
+
+  const failedEvidenceHandoff = buildLocalOnlyHandoff({
+    localOnly: true,
+    repoPath: '/tmp/local-only',
+    state: 'verified',
+    commit: 'abc1234',
+    verified: 'tests FAILED',
+    review: 'independent review FAIL',
+  });
+  assert(failedEvidenceHandoff === null, 'failed evidence never emits a completion handoff');
 }
 
 // ── Test: extractWorkerFailureContext ──

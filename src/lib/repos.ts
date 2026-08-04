@@ -4,7 +4,47 @@ import type { RepoMapping, ReposConfig, IntakePayload } from '../types';
 const { loadConfig } = require('./config');
 
 function repoConfig(): ReposConfig {
-  return loadConfig('repos', { mappings: [] }) as ReposConfig;
+  return validateReposConfig(loadConfig('repos', { mappings: [] }));
+}
+
+function validateReposConfig(value: unknown): ReposConfig {
+  if (!value || typeof value !== 'object' || !Array.isArray((value as ReposConfig).mappings)) {
+    throw new Error('invalid repos config: mappings must be an array');
+  }
+  const config = value as ReposConfig;
+  for (const mapping of config.mappings) {
+    if (!mapping || typeof mapping !== 'object') {
+      throw new Error('invalid repo mapping: each mapping must be an object');
+    }
+    const key = typeof mapping.key === 'string' ? mapping.key : '(unknown)';
+    if (mapping.localOnly !== undefined && mapping.localOnly !== true) {
+      throw new Error(`invalid repo mapping '${key}': localOnly must be true when present`);
+    }
+    if (mapping.localOnly === true) {
+      if (!mapping.key.trim()) throw new Error('invalid local-only repo mapping: key is required');
+      if (typeof mapping.localPath !== 'string' || !path.isAbsolute(mapping.localPath)) {
+        throw new Error(`invalid local-only repo mapping '${mapping.key}': localPath must be absolute`);
+      }
+      const allowed = new Set([
+        'key', 'localPath', 'aliases', 'localOnly', 'autoMerge', 'validation',
+        'agent', 'decisionPolicy', 'memoryFile', 'worktree', 'parallelJobs',
+      ]);
+      const forbidden = Object.keys(mapping).filter((name) => !allowed.has(name));
+      if (forbidden.length) {
+        throw new Error(`invalid local-only repo mapping '${mapping.key}': ${forbidden.join(', ')} must be omitted`);
+      }
+      if (mapping.worktree !== false) {
+        throw new Error(`invalid local-only repo mapping '${mapping.key}': worktree must be false`);
+      }
+      if (mapping.parallelJobs !== 1) {
+        throw new Error(`invalid local-only repo mapping '${mapping.key}': parallelJobs must be 1`);
+      }
+      if (mapping.autoMerge !== false) {
+        throw new Error(`invalid local-only repo mapping '${mapping.key}': autoMerge must be false`);
+      }
+    }
+  }
+  return config;
 }
 
 function normalize(text: unknown): string {
@@ -61,6 +101,7 @@ function enrichPayloadWithRepo(payload: IntakePayload = {}): IntakePayload & { r
     repoKey: mapping.key,
     ownerRepo: mapping.ownerRepo,
     gitUrl: mapping.gitUrl,
+    ...(mapping.localOnly === true ? { localOnly: true } : {}),
     repoResolved: fs.existsSync(mapping.localPath),
   };
 }
@@ -80,6 +121,7 @@ module.exports = {
   findRepoMapping,
   findRepoByPath,
   enrichPayloadWithRepo,
+  validateReposConfig,
 };
 
-export { repoConfig, findRepoMapping, findRepoByPath, enrichPayloadWithRepo };
+export { repoConfig, findRepoMapping, findRepoByPath, enrichPayloadWithRepo, validateReposConfig };
