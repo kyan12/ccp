@@ -701,6 +701,8 @@ export interface JobStatus {
    * the supervisor restarts.
    */
   workdir?: string | null;
+  /** HEAD captured after local-only preflight and before the coding agent starts. */
+  localOnlyInitialHead?: string | null;
   notifications?: JobNotifications;
   integrations?: JobIntegrations;
   discord_thread_id?: string | null;

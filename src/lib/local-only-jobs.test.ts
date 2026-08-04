@@ -128,6 +128,7 @@ async function main(): Promise<void> {
       assert.match(script, /GIT_CONFIG_KEY_0=user\.useConfigOnly/);
       assert.match(script, /GIT_CONFIG_VALUE_0=true/);
       assert.doesNotMatch(script, /git fetch|git reset --hard origin|git pull --ff-only|gh pr|git push/);
+      assert.equal(h.jobs.loadStatus(jobId).localOnlyInitialHead, git(h.repo, ['rev-parse', 'HEAD']), 'dispatch persists the pre-worker HEAD');
       assert.equal(fs.existsSync(h.networkMarker), false, 'preflight/start performs no external network commands');
     }
 
@@ -135,7 +136,12 @@ async function main(): Promise<void> {
     {
       const jobId = h.create('canary');
       const head = git(h.repo, ['rev-parse', 'HEAD']);
-      h.jobs.saveStatus(jobId, { state: 'running', started_at: new Date().toISOString(), tmux_session: null });
+      h.jobs.saveStatus(jobId, {
+        state: 'running',
+        started_at: new Date().toISOString(),
+        tmux_session: null,
+        localOnlyInitialHead: head,
+      });
       fs.appendFileSync(path.join(h.root, 'jobs', jobId, 'worker.log'), [
         'State: verified',
         'Commit: none',
@@ -215,6 +221,100 @@ async function main(): Promise<void> {
       assert.equal(finalized.result.handoff, undefined);
       assert.equal(fs.existsSync(userWork), true, 'dirty success blocker preserves the checkout');
       fs.unlinkSync(userWork);
+    }
+
+    console.log('\nTest: local-only completion is bound to actual HEAD and commit author');
+    {
+      const claimed = git(h.repo, ['rev-parse', 'HEAD']);
+      const jobId = h.create('head-binding');
+      h.jobs.saveStatus(jobId, {
+        state: 'running',
+        started_at: new Date().toISOString(),
+        tmux_session: null,
+        localOnlyInitialHead: claimed,
+      });
+      fs.writeFileSync(path.join(h.repo, 'unreviewed-commit.txt'), 'unreviewed\n');
+      git(h.repo, ['add', 'unreviewed-commit.txt']);
+      git(h.repo, ['-c', 'user.useConfigOnly=false', '-c', 'user.name=Mallory', '-c', 'user.email=mallory@example.com', 'commit', '-m', 'unreviewed commit']);
+      const actual = git(h.repo, ['rev-parse', 'HEAD']);
+      fs.appendFileSync(path.join(h.root, 'jobs', jobId, 'worker.log'), [
+        'State: verified',
+        `Commit: ${claimed}`,
+        'Prod: no',
+        'Verified: PASS',
+        `TestEvidence: ${JSON.stringify({ command: 'fixture tests', exitCode: 0 })}`,
+        'Review: PASS',
+        `ReviewEvidence: ${JSON.stringify({ verdict: 'PASS', reviewer: 'independent fixture', sha: claimed })}`,
+        'Blocker: none',
+        'Risk: low',
+        'Summary: Claimed the older reviewed commit',
+        'WORKER_EXIT_CODE: 0',
+      ].join('\n') + '\n');
+      const finalized = await h.jobs.finalizeJob(jobId);
+      assert.equal(finalized.state, 'blocked');
+      assert.match(finalized.result.blocker || '', /actual HEAD/);
+      assert.equal(finalized.result.handoff, undefined);
+      assert.equal(git(h.repo, ['rev-parse', 'HEAD']), actual, 'blocked finalization preserves the unreviewed commit');
+      git(h.repo, ['reset', '--hard', claimed]);
+    }
+
+    console.log('\nTest: nonzero worker exit cannot emit a local-only completion handoff');
+    {
+      const commit = git(h.repo, ['rev-parse', 'HEAD']);
+      const jobId = h.create('nonzero-exit');
+      h.jobs.saveStatus(jobId, { state: 'running', started_at: new Date().toISOString(), tmux_session: null });
+      fs.appendFileSync(path.join(h.root, 'jobs', jobId, 'worker.log'), [
+        'State: verified',
+        `Commit: ${commit}`,
+        'Prod: no',
+        'Verified: PASS',
+        `TestEvidence: ${JSON.stringify({ command: 'fixture tests', exitCode: 0 })}`,
+        'Review: PASS',
+        `ReviewEvidence: ${JSON.stringify({ verdict: 'PASS', reviewer: 'independent fixture', sha: commit })}`,
+        'Blocker: none',
+        'Risk: low',
+        'Summary: Claimed success before crashing',
+        'WORKER_EXIT_CODE: 7',
+      ].join('\n') + '\n');
+      const finalized = await h.jobs.finalizeJob(jobId);
+      assert.equal(finalized.exitCode, 7);
+      assert.equal(finalized.state, 'blocked');
+      assert.match(finalized.result.blocker || '', /worker exited 7/);
+      assert.equal(finalized.result.handoff, undefined);
+    }
+
+    console.log('\nTest: local-only no-op cannot hide a commit created after dispatch');
+    {
+      const initialHead = git(h.repo, ['rev-parse', 'HEAD']);
+      const jobId = h.create('changed-head-no-op');
+      h.jobs.saveStatus(jobId, {
+        state: 'running',
+        started_at: new Date().toISOString(),
+        tmux_session: null,
+        localOnlyInitialHead: initialHead,
+      } as Parameters<typeof h.jobs.saveStatus>[1]);
+      fs.writeFileSync(path.join(h.repo, 'hidden-commit.txt'), 'changed after dispatch\n');
+      git(h.repo, ['add', 'hidden-commit.txt']);
+      git(h.repo, ['commit', '-qm', 'hidden local-only commit']);
+      const actualHead = git(h.repo, ['rev-parse', 'HEAD']);
+      fs.appendFileSync(path.join(h.root, 'jobs', jobId, 'worker.log'), [
+        'State: verified',
+        'Commit: none',
+        'Prod: no',
+        'Verified: PASS',
+        `TestEvidence: ${JSON.stringify({ command: 'fixture tests', exitCode: 0 })}`,
+        'Review: PASS',
+        `ReviewEvidence: ${JSON.stringify({ verdict: 'PASS', reviewer: 'independent fixture', sha: actualHead })}`,
+        'Blocker: none',
+        'Risk: low',
+        'Summary: No changes needed; fixture is already complete',
+        'WORKER_EXIT_CODE: 0',
+      ].join('\n') + '\n');
+      const finalized = await h.jobs.finalizeJob(jobId);
+      assert.equal(finalized.state, 'blocked');
+      assert.match(finalized.result.blocker || '', /claimed no-op.*HEAD changed/i);
+      assert.equal(finalized.result.handoff, undefined);
+      git(h.repo, ['reset', '--hard', initialHead]);
     }
   } finally {
     process.env = oldEnv;

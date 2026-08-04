@@ -1218,7 +1218,13 @@ function buildLocalOnlyHandoff(input: {
   };
 }
 
-function inspectLocalOnlyPostconditions(workdir: string | null, commit: string, proof: RepoProof): string | null {
+function inspectLocalOnlyPostconditions(
+  workdir: string | null,
+  commit: string,
+  proof: RepoProof,
+  reviewEvidence?: string,
+  initialHead?: string | null,
+): string | null {
   if (!workdir || !proof.git) return `local-only repo is not a readable Git checkout: ${workdir || '(missing path)'}`;
   if (proof.dirty) return `local-only repo is dirty after worker execution; preserved for operator inspection: ${workdir}`;
 
@@ -1236,13 +1242,26 @@ function inspectLocalOnlyPostconditions(workdir: string | null, commit: string, 
     return 'local-only repo must preserve canonical author kyan12 <kevyan1998@gmail.com>';
   }
 
-  if (commit && commit !== 'none' && proof.commitExists) {
-    const author = run(git, ['-C', workdir, 'show', '-s', '--format=%an%x00%ae', commit]);
-    if (author.status !== 0) return `local-only commit author could not be inspected: ${commit}`;
-    const [name, email] = author.stdout.trim().split('\0');
-    if (name !== 'kyan12' || email !== 'kevyan1998@gmail.com') {
-      return `local-only commit must use canonical author kyan12 <kevyan1998@gmail.com>: ${commit}`;
-    }
+  const headResult = run(git, ['-C', workdir, 'rev-parse', 'HEAD']);
+  if (headResult.status !== 0 || !headResult.stdout.trim()) return `local-only actual HEAD could not be inspected: ${workdir}`;
+  const actualHead = headResult.stdout.trim();
+  if (!initialHead) return 'local-only dispatch HEAD is missing; completion cannot be verified';
+  if ((!commit || commit === 'none') && actualHead !== initialHead) {
+    return `local-only claimed no-op but HEAD changed after dispatch: initial ${initialHead}, actual ${actualHead}`;
+  }
+  if (commit && commit !== 'none' && commit !== actualHead) {
+    return `local-only claimed commit does not match actual HEAD: claimed ${commit}, actual ${actualHead}`;
+  }
+  const author = run(git, ['-C', workdir, 'show', '-s', '--format=%an%x00%ae', actualHead]);
+  if (author.status !== 0) return `local-only commit author could not be inspected: ${actualHead}`;
+  const [name, email] = author.stdout.trim().split('\0');
+  if (name !== 'kyan12' || email !== 'kevyan1998@gmail.com') {
+    return `local-only actual HEAD must use canonical author kyan12 <kevyan1998@gmail.com>: ${actualHead}`;
+  }
+
+  const review = parseLocalEvidence(reviewEvidence);
+  if (review && review.sha !== actualHead) {
+    return `local-only review evidence must target actual HEAD: reviewed ${String(review.sha)}, actual ${actualHead}`;
   }
   return null;
 }
@@ -1402,7 +1421,10 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   // harnessless-but-recovered `coded` path so dashboards see the
   // contract-failure trail even when the work itself succeeded.
   let harnessFailureInfo: HarnessFailureInfo | null = null;
-  if (harnessless.state) {
+  if (exitCode !== 0) {
+    finalState = 'blocked';
+    inferredBlocker = `worker exited ${exitCode} before producing a durable verified outcome. Worker said: ${workerContextForHarness}`;
+  } else if (harnessless.state) {
     finalState = harnessless.state;
     inferredBlocker = harnessless.blocker;
     synthesizedSummary = harnessless.summary;
@@ -1461,7 +1483,13 @@ async function finalizeJob(jobId: string): Promise<{ ok: boolean; state: string;
   }
 
   if (localOnly && ['coded', 'done', 'verified', 'no-op'].includes(finalState)) {
-    const postconditionBlocker = inspectLocalOnlyPostconditions(workdir, summary.commit || 'none', proof);
+    const postconditionBlocker = inspectLocalOnlyPostconditions(
+      workdir,
+      summary.commit || 'none',
+      proof,
+      summary.reviewevidence,
+      status.localOnlyInitialHead,
+    );
     if (postconditionBlocker) {
       finalState = 'blocked';
       inferredBlocker = postconditionBlocker;
@@ -2310,6 +2338,19 @@ function startJob(jobId: string): Record<string, unknown> {
     return { ok: false, blocked: true, reason, packet, environment: pf.environment };
   }
 
+  const localOnly = packet.repo ? findRepoByPath(packet.repo)?.localOnly === true : false;
+  let localOnlyInitialHead: string | null = null;
+  if (localOnly) {
+    const head = run(commandExists('git') || 'git', ['-C', packet.repo!, 'rev-parse', 'HEAD']);
+    localOnlyInitialHead = head.status === 0 ? head.stdout.trim() : null;
+    if (!localOnlyInitialHead) {
+      const reason = `local-only dispatch HEAD could not be captured: ${head.stderr.trim() || packet.repo}`;
+      markBlocked(jobId, reason);
+      return { ok: false, blocked: true, reason, packet, environment: pf.environment };
+    }
+    saveStatus(jobId, { localOnlyInitialHead });
+  }
+
   try {
     const session = startTmuxWorker(jobId, packet, pf);
     appendLog(jobId, `[${nowIso()}] tmux session started: ${session}`);
@@ -2321,6 +2362,7 @@ function startJob(jobId: string): Record<string, unknown> {
       // including post-fallback swaps where pf.agent differs from the
       // packet's configured agent. See comment block in finalizeJob.
       agent: pf.agent,
+      ...(localOnly ? { localOnlyInitialHead } : {}),
       last_heartbeat_at: nowIso(),
       last_output_excerpt: 'tmux worker started',
       exit_code: null,
