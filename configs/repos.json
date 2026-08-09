@@ -489,6 +489,23 @@
       "nightly": {
         "enabled": false
       }
+    },
+    {
+      "key": "golf-os-ios",
+      "ownerRepo": "kyan12/golf-os-ios",
+      "gitUrl": "git@github.com:kyan12/golf-os-ios.git",
+      "localPath": "/Users/kyan/code-crab/repos/golf-os-ios",
+      "baseBranch": "main",
+      "aliases": [
+        "golf-os-ios"
+      ],
+      "worktree": true,
+      "parallelJobs": 1,
+      "autoMerge": false,
+      "mergeMethod": "squash",
+      "nightly": {
+        "enabled": false
+      }
     }
   ]
 }

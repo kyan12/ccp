@@ -17,7 +17,7 @@ const mappings = cfg.mappings || [];
 
 console.log('\nTest: production repo mappings use canonical Mac Studio local paths');
 {
-  assert.equal(mappings.length, 29, 'expected 29 production repo mappings');
+  assert.equal(mappings.length, 30, 'expected 30 production repo mappings');
 
   for (const mapping of mappings) {
     assert.ok(mapping.key, 'mapping has a key');
@@ -251,6 +251,38 @@ console.log('\nTest: myfont-ai mapping is present, isolated, locked down, and re
   if (VALIDATE_LOCAL_PATHS) {
     assert.equal(enriched.repoResolved, true, 'myfont.ai resolves to an existing checkout');
     assert.ok(fs.existsSync(path.join(mapping!.localPath, '.git')), 'myfont-ai localPath is an existing git repo');
+  }
+}
+
+console.log('\nTest: golf-os-ios mapping is present, isolated, reviewed, and resolves to the canonical checkout');
+{
+  const mapping = mappings.find((entry) => entry.key === 'golf-os-ios') as (RepoMapping & { baseBranch?: string }) | undefined;
+  assert.ok(mapping, 'golf-os-ios mapping exists');
+  assert.equal(mapping?.ownerRepo, 'kyan12/golf-os-ios');
+  assert.equal(mapping?.gitUrl, 'git@github.com:kyan12/golf-os-ios.git');
+  assert.equal(mapping?.localPath, '/Users/kyan/code-crab/repos/golf-os-ios');
+  assert.equal(mapping?.baseBranch, 'main');
+  assert.equal(mapping?.worktree, true, 'golf-os-ios uses isolated per-job worktrees');
+  assert.equal(mapping?.parallelJobs, 1, 'golf-os-ios permits one CCP job at a time');
+  assert.equal(mapping?.mergeMethod, 'squash');
+  assert.equal(mapping?.autoMerge, false, 'golf-os-ios requires reviewed PR merges');
+  assert.equal(mapping?.nightly?.enabled, false, 'golf-os-ios nightly product changes stay disabled');
+  assert.deepEqual(mapping?.aliases, ['golf-os-ios']);
+
+  for (const repo of ['golf-os-ios', 'kyan12/golf-os-ios']) {
+    const resolved = findRepoMapping({ repo });
+    assert.equal(resolved?.key, 'golf-os-ios', `${repo} resolves to golf-os-ios`);
+    assert.equal(resolved?.localPath, '/Users/kyan/code-crab/repos/golf-os-ios', `${repo} resolves to canonical checkout`);
+  }
+
+  const enriched = enrichPayloadWithRepo({ repo: 'golf-os-ios' });
+  assert.equal(enriched.repoKey, 'golf-os-ios');
+  assert.equal(enriched.ownerRepo, 'kyan12/golf-os-ios');
+  assert.equal(enriched.repo, '/Users/kyan/code-crab/repos/golf-os-ios');
+
+  if (VALIDATE_LOCAL_PATHS) {
+    assert.equal(enriched.repoResolved, true, 'golf-os-ios resolves to an existing checkout');
+    assert.ok(fs.existsSync(path.join(mapping!.localPath, '.git')), 'golf-os-ios localPath is an existing git repo');
   }
 }
 
