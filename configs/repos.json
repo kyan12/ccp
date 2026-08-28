@@ -436,6 +436,25 @@
       "productionUrl": "https://moshi-ai.vercel.app"
     },
     {
+      "key": "arc-lab",
+      "ownerRepo": "ProteusX-Consulting/arc-lab",
+      "gitUrl": "git@github.com:ProteusX-Consulting/arc-lab.git",
+      "localPath": "/Users/kyan/code-crab/repos/arc-lab",
+      "baseBranch": "main",
+      "aliases": [
+        "ARC Lab",
+        "arc-lab",
+        "arc lab"
+      ],
+      "worktree": true,
+      "parallelJobs": 1,
+      "autoMerge": false,
+      "mergeMethod": "squash",
+      "nightly": {
+        "enabled": false
+      }
+    },
+    {
       "key": "attention-pipeline-ios",
       "ownerRepo": "ProteusX-Consulting/attention-pipeline-ios",
       "gitUrl": "git@github.com:ProteusX-Consulting/attention-pipeline-ios.git",

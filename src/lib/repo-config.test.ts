@@ -17,7 +17,7 @@ const mappings = cfg.mappings || [];
 
 console.log('\nTest: production repo mappings use canonical Mac Studio local paths');
 {
-  assert.equal(mappings.length, 30, 'expected 30 production repo mappings');
+  assert.equal(mappings.length, 31, 'expected 31 production repo mappings');
 
   for (const mapping of mappings) {
     assert.ok(mapping.key, 'mapping has a key');
@@ -131,6 +131,38 @@ console.log('\nTest: high-volume repos use isolated two-job worktrees');
     assert.ok(mapping, `${key} mapping exists`);
     assert.equal(mapping?.worktree, true, `${key} enables per-job worktrees`);
     assert.equal(mapping?.parallelJobs, 2, `${key} allows two concurrent CCP jobs`);
+  }
+}
+
+console.log('\nTest: arc-lab mapping is present, isolated, locked down, and resolves by key, owner/name, and aliases');
+{
+  const mapping = mappings.find((entry) => entry.key === 'arc-lab') as (RepoMapping & { baseBranch?: string }) | undefined;
+  assert.ok(mapping, 'arc-lab mapping exists');
+  assert.equal(mapping?.ownerRepo, 'ProteusX-Consulting/arc-lab');
+  assert.equal(mapping?.gitUrl, 'git@github.com:ProteusX-Consulting/arc-lab.git');
+  assert.equal(mapping?.localPath, '/Users/kyan/code-crab/repos/arc-lab');
+  assert.equal(mapping?.baseBranch, 'main');
+  assert.equal(mapping?.worktree, true, 'arc-lab uses isolated per-job worktrees');
+  assert.equal(mapping?.parallelJobs, 1, 'arc-lab permits one CCP job at a time');
+  assert.equal(mapping?.mergeMethod, 'squash');
+  assert.equal(mapping?.autoMerge, false, 'arc-lab auto-merge stays disabled');
+  assert.equal(mapping?.nightly?.enabled, false, 'arc-lab nightly automation stays disabled');
+  assert.deepEqual(mapping?.aliases, ['ARC Lab', 'arc-lab', 'arc lab']);
+
+  for (const repo of ['ARC Lab', 'arc-lab', 'arc lab', 'ProteusX-Consulting/arc-lab']) {
+    const resolved = findRepoMapping({ repo });
+    assert.equal(resolved?.key, 'arc-lab', `${repo} resolves to arc-lab`);
+    assert.equal(resolved?.localPath, '/Users/kyan/code-crab/repos/arc-lab', `${repo} resolves to canonical checkout`);
+  }
+
+  const enriched = enrichPayloadWithRepo({ repo: 'ARC Lab' });
+  assert.equal(enriched.repoKey, 'arc-lab');
+  assert.equal(enriched.ownerRepo, 'ProteusX-Consulting/arc-lab');
+  assert.equal(enriched.repo, '/Users/kyan/code-crab/repos/arc-lab');
+
+  if (VALIDATE_LOCAL_PATHS) {
+    assert.equal(enriched.repoResolved, true, 'ARC Lab resolves to an existing checkout');
+    assert.ok(fs.existsSync(path.join(mapping!.localPath, '.git')), 'arc-lab localPath is an existing git repo');
   }
 }
 
