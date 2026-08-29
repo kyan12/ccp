@@ -43,7 +43,7 @@ const CLAUDE_API_ERROR_PATTERNS: RegExp[] = [
 ];
 
 const CLAUDE_RATE_LIMIT_PATTERNS: RegExp[] = [
-  /hit your limit.*resets?\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:\(([^)]+)\))?/i,
+  /hit your limit.*resets?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:\(([^)]+)\))?/i,
   /rate.?limit.*reset.*?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
   /usage.*limit.*reset.*?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
 ];
