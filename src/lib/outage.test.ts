@@ -237,5 +237,29 @@ console.log('\nTest: rate-limit detection ignores test/source echoes');
   });
 }
 
+console.log('\nTest: rate-limit detection parses relative retry windows');
+{
+  const root = freshRoot('rate-limit-relative');
+  withRoot(root, (mod) => {
+    const before = Date.now();
+    const rate = mod.detectRateLimit('API error: rate_limit_exceeded. Please try again in 30 seconds.');
+    const after = Date.now();
+    assert(!!rate, 'detects relative retry window');
+    if (rate) {
+      const reset = new Date(rate.resetAt).getTime();
+      assert(reset >= before + 30_000, 'reset is at least the requested delay');
+      assert(reset <= after + 31_000, 'reset is close to the requested delay');
+      assert(rate.reason.toLowerCase().includes('try again in 30 seconds'), 'keeps relative retry reason');
+    }
+
+    const decimal = mod.detectRateLimit('429 Too Many Requests: try again in 8.64s');
+    assert(!!decimal, 'detects decimal-second retry window');
+    if (decimal) {
+      const delayMs = new Date(decimal.resetAt).getTime() - Date.now();
+      assert(delayMs > 7_000 && delayMs <= 9_500, 'decimal seconds convert to milliseconds');
+    }
+  });
+}
+
 console.log(`\nTotal: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
