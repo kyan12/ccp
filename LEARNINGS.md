@@ -777,3 +777,23 @@ The `isNightly` detection logic (`packet?.source === 'nightly' || packet?.label 
   independently.
 - **Nightly review cadence**: Twenty-three consecutive reviews, each identifying and resolving issues.
 
+## 2026-06-04 — Nightly Review
+
+### Bug Fixed: Finalization uses the latest worker exit marker
+
+Recent job hardening correctly scoped worker-log analysis to the current attempt and rejected
+placeholder final-summary templates, but `workerExitCodeForFinalize` still accepted the first
+`WORKER_EXIT_CODE` marker it saw. If a current-attempt log ever contains an earlier/stale marker
+before the real wrapper marker, CCP could finalize with the wrong exit code.
+
+**Fix:** `workerExitCodeForFinalize` now uses the last `WORKER_EXIT_CODE` marker in the scoped
+attempt log. Added a regression test so the final wrapper marker wins.
+
+### Patterns Worth Reinforcing
+
+- **Scope worker-log decisions to the current attempt**: Stale attempts, prompt templates, and
+  copied logs should not drive finalization state.
+- **Recent commits are focused hardening**: The Codex default, rate-limit parsing, and placeholder
+  summary changes are small, well-tested fixes around operational failure modes.
+- **Open nightly PRs should remain narrow**: Multiple draft nightly PRs are in flight, so follow-up
+  changes should stay surgical and avoid broad refactors.
