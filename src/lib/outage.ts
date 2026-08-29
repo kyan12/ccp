@@ -238,6 +238,13 @@ export function isRateLimited(agent: string = DEFAULT_AGENT): { paused: true; re
   const state = loadState(agent);
   if (!state.rateLimitResetAt) return { paused: false };
   const resetTime = new Date(state.rateLimitResetAt).getTime();
+  if (!Number.isFinite(resetTime)) {
+    console.error(`[outage] invalid rateLimitResetAt for ${agent}: ${state.rateLimitResetAt}`);
+    state.rateLimitResetAt = null;
+    state.rateLimitReason = null;
+    saveState(state, agent);
+    return { paused: false };
+  }
   const now = Date.now();
   if (now >= resetTime) {
     // Rate limit window has passed — clear it
